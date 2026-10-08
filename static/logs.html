@@ -7,19 +7,16 @@
     <title>运行日志与路由分析</title>
     <!-- Favicon SVG -->
     <link rel="icon" type="image/svg+xml" href="/svg/opcenter.svg">
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
     <style>
         :root {
-            --primary: #155eef;
-            --primary-hover: #175cd3;
-            --bg-body: #f9fafb;
+            --primary: #008577;
+            --primary-hover: #006f64;
+            --bg-body: #f7f8fa;
             --bg-surface: #ffffff;
-            --border: #eaecf0;
-            --text-main: #101828;
-            --text-secondary: #475467;
-            --text-tertiary: #667085;
+            --border: #e6e9ed;
+            --text-main: #252b32;
+            --text-secondary: #66707b;
+            --text-tertiary: #818a94;
 
             --success: #17b26a;
             --warning: #f79009;
@@ -30,13 +27,14 @@
             margin: 0;
             padding: 0;
             box-sizing: border-box;
-            font-family: 'Inter', -apple-system, sans-serif;
+            font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
         }
 
         body {
             background-color: var(--bg-body);
             color: var(--text-main);
             height: 100vh;
+            height: 100dvh;
             display: flex;
             flex-direction: column;
             overflow: hidden;
@@ -44,7 +42,7 @@
 
         /* Top Nav */
         nav {
-            height: 56px;
+            height: 66px;
             background: var(--bg-surface);
             border-bottom: 1px solid var(--border);
             display: flex;
@@ -117,7 +115,7 @@
         }
 
         .log-item.active {
-            background: #eff8ff;
+            background: #e9f4f1;
             border-left: 3px solid var(--primary);
             padding-left: 17px;
             /* compensate for border */
@@ -185,6 +183,7 @@
 
         .trace-stats {
             display: flex;
+            flex-wrap: wrap;
             gap: 24px;
             font-size: 13px;
             color: var(--text-secondary);
@@ -261,6 +260,7 @@
 
         .node-right {
             flex: 1;
+            min-width: 0;
             padding-bottom: 32px;
         }
 
@@ -356,6 +356,26 @@
             width: 16px;
             height: 16px;
         }
+        .back-link { color: var(--text-secondary); text-decoration: none; font-size: 12px; margin-right: 18px; padding-right: 18px; border-right: 1px solid var(--border); }
+        .back-link:hover { color: var(--primary); }
+        .back-link:focus-visible { outline: 2px solid var(--primary); outline-offset: 4px; }
+        @media (max-width: 600px) {
+            nav { padding: 0 16px; height: 58px; }
+            .nav-title { font-size: 13px; }
+            .back-link { font-size: 11px; margin-right: 5px; padding-right: 10px; }
+            .app-layout { flex-direction: column; }
+            .sidebar { width: 100%; max-height: 32vh; border-right: 0; border-bottom: 1px solid var(--border); }
+            .main-content { min-width: 0; }
+            .main-header { padding: 20px; }
+            .trace-title { font-size: 16px; }
+            .trace-stats { flex-direction: column; gap: 10px; font-size: 11px; }
+            .trace-body { padding: 24px 20px; }
+            .node-left { margin-right: 10px; }
+            .node-title { font-size: 12px; }
+            .node-header { flex-wrap: wrap; gap: 6px; }
+            .meta-row { flex-direction: column; gap: 4px; }
+            .meta-value { overflow-wrap: anywhere; min-width: 0; max-width: 100%; align-self: flex-start; }
+        }
     </style>
 </head>
 
@@ -363,13 +383,14 @@
 
     <nav>
         <div class="nav-title">
+            <a class="back-link" href="/">← 设计助手</a>
             <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2" fill="none">
                 <path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />
             </svg>
-            执行日志 (Logs)
+            运行日志
         </div>
         <div id="envStatus">
-            <span class="badge">监控采集中</span>
+            <span class="badge" style="background:#f0f2f4;color:#66707b">正在连接</span>
         </div>
     </nav>
 
@@ -405,6 +426,7 @@
         async function fetchLogs() {
             try {
                 const res = await fetch('/api/logs/data');
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
                 const data = await res.json();
 
                 if (data.status === 'disabled') {
@@ -413,9 +435,11 @@
                     return;
                 }
 
+                document.getElementById('envStatus').innerHTML = '<span class="badge" style="background:#e9f4f1;color:#006f64">日志已加载</span>';
                 processLogs(data.logs);
             } catch (e) {
                 console.error(e);
+                document.getElementById('envStatus').innerHTML = '<span class="badge" style="background:#fef3f2;color:#b42318">连接异常</span>';
                 document.getElementById('sidebarList').innerHTML = '<div style="color:red; padding:20px;">接口请求失败</div>';
             }
         }
