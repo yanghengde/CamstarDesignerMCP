@@ -16,6 +16,67 @@ from designer.attachments import AttachmentError, MAX_FILE_BYTES, resolve_attach
 router = APIRouter()
 
 
+class ProgressActionRequest(BaseModel):
+    username: str
+    session_id: str
+    package_id: str
+    action: Literal['check', 'prepare', 'sync', 'compile', 'verify', 'confirm_review', 'confirm_compile',
+                    'confirm_publish', 'skip_services', 'confirm_services', 'confirm_complete']
+
+
+def require_progress_owner(username: str, session_id: str | None = None):
+    if username != CHAT_USERNAME:
+        raise HTTPException(404, '设计任务不存在')
+    if session_id is not None:
+        require_session(username, session_id)
+
+
+@router.get('/progress')
+def progress_page():
+    with open('static/progress.html', encoding='utf-8') as file:
+        return HTMLResponse(file.read())
+
+
+@router.get('/api/progress/tasks')
+def progress_tasks(username: str):
+    from designer.progress import tasks
+    require_progress_owner(username)
+    return {'tasks': tasks(username)}
+
+
+@router.get('/api/progress/{session_id}')
+async def progress_detail(session_id: str, username: str):
+    from designer.progress import snapshot
+    require_progress_owner(username, session_id)
+    result = await asyncio.to_thread(snapshot, username, session_id)
+    from agent import langgraph_runtime as runtime
+    if runtime._graph is not None and result['active'] is None:
+        graph_state = await runtime._graph.aget_state(runtime._graph_config(username, session_id))
+        if runtime._has_interrupt(graph_state):
+            stage = result['stages'][result['current']-1]
+            stage.update(status='waiting', detail='等待在设计对话中确认')
+    result.pop('_manifests', None)
+    return result
+
+
+@router.post('/api/progress/action')
+async def progress_action(req: ProgressActionRequest):
+    from designer.progress import start_action
+    require_progress_owner(req.username, req.session_id)
+    try:
+        return start_action(req.username, req.session_id, req.package_id, req.action)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@router.get('/api/progress/{session_id}/changes')
+def progress_changes(session_id: str, username: str, package_id: str):
+    from pathlib import Path
+    require_progress_owner(username, session_id)
+    item = review_for_session(username, session_id, package_id)
+    return FileResponse(Path(item['manifest_file']).parent / 'changes.xml', filename='Designer_changes.xml', media_type='application/xml')
+
+
 class DesignerReviewRequest(BaseModel):
     username: str
     session_id: str
@@ -34,9 +95,18 @@ def review_for_session(username: str, session_id: str, package_id: str) -> dict:
 @router.post('/designer/review')
 async def designer_review(req: DesignerReviewRequest):
     from designer.review import prepare
+    from designer import progress_store
     item = review_for_session(req.username, req.session_id, req.package_id)
     try:
-        return await asyncio.to_thread(prepare, item['manifest_file'], True)
+        async with progress_store.tracking(req.username, req.session_id, 'prepare_designer_review',
+                                           {'manifest_file': item['manifest_file']}, '') as identity:
+            try:
+                result = await asyncio.to_thread(prepare, item['manifest_file'], True)
+                progress_store.finish(identity, result)
+                return result
+            except Exception as exc:
+                progress_store.finish(identity, error=str(exc), status='failed')
+                raise
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
 

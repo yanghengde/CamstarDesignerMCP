@@ -30,6 +30,7 @@ LANGGRAPH_RECURSION_LIMIT = max(
 MEMORY_FILE = os.path.join("data", "memory.json")
 SESSIONS_DIR = os.path.join("data", "sessions")
 EXCEL_ATTACHMENT_ROOT = os.path.join("data", "excel_attachments")
+DESIGNER_PROGRESS_DB = os.getenv("DESIGNER_PROGRESS_DB", os.path.join("data", "designer_progress.sqlite"))
 
 LANGGRAPH_CHECKPOINT_DB = os.getenv(
     "LANGGRAPH_CHECKPOINT_DB",

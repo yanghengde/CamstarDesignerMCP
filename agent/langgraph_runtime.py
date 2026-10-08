@@ -49,6 +49,7 @@ from core.perf_logger import record_perf
 from tools import get_tool_func
 from designer.attachments import attachment_context, attachment_summary
 from agent.titles import first_message_title
+from designer import progress_store
 
 
 class AgentState(TypedDict, total=False):
@@ -129,6 +130,9 @@ async def _agent_node(state: AgentState) -> dict[str, Any]:
         }
 
     started = time.time()
+    inference_id, _ = progress_store.begin(state.get('username', 'unknown'), state.get('session_id', 'unknown'),
+                                            '__llm_inference', {})
+    inference_pulse = asyncio.create_task(progress_store.heartbeat(inference_id))
     try:
         tool_names = {
             str(message.get("name"))
@@ -195,7 +199,16 @@ async def _agent_node(state: AgentState) -> dict[str, Any]:
                     if call.function.arguments:
                         item["function"]["arguments"] += call.function.arguments
     except asyncio.CancelledError:
+        progress_store.finish(inference_id, error='请求已停止', status='interrupted')
         raise
+    except Exception as exc:
+        progress_store.finish(inference_id, error=str(exc), status='failed')
+        raise
+    else:
+        progress_store.finish(inference_id, {'status': 'inference_complete'})
+    finally:
+        inference_pulse.cancel()
+        await asyncio.gather(inference_pulse, return_exceptions=True)
 
     record_perf(
         "LLM_Inference",
@@ -303,7 +316,14 @@ async def _execute_tool_node(state: AgentState) -> dict[str, Any]:
             if tool_func is None:
                 result = f"Error: tool '{func_name}' not found"
             else:
-                result = await tool_func(**func_args)
+                async with progress_store.tracking(state.get('username', 'unknown'), state.get('session_id', 'unknown'),
+                                                   func_name, func_args, tool_call.get('id', '')) as progress_id:
+                    try:
+                        result = await tool_func(**func_args)
+                        progress_store.finish(progress_id, result)
+                    except Exception as exc:
+                        progress_store.finish(progress_id, error=str(exc), status='failed')
+                        raise
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # Tool errors are returned to the model for recovery.

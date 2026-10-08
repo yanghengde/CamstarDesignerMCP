@@ -15,6 +15,31 @@ from designer.publication import redact
 _lock = threading.Lock()
 
 
+def sync_file(manifest_file: str) -> dict:
+    """Read the saved review MDB; never infer which file the GUI has open."""
+    item = summary(manifest_file)
+    receipt = item.get('review') or {}
+    remote = receipt.get('server_mdb', '')
+    if not re.fullmatch(r'C:\\Temp\\DesignerMCP\\Review_[0-9a-f]{32}\\InSite\.mdb', remote, re.IGNORECASE):
+        raise ValueError('请先准备本次设计的 Designer 文件')
+    if config.DESIGNER_SERVER_SHARE.rstrip('\\').casefold() != ('\\\\' + config.DESIGNER_DB_SERVER + '\\C').casefold():
+        raise ValueError('服务器共享配置不匹配')
+    env = {k: v for k, v in os.environ.items() if k.casefold() != 'psmodulepath'}
+    for name in ('DESIGNER_SERVER_SHARE', 'DESIGNER_WINDOWS_USER', 'DESIGNER_WINDOWS_PASSWORD'):
+        env[name] = getattr(config, name)
+        if not env[name]:
+            raise ValueError('Designer 服务器共享或凭据未配置')
+    folder = Path(item['manifest_file']).parent
+    output = folder / 'designer_sync.json'
+    shell = Path(os.environ.get('SystemRoot', 'C:/Windows')) / 'System32/WindowsPowerShell/v1.0/powershell.exe'
+    process = subprocess.run([str(shell), '-NoProfile', '-NonInteractive', '-File', str(Path(__file__).with_name('review_sync.ps1')),
+                              '-ServerMdb', remote, '-ExpectedSha256', item['sha256'], '-ResultFile', str(output)],
+                             env=env, capture_output=True, timeout=60, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+    if process.returncode:
+        raise ValueError('文件同步失败：' + redact(process.stderr.decode('utf-8', errors='replace'))[:1200])
+    return json.loads(output.read_text(encoding='utf-8-sig'))
+
+
 def package(manifest_file: str) -> tuple[Path, dict]:
     path = source_path(manifest_file, '.json')
     if path.name != 'manifest.json' or path.parent.parent != root_dir() / 'artifacts' or not re.fullmatch(r'[0-9a-f]{32}', path.parent.name):
