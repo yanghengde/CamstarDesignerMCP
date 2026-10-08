@@ -1,0 +1,19 @@
+fastmcp>=4.0.11,<5.0.0
+mcp>=2.3.0,<3.0.0
+sse-starlette>=3.5.0,<4.0.0
+httpx>=0.27.0
+python-dotenv>=1.0.0
+openai>=1.0.0
+fastapi>=0.142.0,<0.143.0
+starlette>=1.7.0,<2.0.0
+uvicorn>=0.20.0
+python-multipart>=0.0.32
+pandas>=2.0.0
+openpyxl>=3.1.0
+# 0.6.x stays compatible with the LangChain 0.3 packages used in this environment.
+langgraph>=0.6.11,<0.7.0
+langgraph-checkpoint-sqlite>=2.0.11,<3.0.0
+# 0.22 removed Connection.is_alive(), which checkpoint-sqlite 2.0.x uses.
+aiosqlite>=0.20.0,<0.22.0
+langchain-core>=0.3.80,<0.3.81
+langsmith>=0.3.45,<0.4.0

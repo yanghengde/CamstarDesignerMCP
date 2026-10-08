@@ -1,0 +1,592 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>运行日志与路由分析</title>
+    <!-- Favicon SVG -->
+    <link rel="icon" type="image/svg+xml" href="/svg/opcenter.svg">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --primary: #155eef;
+            --primary-hover: #175cd3;
+            --bg-body: #f9fafb;
+            --bg-surface: #ffffff;
+            --border: #eaecf0;
+            --text-main: #101828;
+            --text-secondary: #475467;
+            --text-tertiary: #667085;
+
+            --success: #17b26a;
+            --warning: #f79009;
+            --danger: #f04438;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: 'Inter', -apple-system, sans-serif;
+        }
+
+        body {
+            background-color: var(--bg-body);
+            color: var(--text-main);
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        /* Top Nav */
+        nav {
+            height: 56px;
+            background: var(--bg-surface);
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            padding: 0 24px;
+            justify-content: space-between;
+            flex-shrink: 0;
+            box-shadow: 0 1px 2px rgba(16, 24, 40, 0.03);
+            z-index: 10;
+        }
+
+        .nav-title {
+            font-weight: 600;
+            font-size: 15px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .badge {
+            background: #ecfdf3;
+            color: #027a48;
+            padding: 2px 8px;
+            border-radius: 16px;
+            font-size: 12px;
+            font-weight: 500;
+        }
+
+        /* Layout */
+        .app-layout {
+            display: flex;
+            flex: 1;
+            overflow: hidden;
+        }
+
+        /* Sidebar (Logs List) */
+        .sidebar {
+            width: 320px;
+            background: var(--bg-surface);
+            border-right: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+            flex-shrink: 0;
+        }
+
+        .sidebar-header {
+            padding: 16px 20px;
+            border-bottom: 1px solid var(--border);
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--text-secondary);
+            background: #fcfcfd;
+        }
+
+        .log-list {
+            flex: 1;
+            overflow-y: auto;
+        }
+
+        .log-item {
+            padding: 16px 20px;
+            border-bottom: 1px solid var(--border);
+            cursor: pointer;
+            transition: background 0.15s;
+            position: relative;
+        }
+
+        .log-item:hover {
+            background: #f9fafb;
+        }
+
+        .log-item.active {
+            background: #eff8ff;
+            border-left: 3px solid var(--primary);
+            padding-left: 17px;
+            /* compensate for border */
+        }
+
+        .log-query {
+            font-size: 14px;
+            font-weight: 500;
+            color: var(--text-main);
+            margin-bottom: 6px;
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+            line-height: 1.4;
+        }
+
+        .log-meta {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 12px;
+            color: var(--text-tertiary);
+        }
+
+        .log-meta-right {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .latency {
+            color: var(--text-secondary);
+            font-variant-numeric: tabular-nums;
+        }
+
+        .latency.slow {
+            color: var(--danger);
+            font-weight: 500;
+        }
+
+        /* Main Trace View */
+        .main-content {
+            flex: 1;
+            overflow-y: auto;
+            background: var(--bg-body);
+            position: relative;
+        }
+
+        .main-header {
+            background: var(--bg-surface);
+            padding: 24px 32px;
+            border-bottom: 1px solid var(--border);
+            position: sticky;
+            top: 0;
+            z-index: 10;
+        }
+
+        .trace-title {
+            font-size: 20px;
+            font-weight: 600;
+            margin-bottom: 12px;
+            line-height: 1.5;
+        }
+
+        .trace-stats {
+            display: flex;
+            gap: 24px;
+            font-size: 13px;
+            color: var(--text-secondary);
+        }
+
+        .stat-item {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .stat-value {
+            font-weight: 600;
+            color: var(--text-main);
+        }
+
+        .trace-body {
+            padding: 32px;
+            max-width: 900px;
+            margin: 0 auto;
+        }
+
+        /* Stepper UI (Dify Trace Node Style) */
+        .trace-nodes {
+            margin-top: 16px;
+        }
+
+        .node {
+            display: flex;
+            margin-bottom: 0;
+            /* managed by line */
+        }
+
+        .node-left {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            margin-right: 16px;
+            position: relative;
+        }
+
+        .node-icon {
+            width: 28px;
+            height: 28px;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+            background: #fff;
+            border: 1px solid var(--border);
+            box-shadow: 0 1px 2px rgba(16, 24, 40, 0.05);
+            z-index: 2;
+        }
+
+        .node-icon.llm {
+            color: #7a5af8;
+            border-color: #d9d6fe;
+            background-color: #f4f3ff;
+        }
+
+        .node-icon.tool {
+            color: #0ba5ec;
+            border-color: #e0f2fe;
+            background-color: #f0f9ff;
+        }
+
+        .node-line {
+            width: 2px;
+            flex: 1;
+            background: #eaecf0;
+            margin: 4px 0;
+        }
+
+        .node-right {
+            flex: 1;
+            padding-bottom: 32px;
+        }
+
+        .node:last-child .node-line {
+            display: none;
+        }
+
+        .node:last-child .node-right {
+            padding-bottom: 0;
+        }
+
+        .node-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+            padding-top: 4px;
+        }
+
+        .node-title {
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--text-main);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .node-time {
+            font-size: 12px;
+            color: var(--text-tertiary);
+            background: var(--bg-body);
+            padding: 2px 8px;
+            border-radius: 12px;
+            border: 1px solid var(--border);
+            font-variant-numeric: tabular-nums;
+        }
+
+        .node-card {
+            background: var(--bg-surface);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 16px;
+            box-shadow: 0 1px 2px rgba(16, 24, 40, 0.03);
+            font-size: 13px;
+        }
+
+        .meta-row {
+            display: flex;
+            margin-bottom: 8px;
+        }
+
+        .meta-label {
+            width: 90px;
+            color: var(--text-tertiary);
+            font-weight: 500;
+        }
+
+        .meta-value {
+            color: var(--text-main);
+            font-family: ui-monospace, monospace;
+            background: #f2f4f7;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 12px;
+        }
+
+        /* Empty & Loading states */
+        .empty-view {
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            color: var(--text-tertiary);
+            font-size: 14px;
+        }
+
+        .empty-view svg {
+            width: 48px;
+            height: 48px;
+            margin-bottom: 16px;
+            color: #d0d5dd;
+        }
+
+        /* SVG Icons Helper */
+        .icon-sm {
+            width: 14px;
+            height: 14px;
+        }
+
+        .icon-md {
+            width: 16px;
+            height: 16px;
+        }
+    </style>
+</head>
+
+<body>
+
+    <nav>
+        <div class="nav-title">
+            <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2" fill="none">
+                <path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />
+            </svg>
+            执行日志 (Logs)
+        </div>
+        <div id="envStatus">
+            <span class="badge">监控采集中</span>
+        </div>
+    </nav>
+
+    <div class="app-layout">
+        <!-- Sidebar -->
+        <div class="sidebar">
+            <div class="sidebar-header">
+                最近调用记录
+            </div>
+            <div class="log-list" id="sidebarList">
+                <!-- Render list here -->
+                <div style="padding: 20px; text-align: center; color: #667085; font-size: 13px;">加载中...</div>
+            </div>
+        </div>
+
+        <!-- Main Trace View -->
+        <div class="main-content" id="mainTraceContent">
+            <div class="empty-view">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                    <rect x="3" y="3" width="18" height="18" rx="2" />
+                    <path d="M3 9h18M9 21V9" />
+                </svg>
+                从左侧选择一条执行记录查看详细 Tracer
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let globalGroups = [];
+
+        document.addEventListener('DOMContentLoaded', fetchLogs);
+
+        async function fetchLogs() {
+            try {
+                const res = await fetch('/api/logs/data');
+                const data = await res.json();
+
+                if (data.status === 'disabled') {
+                    document.getElementById('envStatus').innerHTML = '<span class="badge" style="background:#fef3f2;color:#b42318">监控已停用</span>';
+                    document.getElementById('sidebarList').innerHTML = '<div style="padding: 20px; font-size: 13px; color: #667085;">数据采集已在 .env 关闭</div>';
+                    return;
+                }
+
+                processLogs(data.logs);
+            } catch (e) {
+                console.error(e);
+                document.getElementById('sidebarList').innerHTML = '<div style="color:red; padding:20px;">接口请求失败</div>';
+            }
+        }
+
+        function processLogs(logs) {
+            if (!logs || logs.length === 0) {
+                document.getElementById('sidebarList').innerHTML = '<div style="padding: 20px; font-size: 13px; color: #667085; text-align:center;">暂无任何大模型通话产生。<br/>可在对话框提问后再刷新本页</div>';
+                return;
+            }
+
+            const groupsMap = {};
+            logs.forEach(log => {
+                const promptText = log.details.prompt || "未知背景对话";
+                const session = log.session_id || "unknown";
+                const key = session + "|" + promptText;
+
+                if (!groupsMap[key]) {
+                    groupsMap[key] = {
+                        id: key,
+                        prompt: promptText,
+                        sessionId: session,
+                        username: log.username,
+                        timestamp: log.timestamp,
+                        totalTimeMs: 0,
+                        steps: []
+                    };
+                }
+                groupsMap[key].totalTimeMs += log.duration_ms;
+                // Always push, we'll sort them reversed inside the component
+                groupsMap[key].steps.push(log);
+            });
+
+            // Convert to array and sort latest primary prompt logic
+            globalGroups = Object.values(groupsMap).sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+
+            renderSidebar();
+
+            // 默认选中第一条
+            if (globalGroups.length > 0) {
+                selectTrace(0);
+            }
+        }
+
+        function renderSidebar() {
+            const listEl = document.getElementById('sidebarList');
+            listEl.innerHTML = '';
+
+            globalGroups.forEach((group, index) => {
+                const div = document.createElement('div');
+                div.className = 'log-item';
+                div.setAttribute('data-index', index);
+                div.onclick = () => selectTrace(index);
+
+                // parse time (only show HH:MM:SS inside lists)
+                const timeStr = group.timestamp.split(' ')[1] || group.timestamp;
+                const latencyStr = (group.totalTimeMs / 1000).toFixed(2);
+                const latencyClass = group.totalTimeMs > 4000 ? 'latency slow' : 'latency';
+
+                div.innerHTML = `
+                <div class="log-query">${escapeHtml(group.prompt)}</div>
+                <div class="log-meta">
+                    <span style="display:flex;align-items:center;gap:4px">
+                        <svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+                        ${group.username}
+                    </span>
+                    <div class="log-meta-right">
+                        <span>${timeStr}</span>
+                        <span class="${latencyClass}">${latencyStr}s</span>
+                    </div>
+                </div>
+            `;
+                listEl.appendChild(div);
+            });
+        }
+
+        function selectTrace(index) {
+            // Highlight logic
+            const items = document.querySelectorAll('.log-item');
+            items.forEach(el => el.classList.remove('active'));
+            if (items[index]) items[index].classList.add('active');
+
+            const group = globalGroups[index];
+            const mainEl = document.getElementById('mainTraceContent');
+
+            // Reverse steps array to chronological order
+            const chronoSteps = [...group.steps].reverse();
+
+            const llmCount = chronoSteps.filter(s => s.action.toLowerCase().includes('llm')).length;
+            const toolCount = chronoSteps.length - llmCount;
+            const totalSecs = (group.totalTimeMs / 1000).toFixed(2);
+
+            let stepsHtml = '';
+            chronoSteps.forEach(step => {
+                const isLLM = step.action.toLowerCase().includes('llm');
+                const iconClass = isLLM ? 'node-icon llm' : 'node-icon tool';
+
+                // Dify icons
+                const svgIcon = isLLM ?
+                    `<svg class="icon-md" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>` :
+                    `<svg class="icon-md" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>`;
+
+                const title = isLLM ? 'LLM Inference 核心推理' : 'Tool Execute 工具分发';
+
+                let metaHtml = '';
+                if (isLLM && step.details.model) {
+                    metaHtml += `<div class="meta-row"><div class="meta-label">Model</div><div class="meta-value">${step.details.model}</div></div>`;
+                }
+                if (!isLLM && step.details.tool) {
+                    metaHtml += `<div class="meta-row"><div class="meta-label">Target Name</div><div class="meta-value">${step.details.tool}</div></div>`;
+                }
+                
+                // Add start and end timestamps if available
+                if (step.start_time && step.end_time) {
+                    metaHtml += `<div class="meta-row"><div class="meta-label" style="width: 60px;">Started</div><div class="meta-value" style="background: transparent; padding: 0;">${step.start_time}</div></div>`;
+                    metaHtml += `<div class="meta-row"><div class="meta-label" style="width: 60px;">Finished</div><div class="meta-value" style="background: transparent; padding: 0;">${step.end_time}</div></div>`;
+                }
+
+                stepsHtml += `
+                <div class="node">
+                    <div class="node-left">
+                        <div class="${iconClass}">${svgIcon}</div>
+                        <div class="node-line"></div>
+                    </div>
+                    <div class="node-right">
+                        <div class="node-header">
+                            <div class="node-title">${title}</div>
+                            <div class="node-time">${(step.duration_ms / 1000).toFixed(2)}s</div>
+                        </div>
+                        <div class="node-card">
+                            ${metaHtml}
+                        </div>
+                    </div>
+                </div>
+            `;
+            });
+
+            mainEl.innerHTML = `
+            <div class="main-header">
+                <div class="trace-title">"${escapeHtml(group.prompt)}"</div>
+                <div class="trace-stats">
+                    <div class="stat-item">
+                        <svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                        请求时间: <span class="stat-value">${group.timestamp}</span>
+                    </div>
+                    <div class="stat-item">
+                        <svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+                        总耗时: <span class="stat-value">${totalSecs}s</span>
+                    </div>
+                    <div class="stat-item" style="color: var(--primary);">
+                        <svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>
+                        包含 ${llmCount} 次模型推理, ${toolCount} 次工具调用
+                    </div>
+                </div>
+            </div>
+            <div class="trace-body">
+                <h3 style="font-size: 14px; font-weight: 600; color: var(--text-secondary); margin-bottom: 24px; display:flex; align-items:center; gap:8px;">
+                    <svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+                    全链路 Tracer (按时间游标正序)
+                </h3>
+                <div class="trace-nodes">
+                    ${stepsHtml}
+                </div>
+            </div>
+        `;
+        }
+
+        function escapeHtml(unsafe) {
+            return (unsafe || '').replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+        }
+    </script>
+
+</body>
+
+</html>

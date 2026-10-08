@@ -1,0 +1,39 @@
+# Python Environments
+venv/
+env/
+.venv/
+
+# Cache and Bytecode
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Dependencies
+.pytest_cache/
+htmlcov/
+dist/
+build/
+*.egg-info/
+
+# Configuration and Secrets (DO NOT COMMIT)
+.env
+secret.json
+
+# Local Data / DB
+data/
+memory.json
+*.sqlite3
+
+# IDE / OS Files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Legacy files (kept for reference, remove when ready)
+
+# Local scratch output and settings
+tmp/
+.claude/settings.local.json
+~$*
