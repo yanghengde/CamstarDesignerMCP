@@ -9,6 +9,17 @@ from tools import mcp
 
 
 @mcp.tool
+async def prepare_designer_review(manifest_file: str, activate: bool = False) -> dict:
+    """把已成功保存的设计包复制到配置服务器的独立 Designer 查看目录，附带 SiteInfo。
+
+    activate=true 将 Designer 配置指向新副本并备份旧配置；用户明确要求在 Designer 中查看时可使用。
+    已打开的 Designer 需先保存并关闭，再重新打开才能看到；不宣称已打开，不执行编译、发布或服务生成。
+    """
+    from designer.review import prepare
+    return await asyncio.to_thread(prepare, manifest_file, activate)
+
+
+@mcp.tool
 async def inspect_designer_installation() -> dict:
     """通过已配置的Windows共享只读检查Designer界面、原生XML Import程序、组件版本及MDB路径；不启动界面或导入，不返回密码。"""
     from designer.installation import inspect_installation

@@ -228,6 +228,15 @@
             .bubble { font-size: 13px; } .agent-wrapper { gap: 9px; }
         }
         @media (prefers-reduced-motion: reduce) { *, *::before { animation: none !important; transition: none !important; scroll-behavior: auto !important; } }
+        .designer-result { margin: 24px 0 12px 40px; padding: 22px; border: 1px solid #bedbd4; border-radius: 16px; background: #f4faf8; }
+        .designer-result h3 { margin: 0 0 8px; font-size: 15px; color: #155b4d; }
+        .designer-result p { font-size: 13px; line-height: 1.7; margin: 8px 0; }
+        .designer-result code { display: block; white-space: pre-wrap; overflow-wrap: anywhere; padding: 10px; background: #fff; border-radius: 8px; font-size: 12px; }
+        .review-actions { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin-top: 14px; }
+        .review-actions button { border: 0; border-radius: 8px; padding: 10px 15px; background: #147d69; color: white; cursor: pointer; font: inherit; font-size: 13px; }
+        .review-actions button:disabled { opacity: .6; cursor: wait; }
+        .review-actions a { font-size: 13px; color: #147d69; }
+        @media (max-width: 600px) { .designer-result { margin-left: 0; padding: 16px; } }
     </style>
 </head>
 <body>
@@ -324,6 +333,7 @@
         let noticeTimer;
         let attachmentDrafts = [];
         let attachmentUploading = false;
+        let reviewPreparing = false;
         const attachBtn = document.getElementById('attachBtn');
         const fileInput = document.getElementById('excelFileInput');
         const mobileLayout = matchMedia('(max-width: 600px)');
@@ -373,14 +383,14 @@
         }
 
         function updateControls() {
-            const locked = busy || historyLoading || attachmentUploading;
+            const locked = busy || historyLoading || attachmentUploading || reviewPreparing;
             input.disabled = locked;
             sendBtn.disabled = locked;
             newChatTopBtn.disabled = locked;
             document.getElementById('recordsNav').disabled = locked;
             attachBtn.disabled = locked || attachmentDrafts.length >= 3;
             fileInput.disabled = locked;
-            document.querySelectorAll('.session-item, .record-item, .prompt-card, .attachment-remove').forEach(button => { button.disabled = locked; });
+            document.querySelectorAll('.session-item, .record-item, .prompt-card, .attachment-remove, .review-actions button').forEach(button => { button.disabled = locked; });
             sendBtn.hidden = busy;
             stopBtn.hidden = !busy;
             messagesDiv.setAttribute('aria-busy', String(locked));
@@ -581,6 +591,43 @@
 
         function scrollToBottom() { messagesDiv.scrollTop = messagesDiv.scrollHeight; }
 
+        function showDesignerResult(result) {
+            messagesDiv.querySelector('.designer-result')?.remove();
+            const card = document.createElement('section'); card.className = 'designer-result';
+            const title = document.createElement('h3'); title.textContent = '设计已保存 · 在 Designer 中继续'; card.appendChild(title);
+            const objects = document.createElement('p'); objects.textContent = `对象：${result.objects.join('、') || '查看变更包'} · 客户工作区：${result.workspace}`; card.appendChild(objects);
+            const caption = document.createElement('p'); caption.textContent = '准备 Designer 可打开的 MDB 文件。当前打开的旧文件不会自动出现这次设计。'; card.appendChild(caption);
+            const actions = document.createElement('div'); actions.className = 'review-actions';
+            const button = document.createElement('button'); button.type = 'button'; button.textContent = '在 Designer 中查看'; actions.appendChild(button);
+            const download = document.createElement('a'); download.textContent = '下载设计 MDB';
+            download.href = `/designer/results/${encodeURIComponent(result.id)}/mdb?username=${encodeURIComponent(currentUsername)}&session_id=${encodeURIComponent(currentSessionId)}`;
+            download.download = ''; actions.appendChild(download); card.appendChild(actions);
+            const status = document.createElement('div'); status.setAttribute('role', 'status'); card.appendChild(status);
+            if (result.review) renderReviewReceipt(status, result.review, result);
+            button.addEventListener('click', async () => {
+                if (busy || historyLoading || reviewPreparing) return;
+                reviewPreparing = true; updateControls(); button.textContent = '正在准备 Designer 文件…'; status.replaceChildren();
+                try {
+                    const receipt = await fetchJson('/designer/review', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:currentUsername,session_id:currentSessionId,package_id:result.id})});
+                    renderReviewReceipt(status, receipt, result);
+                    button.textContent = '重新准备查看文件';
+                } catch (error) {
+                    const note = document.createElement('p'); note.textContent = `准备失败：${error.message}`; status.appendChild(note); button.textContent = '重试在 Designer 中查看';
+                } finally { reviewPreparing = false; updateControls(); scrollToBottom(); }
+            });
+            messagesDiv.insertBefore(card, typingIndicator); updateControls(); scrollToBottom();
+        }
+
+        function renderReviewReceipt(status, receipt, result) {
+            const note = document.createElement('p');
+            note.textContent = receipt.activated ? '已设置下次启动文件。请保存并关闭当前 Designer，再重新打开。' : '文件已准备好。请保存当前设计，在 Designer 的打开文件入口选择下面的 MDB。当前账号无法自动修改启动配置。';
+            status.appendChild(note);
+            for (const [label, value] of [['MDB', receipt.server_mdb], ['SiteInfo', receipt.server_siteinfo]]) {
+                const path = document.createElement('code'); path.textContent = `${label}：${value}`; status.appendChild(path);
+            }
+            const steps = document.createElement('p'); steps.textContent = `选择客户工作区 ${result.workspace}，搜索 ${result.objects.join('、') || '目标对象'}。审核、编译和发布继续在 Designer 中执行。`; status.appendChild(steps);
+        }
+
         async function loadHistory() {
             historyLoading = true;
             updateControls();
@@ -596,6 +643,7 @@
                     else if (message.role === 'assistant' && message.content) { appendMessage('agent', message.content); hasVisible = true; }
                 });
                 if (!hasVisible) showWelcome();
+                if (data.designer_results?.length) showDesignerResult(data.designer_results[data.designer_results.length - 1]);
             } catch (error) {
                 appendMessage('agent', '对话记录加载失败，请刷新页面重试。');
                 showNotice(`无法加载对话记录：${error.message}`);
@@ -626,8 +674,14 @@
                 sessionListUI.innerHTML = '<p class="sidebar-empty">记录加载失败，请刷新重试</p>';
                 showNotice(`无法加载设计记录：${error.message}`);
             }
+            const requestedSession = new URLSearchParams(location.search).get('session_id');
+            if (requestedSession && sessions.some(session => session.id === requestedSession)) {
+                currentSessionId = requestedSession;
+                renderSessions();
+            }
             await loadHistory();
             if (!currentSessionId) await refreshSessionsList().catch(() => {});
+            if (new URLSearchParams(location.search).get('view') === 'records') setView('records');
         }
 
         async function handleSend() {
@@ -654,6 +708,8 @@
                     messageSaved = true;
                     if (data.session_id) currentSessionId = data.session_id;
                     attachmentDrafts = []; renderAttachmentDrafts();
+                } else if (data.type === 'designer_result') {
+                    showDesignerResult(data.result);
                 } else if (data.type === 'step') {
                     typingIndicator.hidden = false;
                     typingText.textContent = '正在查询与核对设计定义…';

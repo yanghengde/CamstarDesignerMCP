@@ -4,7 +4,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>运行日志与路由分析</title>
+    <meta name="theme-color" content="#f7f8fa">
+    <title>Opcenter Designer · 运行日志</title>
     <!-- Favicon SVG -->
     <link rel="icon" type="image/svg+xml" href="/svg/opcenter.svg">
     <style>
@@ -41,7 +42,7 @@
         }
 
         /* Top Nav */
-        nav {
+        .topbar {
             height: 66px;
             background: var(--bg-surface);
             border-bottom: 1px solid var(--border);
@@ -79,7 +80,7 @@
         }
 
         /* Sidebar (Logs List) */
-        .sidebar {
+        .log-sidebar {
             width: 320px;
             background: var(--bg-surface);
             border-right: 1px solid var(--border);
@@ -360,11 +361,11 @@
         .back-link:hover { color: var(--primary); }
         .back-link:focus-visible { outline: 2px solid var(--primary); outline-offset: 4px; }
         @media (max-width: 600px) {
-            nav { padding: 0 16px; height: 58px; }
+            .topbar { padding: 0 16px; height: 58px; }
             .nav-title { font-size: 13px; }
             .back-link { font-size: 11px; margin-right: 5px; padding-right: 10px; }
             .app-layout { flex-direction: column; }
-            .sidebar { width: 100%; max-height: 32vh; border-right: 0; border-bottom: 1px solid var(--border); }
+            .log-sidebar { width: 100%; max-height: 32vh; border-right: 0; border-bottom: 1px solid var(--border); }
             .main-content { min-width: 0; }
             .main-header { padding: 20px; }
             .trace-title { font-size: 16px; }
@@ -376,27 +377,121 @@
             .meta-row { flex-direction: column; gap: 4px; }
             .meta-value { overflow-wrap: anywhere; min-width: 0; max-width: 100%; align-self: flex-start; }
         }
+        .icon { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; flex-shrink: 0; }
+        .app-shell { height: 100%; display: grid; grid-template-columns: 232px minmax(0, 1fr); }
+        .sidebar { background: #f0f2f4; border-right: 1px solid var(--border); display: flex; flex-direction: column; padding: 28px 16px 16px; min-height: 0; }
+        .brand { display: flex; align-items: center; gap: 10px; padding: 0 8px; }
+        .brand-mark { width: 34px; height: 34px; border-radius: 10px; background: var(--teal); display: grid; place-items: center; color: white; }
+        .brand-mark .icon { width: 21px; height: 21px; }
+        .brand-name { font-size: 15px; font-weight: 650; letter-spacing: -.4px; }
+        .brand-subtitle { color: var(--secondary); font-size: 11px; margin-top: 3px; letter-spacing: .8px; }
+        .new-chat { display: flex; justify-content: center; align-items: center; gap: 8px; height: 38px; border: 1px solid #d8dde2; border-radius: 7px; background: white; margin: 29px 4px 24px; font-size: 13px; font-weight: 550; box-shadow: 0 1px 2px #18202a04; }
+        .new-chat:hover { border-color: #aabbb6; background: #fcfefd; }
+        .nav { display: grid; gap: 5px; }
+        .nav-item { display: flex; gap: 11px; align-items: center; border-radius: 7px; padding: 10px 12px; font-size: 13px; text-align: left; color: var(--secondary); }
+        .nav-item:hover { background: #e8ecef; }
+        .nav-item.active { background: #e0eeea; color: #006f64; font-weight: 600; }
+        .nav-item .icon { width: 17px; height: 17px; }
+        .recent-heading { font-size: 11px; color: var(--muted); margin: 32px 12px 11px; display: flex; justify-content: space-between; }
+        .session-list { overflow: auto; flex: 1; min-height: 0; }
+        .session-item { display: block; width: 100%; padding: 10px 12px; font-size: 12px; text-align: left; border-radius: 6px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--secondary); margin-bottom: 3px; }
+        .session-item:hover { background: #e8ecef; }
+        .session-item.active { background: #e6e9ed; color: var(--text); }
+        .sidebar-empty { color: var(--muted); font-size: 12px; line-height: 1.8; padding: 6px 12px; }
+        .sidebar-footer { border-top: 1px solid #dde2e7; padding: 17px 8px 0; margin-top: 20px; }
+        .user-profile { display: flex; align-items: center; gap: 9px; }
+        .avatar { height: 30px; width: 30px; background: #e0e5e9; border: 1px solid #d6dce1; border-radius: 8px; display: grid; place-items: center; font-size: 12px; font-weight: 600; }
+        .user-name { font-size: 12px; font-weight: 550; }
+        .user-caption { color: var(--muted); font-size: 10px; margin-top: 2px; }
+        .siemens { font-size: 10px; letter-spacing: 1.6px; font-weight: 700; color: var(--teal); margin-left: auto; }
+        .workspace { min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+        .topbar { height: 66px; background: var(--surface); border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 0 32px; flex-shrink: 0; }
+        .breadcrumbs { display: flex; align-items: center; gap: 12px; color: var(--muted); font-size: 12px; }
+        .breadcrumbs .icon { width: 14px; height: 14px; color: #b1b8c0; }
+        .breadcrumbs h1 { color: var(--text); font-size: 13px; font-weight: 550; }
+
+        :root { --teal: var(--primary); --secondary: var(--text-secondary); --muted: var(--text-tertiary); --text: var(--text-main); --surface: var(--bg-surface); --background: var(--bg-body); }
+        body { font-size: 14px; }
+        button, a { font: inherit; color: inherit; }
+        button { cursor: pointer; border: 0; background: none; }
+        button:disabled { opacity: .45; cursor: not-allowed; }
+        a { text-decoration: none; }
+        button:focus-visible, a:focus-visible { outline: 2px solid var(--primary); outline-offset: 3px; }
+        [hidden] { display: none !important; }
+        .app-layout, .main-content { min-height: 0; min-width: 0; }
+        .topbar { box-shadow: none; }
+        .mobile-menu, .sidebar-backdrop { display: none; }
+        .nav { height: auto; padding: 0; background: none; border: 0; box-shadow: none; }
+        .session-list { scrollbar-width: thin; }
+        .session-item { cursor: pointer; }
+        .navigation-status { font-size: 12px; line-height: 1.8; padding: 8px 12px; color: var(--text-secondary); }
+        @media (max-width: 1100px) { .log-sidebar { width: 260px; } .main-header, .trace-body { padding: 24px; } }
+        @media (max-width: 900px) { .app-layout { flex-direction: column; } .log-sidebar { width: 100%; max-height: 30vh; border-right: 0; border-bottom: 1px solid var(--border); } }
+        @media (max-width: 800px) {
+            .app-shell { grid-template-columns: 190px minmax(0, 1fr); }
+            .sidebar { padding-left: 10px; padding-right: 10px; }
+            .siemens { display: none; }
+            .topbar { padding: 0 22px; }
+            .breadcrumbs > span, .breadcrumbs > .icon { display: none; }
+        }
+        @media (max-width: 600px) {
+            .app-shell { display: block; }
+            .workspace { height: 100%; }
+            .sidebar { position: fixed; inset: 0 auto 0 0; width: 232px; z-index: 25; transform: translateX(-100%); transition: transform .2s; }
+            body.sidebar-open .sidebar { transform: translateX(0); }
+            body.sidebar-open .sidebar-backdrop { display: block; position: fixed; inset: 0; background: #1c28373b; z-index: 24; }
+            .mobile-menu { display: grid; place-items: center; width: 30px; height: 30px; color: var(--secondary); }
+            .topbar { padding: 0 16px; height: 58px; }
+            .breadcrumbs { gap: 8px; }
+        }
+        @media (prefers-reduced-motion: reduce) { *, *::before { transition: none !important; } }
     </style>
 </head>
 
 <body>
 
-    <nav>
-        <div class="nav-title">
-            <a class="back-link" href="/">← 设计助手</a>
-            <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2" fill="none">
-                <path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />
-            </svg>
-            运行日志
-        </div>
-        <div id="envStatus">
-            <span class="badge" style="background:#f0f2f4;color:#66707b">正在连接</span>
-        </div>
-    </nav>
-
+    <svg xmlns="http://www.w3.org/2000/svg" style="display:none" aria-hidden="true">
+        <symbol id="i-design" viewBox="0 0 24 24"><path d="m12 3 9 5-9 5-9-5 9-5Z"/><path d="m3 12 9 5 9-5M3 16l9 5 9-5"/></symbol>
+        <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+        <symbol id="i-chat" viewBox="0 0 24 24"><path d="M20 15a3 3 0 0 1-3 3H8l-4 3V6a3 3 0 0 1 3-3h10a3 3 0 0 1 3 3Z"/><path d="M8 8h8M8 12h5"/></symbol>
+        <symbol id="i-history" viewBox="0 0 24 24"><path d="M3 11a9 9 0 1 1 2.6 7M3 4v7h7M12 7v5l3 2"/></symbol>
+        <symbol id="i-log" viewBox="0 0 24 24"><path d="M5 3h14v18H5ZM9 7h6M9 11h6M9 15h3"/></symbol>
+        <symbol id="i-search" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/></symbol>
+        <symbol id="i-field" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 10h18M10 10v10M14 15h4M16 13v4"/></symbol>
+        <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14m-6-6 6 6-6 6"/></symbol>
+        <symbol id="i-send" viewBox="0 0 24 24"><path d="M12 19V5m-6 6 6-6 6 6"/></symbol>
+        <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m9 5 7 7-7 7"/></symbol>
+        <symbol id="i-guide" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16M7 8h4M7 12h4"/></symbol>
+        <symbol id="i-check" viewBox="0 0 24 24"><path d="m4 12 5 5L20 6"/></symbol>
+        <symbol id="i-menu" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/></symbol>
+        <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="1"/></symbol>
+        <symbol id="i-attach" viewBox="0 0 24 24"><path d="m8 12 6-6a3 3 0 0 1 4 4l-8 8a5 5 0 0 1-7-7l9-9M7 13l7-7"/></symbol>
+    </svg>
+    <button class="sidebar-backdrop" id="sidebarBackdrop" aria-label="关闭导航"></button>
+    <div class="app-shell">
+        <aside id="workspaceNav" class="sidebar" aria-label="工作台导航">
+            <a class="brand" href="/" aria-label="Opcenter Designer 首页">
+                <span class="brand-mark"><svg class="icon"><use href="#i-design"/></svg></span>
+                <div><div class="brand-name">Opcenter</div><div class="brand-subtitle">DESIGNER WORKSPACE</div></div>
+            </a>
+            <button class="new-chat" id="newChatTopBtn"><svg class="icon"><use href="#i-plus"/></svg>新建设计对话</button>
+            <nav class="nav" aria-label="主要功能">
+                <a class="nav-item" href="/"><svg class="icon"><use href="#i-chat"/></svg>设计助手</a>
+                <a class="nav-item" href="/?view=records"><svg class="icon"><use href="#i-history"/></svg>设计记录</a>
+                <a class="nav-item active" href="/logs" aria-current="page"><svg class="icon"><use href="#i-log"/></svg>运行日志</a>
+            </nav>
+            <div class="recent-heading"><span>最近对话</span><span id="sessionCount">—</span></div>
+            <div class="session-list" id="sessionListUI"><p class="sidebar-empty">正在加载对话…</p></div>
+            <div class="sidebar-footer"><div class="user-profile"><span class="avatar" id="userAvatar">D</span><div><div class="user-name" id="username">designer</div><div class="user-caption">设计工作台</div></div><span class="siemens">SIEMENS</span></div></div>
+        </aside>
+        <main class="workspace">
+            <header class="topbar">
+                <div class="breadcrumbs"><button class="mobile-menu" id="mobileMenu" aria-label="打开导航" aria-expanded="false" aria-controls="workspaceNav"><svg class="icon"><use href="#i-menu"/></svg></button><span>工作台</span><svg class="icon"><use href="#i-chevron"/></svg><h1>运行日志</h1></div>
+                <div id="envStatus" role="status"><span class="badge" style="background:#f0f2f4;color:#66707b">正在连接</span></div>
+            </header>
     <div class="app-layout">
         <!-- Sidebar -->
-        <div class="sidebar">
+        <aside class="log-sidebar" aria-label="最近调用记录">
             <div class="sidebar-header">
                 最近调用记录
             </div>
@@ -404,7 +499,7 @@
                 <!-- Render list here -->
                 <div style="padding: 20px; text-align: center; color: #667085; font-size: 13px;">加载中...</div>
             </div>
-        </div>
+        </aside>
 
         <!-- Main Trace View -->
         <div class="main-content" id="mainTraceContent">
@@ -418,8 +513,64 @@
         </div>
     </div>
 
+        </main>
+    </div>
+
     <script>
         let globalGroups = [];
+
+        let navigationUsername = 'designer';
+        const mobileLayout = matchMedia('(max-width: 600px)');
+        function syncNavigation() {
+            const open = document.body.classList.contains('sidebar-open');
+            document.querySelector('.sidebar').inert = mobileLayout.matches && !open;
+            document.querySelector('.workspace').inert = mobileLayout.matches && open;
+            document.getElementById('mobileMenu').setAttribute('aria-expanded', String(open));
+        }
+        function closeNavigation() { document.body.classList.remove('sidebar-open'); syncNavigation(); }
+        async function navigationJson(url, options) {
+            const response = await fetch(url, options);
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            return response.json();
+        }
+        async function loadNavigation() {
+            const button = document.getElementById('newChatTopBtn'); button.disabled = true;
+            try {
+                const config = await navigationJson('/config'); navigationUsername = config.username || 'designer';
+                document.getElementById('username').textContent = navigationUsername;
+                document.getElementById('userAvatar').textContent = navigationUsername.slice(0, 1).toUpperCase();
+                const data = await navigationJson(`/sessions/${encodeURIComponent(navigationUsername)}`);
+                const sessions = (data.sessions || []).slice().reverse();
+                document.getElementById('sessionCount').textContent = sessions.length;
+                const list = document.getElementById('sessionListUI'); list.replaceChildren();
+                if (!sessions.length) { const empty = document.createElement('p'); empty.className = 'sidebar-empty'; empty.textContent = '还没有历史对话'; list.appendChild(empty); }
+                sessions.forEach(session => {
+                    const link = document.createElement('a'); link.className = 'session-item';
+                    link.href = `/?session_id=${encodeURIComponent(session.id)}`;
+                    link.textContent = session.title || '未命名设计'; link.title = link.textContent; list.appendChild(link);
+                });
+            } catch (error) {
+                document.getElementById('sessionListUI').innerHTML = '<p class="sidebar-empty">记录加载失败，请刷新重试</p>';
+            } finally { button.disabled = false; }
+        }
+        document.getElementById('newChatTopBtn').addEventListener('click', async event => {
+            const button = event.currentTarget; button.disabled = true;
+            try {
+                const data = await navigationJson(`/sessions/${encodeURIComponent(navigationUsername)}/new`, {method:'POST'});
+                location.assign(`/?session_id=${encodeURIComponent(data.session_id)}`);
+            } catch (error) {
+                const note = document.createElement('p'); note.className = 'navigation-status'; note.setAttribute('role', 'alert'); note.textContent = '创建对话失败，请稍后重试。';
+                document.querySelector('.navigation-status')?.remove(); button.after(note); button.disabled = false;
+            }
+        });
+        document.getElementById('mobileMenu').addEventListener('click', () => {
+            document.body.classList.toggle('sidebar-open'); syncNavigation(); document.getElementById('newChatTopBtn').focus();
+        });
+        document.getElementById('sidebarBackdrop').addEventListener('click', () => { closeNavigation(); document.getElementById('mobileMenu').focus(); });
+        document.addEventListener('keydown', event => { if (event.key === 'Escape') { closeNavigation(); document.getElementById('mobileMenu').focus(); } });
+        mobileLayout.addEventListener('change', closeNavigation);
+        syncNavigation(); loadNavigation();
+
 
         document.addEventListener('DOMContentLoaded', fetchLogs);
 

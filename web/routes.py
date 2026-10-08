@@ -3,7 +3,7 @@ import asyncio
 from typing import Literal
 
 from fastapi import APIRouter, Query, File, Form, HTTPException, UploadFile
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, StreamingResponse, FileResponse
 from pydantic import BaseModel, Field
 
 from config import CHAT_USERNAME, ENABLE_PERFORMANCE_LOG
@@ -14,6 +14,37 @@ from core.perf_logger import get_perf_logs
 from designer.attachments import AttachmentError, MAX_FILE_BYTES, resolve_attachments, save_attachment
 
 router = APIRouter()
+
+
+class DesignerReviewRequest(BaseModel):
+    username: str
+    session_id: str
+    package_id: str
+
+
+def review_for_session(username: str, session_id: str, package_id: str) -> dict:
+    from designer.review import session_packages
+    require_session(username, session_id)
+    for item in session_packages(get_user_messages(username, session_id)):
+        if item['id'] == package_id:
+            return item
+    raise HTTPException(404, '当前对话没有这份可用设计结果。')
+
+
+@router.post('/designer/review')
+async def designer_review(req: DesignerReviewRequest):
+    from designer.review import prepare
+    item = review_for_session(req.username, req.session_id, req.package_id)
+    try:
+        return await asyncio.to_thread(prepare, item['manifest_file'], True)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@router.get('/designer/results/{package_id}/mdb')
+def download_designer_mdb(package_id: str, username: str, session_id: str):
+    item = review_for_session(username, session_id, package_id)
+    return FileResponse(item['mdb_file'], filename=f"Designer_{package_id[:8]}.mdb", media_type='application/octet-stream')
 
 
 class ChatRequest(BaseModel):
@@ -80,7 +111,8 @@ def history_endpoint(username: str, session_id: str = None):
     if session_id:
         set_active_session(username, session_id)
     messages = get_user_messages(username, session_id)
-    return {"messages": [
+    from designer.review import session_packages
+    return {"designer_results": session_packages(messages), "messages": [
         {**{key: value for key, value in message.items() if key != 'display_content'},
          'content': message.get('display_content', message.get('content', ''))}
         for message in messages

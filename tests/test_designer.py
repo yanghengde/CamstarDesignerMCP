@@ -209,6 +209,7 @@ def test_registry_contains_only_designer_tools_in_clean_process():
         "restore_designer_test_database", "verify_designer_published_design",
         "generate_designer_wcf_package",
         "inspect_designer_installation",
+        "prepare_designer_review",
     }
 
 

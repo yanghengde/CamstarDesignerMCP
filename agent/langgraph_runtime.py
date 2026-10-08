@@ -320,6 +320,13 @@ async def _execute_tool_node(state: AgentState) -> dict[str, Any]:
                 },
             )
 
+    if isinstance(result, dict) and func_name in {'generate_designer_cdo_package', 'generate_designer_design_package'} and result.get('status') == 'saved_to_test_copy_and_exported':
+        from designer.review import summary
+        try:
+            writer({'type': 'designer_result', 'result': summary(result['files']['manifest.json'])})
+        except (ValueError, KeyError, OSError):
+            pass
+
     try:
         candidate_id = record_tool_outcome(
             session_id=state.get("session_id", "unknown"),

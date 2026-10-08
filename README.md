@@ -61,6 +61,14 @@ data/designer/artifacts/<id>/
 
 `saved_to_test_copy_and_exported` 表示本地副本已保存和导出，服务器 MDB、业务数据库和运行服务尚未更新。
 
+## 在 Designer 中查看
+
+设计完成后，对话下方显示 **在 Designer 中查看** 和 **下载设计 MDB**。查看按钮会检查该对话设计包的哈希，将最终 `modified.mdb` 与已配置站点的 `SiteInfo.mdb` 复制到服务器 `C:\Temp\DesignerMCP\Review_<id>`，保留原 MDB。需要已配置的服务器 C 共享、Windows 凭据及 `DESIGNER_UI_EXE`。
+
+有写权限时，工具备份 Designer 配置并设置下次启动的 MDB；保存并关闭当前 Designer，再重新打开。无配置写权限时，仍返回完整 MDB / SiteInfo 路径，在 Designer 的打开文件入口手动选择。进入客户工作区（例如 Site / 200），搜索生成的对象。文件复制成功与配置切换均不等于已在 Designer 界面验收；后续审核、编译和发布在 Designer 内完成。
+
+自然语言也可要求“把这份设计准备好，让我在 Designer 中查看”，助手调用 `prepare_designer_review`。多批设计应交接最终包含全部内容的 MDB。
+
 ## Excel 附件设计
 
 聊天输入框点击 **添加 Excel**，选择 `.xlsx` 或 `.xls`，核对文件卡片中的工作表与前 6 行预览，再输入例如：
