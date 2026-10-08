@@ -11,6 +11,7 @@ import uuid
 
 from config import MEMORY_FILE, SESSIONS_DIR
 from agent.prompts import SYSTEM_PROMPT
+from agent.titles import clean_title, first_message_title, is_placeholder_title
 
 # 内存中的状态字典
 user_memories: dict = {}
@@ -163,6 +164,9 @@ def update_session_title(username: str, session_id: str, title: str):
     """更新会话的名称并持久化"""
     if username in user_memories:
         if session_id in user_memories[username].get("sessions", {}):
+            title = clean_title(title)
+            if not title:
+                return
             user_memories[username]["sessions"][session_id]["title"] = title
             save_session(username, session_id)
 
@@ -204,5 +208,14 @@ def init_memory():
     loaded = load_memory()
     user_memories.clear()
     user_memories.update(loaded)
+    # Repair unnamed conversations using their first visible message only.
+    for user in user_memories.values():
+        for session in user.get('sessions', {}).values():
+            if not is_placeholder_title(session.get('title', '')):
+                continue
+            first = next((message for message in session.get('messages', [])
+                          if message.get('role') == 'user' and message.get('display_content', message.get('content', '')).strip()), None)
+            if first:
+                session['title'] = first_message_title(first.get('display_content', first['content']))
     # 如果系统刚从单体记忆切换过来，顺便把它们切片冲刷到磁盘中
     save_memory()

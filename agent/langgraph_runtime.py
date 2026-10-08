@@ -48,6 +48,7 @@ from config import (
 from core.perf_logger import record_perf
 from tools import get_tool_func
 from designer.attachments import attachment_context, attachment_summary
+from agent.titles import first_message_title
 
 
 class AgentState(TypedDict, total=False):
@@ -452,7 +453,7 @@ async def langgraph_chat_stream(
 
     chat_messages = get_user_messages(username, session_id)
     actual_session_id = _actual_session_id(username, session_id)
-    is_first_message = len(chat_messages) == 1
+    is_first_message = not any(item.get('role') == 'user' for item in chat_messages)
     graph_config = _graph_config(username, actual_session_id)
 
     snapshot = await _graph.aget_state(graph_config)
@@ -502,6 +503,10 @@ async def langgraph_chat_stream(
         yield _sse({"type": "message_saved", "session_id": actual_session_id})
 
         if is_first_message and actual_session_id != "unknown":
+            # Persist a useful name before network latency or a cancelled turn.
+            initial_title = first_message_title(message)
+            update_session_title(username, actual_session_id, initial_title)
+            yield _sse({'type': 'title_update', 'title': initial_title, 'session_id': actual_session_id})
             # Imported lazily to avoid a module cycle with llm_client.
             from agent.llm_client import generate_title
 

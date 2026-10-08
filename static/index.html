@@ -715,7 +715,9 @@
                     typingText.textContent = '正在查询与核对设计定义…';
                     scrollToBottom();
                 } else if (data.type === 'title_update') {
-                    refreshSessionsList().catch(() => showNotice('对话标题刷新失败，可稍后刷新页面。'));
+                    const session = sessions.find(item => item.id === data.session_id);
+                    if (session) { session.title = data.title; renderSessions(); }
+                    else refreshSessionsList().catch(() => showNotice('对话标题刷新失败，可稍后刷新页面。'));
                 } else if (data.type === 'done') {
                     typingIndicator.hidden = true;
                     appendMessage('agent', data.reply);
