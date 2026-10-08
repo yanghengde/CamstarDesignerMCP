@@ -320,7 +320,8 @@ def verify_published_design(manifest_file: str, test_string_boundaries: bool = F
     return {**result,"result_file":str(file)}
 
 
-def publish_database(manifest_file: str, expected_manifest_sha256: str, backup_receipt: str, siteinfo_mdb: str) -> dict:
+def publish_database(manifest_file: str, expected_manifest_sha256: str, backup_receipt: str, siteinfo_mdb: str,
+                     expected_target_fingerprint: str = '') -> dict:
     """Execute installed Update DB against the configured, confirmed test target."""
     if not config.DESIGNER_TEST_TARGET_CONFIRMED:
         raise ValueError("目标未确认允许发布测试")
@@ -365,6 +366,8 @@ def publish_database(manifest_file: str, expected_manifest_sha256: str, backup_r
             (folder/"request.json").write_text(json.dumps(request),encoding="utf-8")
             lock=cur.execute("DECLARE @r int; EXEC @r=sys.sp_getapplock @Resource='CamstarDesignerMCP.Publish',@LockMode='Exclusive',@LockOwner='Session',@LockTimeout=0; SELECT @r").fetchone()[0]
             if lock<0: raise ValueError("同一数据库已有Designer发布操作")
+            if expected_target_fingerprint and metadata_fingerprint(cur,schema) != expected_target_fingerprint:
+                raise ValueError('发布检查后目标设计已变化，请重新检查并备份')
             baseline_file=root_dir()/"published_baseline.json"
             if baseline_file.is_file():
                 baseline=json.loads(baseline_file.read_text(encoding="utf-8"))

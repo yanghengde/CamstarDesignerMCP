@@ -21,7 +21,11 @@ class ProgressActionRequest(BaseModel):
     session_id: str
     package_id: str
     action: Literal['check', 'prepare', 'sync', 'compile', 'verify', 'confirm_review', 'confirm_compile',
-                    'confirm_publish', 'skip_services', 'confirm_services', 'confirm_complete']
+                    'confirm_publish', 'skip_services', 'confirm_services', 'confirm_complete', 'confirm_wcf',
+                    'preflight', 'backup', 'publish', 'wcf']
+    expected_plan_sha256: str = ''
+    expected_backup_sha256: str = ''
+    verify_types: list[str] | None = Field(default=None, max_length=20)
 
 
 def require_progress_owner(username: str, session_id: str | None = None):
@@ -64,7 +68,9 @@ async def progress_action(req: ProgressActionRequest):
     from designer.progress import start_action
     require_progress_owner(req.username, req.session_id)
     try:
-        return start_action(req.username, req.session_id, req.package_id, req.action)
+        return start_action(
+            req.username, req.session_id, req.package_id, req.action,
+            {'expected_plan_sha256': req.expected_plan_sha256, 'expected_backup_sha256': req.expected_backup_sha256, 'verify_types': req.verify_types})
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from exc
 
@@ -75,6 +81,21 @@ def progress_changes(session_id: str, username: str, package_id: str):
     require_progress_owner(username, session_id)
     item = review_for_session(username, session_id, package_id)
     return FileResponse(Path(item['manifest_file']).parent / 'changes.xml', filename='Designer_changes.xml', media_type='application/xml')
+
+
+@router.get('/api/progress/{session_id}/wcf')
+async def progress_wcf_download(session_id: str, username: str, package_id: str):
+    from designer.progress import snapshot
+    from designer.progress_actions import wcf_archive
+    require_progress_owner(username, session_id)
+    state = await asyncio.to_thread(snapshot, username, session_id)
+    if not state['package'] or state['package']['id'] != package_id or not state['wcf']:
+        raise HTTPException(404, 'WCF 产物不存在')
+    try:
+        file = await asyncio.to_thread(wcf_archive, state['wcf'])
+    except (ValueError, KeyError, OSError) as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return FileResponse(file, filename='Designer_WCF.zip', media_type='application/zip')
 
 
 class DesignerReviewRequest(BaseModel):

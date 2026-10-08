@@ -1,4 +1,4 @@
-"""Project real tool receipts onto a personal ten-step Designer workflow."""
+"""Project real tool receipts onto a personal Designer workflow."""
 import ast
 import asyncio
 import json
@@ -9,12 +9,14 @@ from agent.memory import get_user_messages, get_sessions
 from designer import review, progress_store as store
 from designer.files import source_path
 from designer.vendor import digest
+from designer import progress_actions
 
-TITLES = ['提交需求', '识别设计', '检查现有定义', '生成设计', '核对结果', 'Designer 审核', '编译设计', '发布设计', '生成与部署服务', '完成验收']
+TITLES = ['提交需求', '识别设计', '检查现有定义', '生成设计', '核对结果', '检查设计', 'Compile', 'Update Database', '生成 WCF', '部署 WCF', '验证结果']
 DONE = {'done', 'confirmed', 'skipped'}
 STAGES = {'generate_designer_cdo_package': 4, 'generate_designer_design_package': 4,
           'check_designer_package': 5, 'prepare_designer_review': 6, 'compile_designer_mdb': 7,
-          'publish_designer_test_database': 8, 'verify_designer_published_design': 8,
+          'publish_designer_test_database': 8, 'verify_designer_published_design': 11,
+          'prepare_designer_publish_plan': 8, 'backup_designer_test_database': 8,
           'generate_designer_wcf_package': 9}
 STAGES['sync_designer_file'] = 6
 _tasks = set()
@@ -75,6 +77,7 @@ def snapshot(username, session_id):
     designs = [item for item in receipts if item['tool'] in ('generate_designer_cdo_package', 'generate_designer_design_package')]
     saved = [item for item in designs if (item.get('result') or {}).get('files', {}).get('manifest.json')] if designs else []
     package, manifests, error = None, [], ''
+    publication_info = None
     if saved:
         path = saved[-1]['result']['files']['manifest.json']
         try:
@@ -113,6 +116,10 @@ def snapshot(username, session_id):
             args = item.get('arguments', {})
             if item.get('package_id') == package['id'] or same_file(args.get('manifest_file'), package['manifest_file']) or same_file(args.get('mdb_file'), package['mdb_file']):
                 relevant.append(item)
+        compiled_paths = {(item.get('result') or {}).get('compiled_mdb') for item in relevant}
+        relevant += [item for item in receipts if item not in relevant and item['tool'] == 'generate_designer_wcf_package'
+                     and item.get('arguments', {}).get('compiled_mdb') in compiled_paths - {None}]
+        publication_info = progress_actions.publication_state(relevant, package)
         for item in relevant:
             result = item.get('result') or {}
             tool = item['tool']
@@ -121,14 +128,20 @@ def snapshot(username, session_id):
             elif tool == 'compile_designer_mdb' and result.get('compiled_mdb'):
                 mark(7, detail='官方编译完成')
             elif tool == 'publish_designer_test_database' and result.get('status') == 'database_published':
-                mark(8, detail='程序发布完成')
+                mark(8, detail='Update Database 完成')
+            elif tool == 'generate_designer_wcf_package' and result.get('status') == 'services_generated':
+                if not result.get('partial_package') and result.get('fields_verified'):
+                    mark(9, detail=f"{result.get('service_count', 0)} 个服务 · {result.get('data_contract_count', 0)} 个数据契约")
+                else:
+                    mark(9, 'waiting', '生成产物需完整核对')
             elif tool == 'verify_designer_published_design':
                 if result.get('status') == 'verified':
                     mark(8, detail='对象与字段已核验')
+                    mark(11, 'waiting', '数据库已核验，待业务验收')
                 elif result.get('status') == 'verification_failed':
-                    mark(8, 'waiting', '发布结果尚未核验通过')
+                    mark(11, 'waiting', '数据库核验未通过')
                 elif result.get('status') == 'partial_verification':
-                    mark(8, 'waiting', '部分变更需 Designer 确认')
+                    mark(11, 'waiting', '部分变更需 Designer 确认')
             if item['status'] in ('failed', 'interrupted') and tool in STAGES:
                 mark(STAGES[tool], 'failed', item.get('error', '操作未完成'))
         for stage, status in acknowledgements.items():
@@ -138,22 +151,31 @@ def snapshot(username, session_id):
             mark(6, 'waiting', '文件已准备，待 Designer 审核')
         syncs = [item for item in relevant if item.get('action') == 'sync' and item.get('result') and item['result'].get('server_mdb') == (package.get('review') or {}).get('server_mdb')]
         if syncs and syncs[-1]['result'].get('unchanged') is False:
-            for number in range(5, 11):
+            for number in range(5, len(TITLES)+1):
                 mark(number, 'blocked', 'Designer 文件已变化，需重新核对')
         if stages[3]['status'] in ('failed', 'blocked'):
-            for number in range(5, 11):
+            for number in range(5, len(TITLES)+1):
                 mark(number, 'blocked', '等待设计结果核对')
         stage_actions = {
-            5: [('check', '核对结果')], 6: [('prepare', '准备 Designer 文件'), ('confirm_review', '确认已审核')],
-            7: [('compile', '编译'), ('confirm_compile', '已在 Designer 编译')],
-            8: [('verify', '核验发布'), ('confirm_publish', '已在 Designer 发布')],
-            9: [('skip_services', '无需服务'), ('confirm_services', '确认服务已完成')],
-            10: [('confirm_complete', '确认验收完成')]}
+            5: [('check', '核对结果')], 6: [('prepare', '准备 Designer 文件'), ('confirm_review', '手动检查确认')],
+            7: [('compile', '执行 Compile'), ('confirm_compile', '手动编译确认')],
+            8: [('preflight', '检查发布'), ('backup', '备份数据库'), ('publish', '执行 Update Database'), ('confirm_publish', '手动更新确认')],
+            9: [('wcf', '生成 WCF'), ('confirm_wcf', '手动生成确认'), ('skip_services', '无需 WCF')],
+            10: [('confirm_services', '手动部署确认')],
+            11: [('verify', '核验数据库'), ('confirm_complete', '确认验收完成')]}
         for number, actions in stage_actions.items():
             enabled = all(stage['status'] in DONE for stage in stages[:number-1])
             if number == 5 and stages[3]['status'] == 'done':
                 enabled = True
             stages[number-1]['actions'] = [{'id': action, 'label': label, 'enabled': enabled} for action, label in actions]
+            for item in stages[number-1]['actions']:
+                if item['id'] == 'publish':
+                    item['enabled'] &= publication_info['ready'] and stages[7]['status'] not in DONE
+                if item['id'] in ('preflight', 'backup') and stages[7]['status'] in DONE:
+                    item['enabled'] = False
+                if item['id'] == 'backup':
+                    item['enabled'] &= bool(publication_info['plan'] and publication_info['plan'].get('ready_for_publish'))
+        stages[9]['detail'] = stages[9]['detail'] or '在运行环境部署 WCF，完成后确认'
     active = next((item for item in reversed(events) if item['status'] == 'running'), None)
     if active:
         if active['tool'] == '__llm_inference':
@@ -165,14 +187,18 @@ def snapshot(username, session_id):
         for item in stages:
             for action in item['actions']:
                 action['enabled'] = False
-    current = next((item['number'] for item in stages if item['status'] not in DONE), 10)
+    current = next((item['number'] for item in stages if item['status'] not in DONE), len(TITLES))
     if active and active['tool'] != '__llm_inference':
         current = STAGES.get(active['tool'], 3)
     recent_job = next((item for item in reversed(events) if item.get('action')), None)
+    wcf = next((item['result'] for item in reversed(relevant) if item['tool'] == 'generate_designer_wcf_package'
+                and item.get('result') and item['result'].get('fields_verified') and item['result'].get('status') == 'services_generated'), None)
     return {'session_id': session_id, 'stages': stages, 'current': current,
             'completed': sum(item['status'] in DONE for item in stages), 'package': package,
             'requirements': [item.get('display_content', item.get('content', ''))[:10000] for item in users],
             'active': public_job(active), 'last_job': public_job(recent_job), 'error': error,
+            'publication': publication_info,
+            'wcf': wcf,
             'design_rows': [{'owner': op['owner'], 'name': op['name'], 'field_type': op.get('field_type', '')}
                             for _, manifest in reversed(manifests) for op in manifest.get('operations', []) if op.get('action') == 'add_field'],
             'updated': time.time(), '_manifests': [path for path, _ in manifests]}
@@ -184,7 +210,7 @@ def public_job(item):
     return {key: item.get(key) for key in ('id', 'action', 'status', 'started', 'updated', 'finished', 'error', 'result')}
 
 
-async def execute(identity, username, session_id, package, manifests, action):
+async def execute(identity, username, session_id, package, manifests, action, options=None):
     pulse = asyncio.create_task(store.heartbeat(identity))
     try:
         from tools.designer import check_designer_package
@@ -207,6 +233,33 @@ async def execute(identity, username, session_id, package, manifests, action):
                     raise ValueError('Designer 文件已变化，请先同步并重新核对')
             if action == 'compile':
                 result = await compile_designer_mdb(package['mdb_file'], package['sha256'])
+            elif action in ('preflight', 'backup', 'publish', 'wcf'):
+                fresh = await asyncio.to_thread(snapshot, username, session_id)
+                if not fresh['package'] or fresh['package']['id'] != package['id'] or fresh['error']:
+                    raise ValueError('设计已更新，请刷新页面后重试')
+                if action == 'preflight':
+                    result = await asyncio.to_thread(progress_actions.prepare_plan, package, manifests)
+                elif action == 'backup':
+                    info = fresh['publication']
+                    plan = info['plan']
+                    if not plan or not plan.get('ready_for_publish') or plan.get('target') != progress_actions.target() or not progress_actions.recent(plan.get('created_utc')):
+                        raise ValueError('请先重新检查发布')
+                    progress_actions.load_receipt(plan['plan_file'], plan['plan_sha256'])
+                    from designer.publication import backup_target
+                    result = await asyncio.to_thread(backup_target)
+                elif action == 'publish':
+                    result = await asyncio.to_thread(progress_actions.publish, fresh, options or {})
+                else:
+                    names = progress_actions.wcf_types(package, (options or {}).get('verify_types'))
+                    # Manual Designer compilation provides no local artifact. Build
+                    # the exact reviewed copy before calling the full WCF generator.
+                    compiled = await compile_designer_mdb(package['mdb_file'], package['sha256'])
+                    if compiled.get('source_unchanged') is False or digest(Path(package['mdb_file'])) != package['sha256']:
+                        raise ValueError('WCF 编译期间设计发生变化，请重新核对')
+                    from tools.designer_design import generate_designer_wcf_package
+                    result = await generate_designer_wcf_package(compiled['compiled_mdb'], compiled['compiled_sha256'], names)
+                    progress_actions.verify_wcf_fields(result, fresh, names)
+                    result['fields_verified'] = True
             elif action == 'verify':
                 checked = [await asyncio.to_thread(verify_published_design, manifest, False) for manifest in manifests]
                 supported = all(op.get('action') in {'create_cdo', 'add_field', 'create_field_type'}
@@ -227,7 +280,7 @@ async def execute(identity, username, session_id, package, manifests, action):
         await asyncio.gather(pulse, return_exceptions=True)
 
 
-def start_action(username, session_id, package_id, action):
+def start_action(username, session_id, package_id, action, options=None):
     state = snapshot(username, session_id)
     package = state['package']
     if not package or package['id'] != package_id:
@@ -241,16 +294,28 @@ def start_action(username, session_id, package_id, action):
         allowed = next((item for stage in state['stages'] for item in stage['actions'] if item['id'] == action), None)
         if not allowed or not allowed['enabled']:
             raise ValueError('请先完成前面的步骤')
-    confirmations = {'confirm_review': 6, 'confirm_compile': 7, 'confirm_publish': 8, 'confirm_services': 9,
-                     'skip_services': 9, 'confirm_complete': 10}
+    confirmations = {'confirm_review': 6, 'confirm_compile': 7, 'confirm_publish': 8, 'confirm_wcf': 9, 'confirm_services': 10,
+                     'skip_services': 9, 'confirm_complete': 11}
     if action in confirmations:
+        if action in ('confirm_wcf', 'skip_services', 'confirm_services'):
+            store.clear_from(username, session_id, package_id, confirmations[action]+1)
         store.confirm(username, session_id, package_id, confirmations[action], 'skipped' if action == 'skip_services' else 'confirmed')
+        if action == 'skip_services':
+            store.confirm(username, session_id, package_id, 10, 'skipped')
         return {'status': 'confirmed'}
+    if action == 'publish':
+        progress_actions.validate_publish(state, options or {})
+    if action == 'wcf':
+        progress_actions.wcf_types(package, (options or {}).get('verify_types'))
     tool = {'check': 'check_designer_package', 'prepare': 'prepare_designer_review', 'sync': 'sync_designer_file',
-            'compile': 'compile_designer_mdb', 'verify': 'verify_designer_published_design'}[action]
+            'compile': 'compile_designer_mdb', 'verify': 'verify_designer_published_design',
+            'preflight': 'prepare_designer_publish_plan', 'backup': 'backup_designer_test_database',
+            'publish': 'publish_designer_test_database', 'wcf': 'generate_designer_wcf_package'}[action]
     identity, created = store.begin(username, session_id, tool, {'manifest_file': package['manifest_file']}, package_id=package_id, action=action)
     if created:
-        task = asyncio.create_task(execute(identity, username, session_id, package, state['_manifests'], action))
+        if action == 'wcf':
+            store.clear_from(username, session_id, package_id, 9)
+        task = asyncio.create_task(execute(identity, username, session_id, package, state['_manifests'], action, options))
         _tasks.add(task)
         task.add_done_callback(_tasks.discard)
     return {'id': identity, 'status': 'running'}

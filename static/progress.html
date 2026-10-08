@@ -134,6 +134,12 @@
         .runtime { margin-top:18px; padding:13px; background:#f4f8f6; border-radius:8px; font-size:11px; color:var(--secondary); line-height:1.9; }
         .runtime b { color:var(--teal); font-weight:600; }
         .runtime time { font-variant-numeric:tabular-nums; }
+        .execution-summary { margin-top:18px; font-size:11px; color:var(--secondary); line-height:1.8; }
+        .execution-summary div { display:flex; gap:12px; justify-content:space-between; padding:5px 0; border-bottom:1px solid var(--border); }
+        .execution-summary b { color:var(--text); font-weight:500; overflow-wrap:anywhere; text-align:right; }
+        .execution-summary p { margin-top:9px; color:#a96c31; }
+        .confirm-note { font-size:12px; color:var(--secondary); line-height:1.8; margin-bottom:14px; }
+        .wcf-input { width:100%; border:1px solid var(--border); border-radius:7px; padding:12px; font:inherit; font-size:13px; }
         .file-content { padding:18px 22px; }
         .file-label { font-size:10px; color:var(--muted); display:flex; justify-content:space-between; align-items:center; margin-bottom:7px; }
         .file-path { display:block; font:11px/1.8 Consolas,monospace; color:var(--secondary); overflow-wrap:anywhere; padding:10px; background:#f7f8fa; border-radius:7px; margin-bottom:12px; }
@@ -160,7 +166,7 @@
             .segments { margin-top:14px; }
             .panel-heading { padding:14px 20px; }
             .step-list { padding:4px; }
-            .step-row { padding:7px 14px; min-height:38px; }
+            .step-row { padding:6px 14px; min-height:35px; }
             .step-number { width:23px; height:23px; }
         }
         @media(max-width:600px) { .progress-page { padding:24px 16px; } .page-heading h2 { font-size:22px; } .heading-actions { width:100%; flex-wrap:wrap; } .task-select { flex:1; min-width:0; } .overview { padding:18px; } .overview h3 { font-size:15px; } .overview-top { gap:12px; } .panel-heading { padding:15px 18px; } .action-content,.file-content { padding:18px; } }
@@ -212,14 +218,14 @@
     <div class="page-heading"><div><div class="eyebrow">MY DESIGN WORKFLOW</div><h2>我的设计进度</h2></div><div class="heading-actions"><select id="taskSelect" class="task-select" aria-label="选择设计任务" disabled><option>正在加载…</option></select><button class="button" id="refreshBtn"><svg class="icon"><use href="#i-history"/></svg>刷新</button></div></div>
     <div id="emptyView" class="empty" hidden><h3>暂无设计任务</h3><a class="button primary" href="/">开始设计</a></div>
     <div id="taskContent" hidden>
-        <section class="overview"><div class="overview-top"><div><h3 id="taskTitle"></h3><div class="metadata" id="taskMeta"></div></div><span class="counter"><b id="completedCount">0</b> / 10 完成</span></div><div class="segments" id="segments" aria-label="步骤完成情况"></div></section>
+        <section class="overview"><div class="overview-top"><div><h3 id="taskTitle"></h3><div class="metadata" id="taskMeta"></div></div><span class="counter"><b id="completedCount">0</b> / <span id="totalCount">11</span> 完成</span></div><div class="segments" id="segments" aria-label="步骤完成情况"></div></section>
         <div class="workflow-grid"><section class="panel"><div class="panel-heading">完整流程<small>点击查看步骤</small></div><ol class="step-list" id="stepList"></ol></section>
         <div class="right-column"><section class="panel"><div class="panel-heading"><span id="actionHeading">当前步骤</span><a id="conversationLink" class="file-note">查看对话 ↗</a></div><div class="action-content"><div class="stage-kicker" id="stageKicker"></div><h3 id="stageTitle"></h3><p class="stage-detail" id="stageDetail"></p><div class="action-buttons" id="stageActions"></div><div id="runtime" class="runtime" hidden></div></div></section>
         <section class="panel"><div class="panel-heading">设计文件<button id="syncBtn" class="button small" disabled>同步文件</button></div><div id="fileContent" class="file-content"><p class="file-note">等待设计生成</p></div></section></div></div>
     </div>
 </div></section></main></div>
 <div id="notice" class="notice" role="alert" hidden></div>
-<dialog id="confirmDialog"><h3 id="confirmTitle"></h3><div class="dialog-actions"><button class="button" id="cancelConfirm">取消</button><button class="button primary" id="acceptConfirm">确认</button></div></dialog>
+<dialog id="confirmDialog"><h3 id="confirmTitle"></h3><div id="confirmContent"></div><div class="dialog-actions"><button class="button" id="cancelConfirm">取消</button><button class="button primary" id="acceptConfirm">确认</button></div></dialog>
 <dialog id="detailsDialog"><h3 id="detailsTitle"></h3><div id="detailsContent"></div><div class="dialog-actions"><button class="button" id="closeDetails">关闭</button></div></dialog>
 <script>
         let navigationUsername = 'designer';
@@ -278,8 +284,8 @@
 
         let currentSession = null, selectedStage = null, state = null, taskList = [], pollTimer, loading = false, submitting = false, noticeTimer, confirmationResolve;
         const statusNames = {pending:'未开始',done:'已完成',confirmed:'用户确认',skipped:'不需要',waiting:'待你操作',running:'执行中',failed:'未完成',blocked:'待核对'};
-        const labels = {check:'核对结果',prepare:'准备 Designer 文件',sync:'同步文件',compile:'编译设计',verify:'核验发布'};
-        const explanations = ['需求已记录','对象与字段已识别','检查来源与已有定义','保存对象与字段','核对文件与设计来源','在 Designer 中审核当前设计','在 Designer 中编译，或使用官方编译','在 Designer 中发布后核验','按需要生成或部署服务','完成业务验证后确认'];
+        const labels = {check:'核对结果',prepare:'准备 Designer 文件',sync:'同步文件',compile:'Compile',verify:'核验数据库',preflight:'检查发布',backup:'备份数据库',publish:'Update Database',wcf:'编译并生成 WCF'};
+        const explanations = ['需求已记录','对象与字段已识别','检查来源与已有定义','保存对象与字段','核对文件与设计来源','在 Designer 中检查对象与字段','编译当前设计副本','检查、备份后更新数据库','全量生成 WCF，核对设计对象与字段','在运行环境部署 WCF，完成后确认','核验数据库并完成业务验收'];
         function notice(message) { const node=document.getElementById('notice'); node.textContent=message; node.hidden=false; clearTimeout(noticeTimer); noticeTimer=setTimeout(()=>node.hidden=true,6000); }
         async function api(url,options) { const response=await fetch(url,options); const data=await response.json(); if(!response.ok) throw Error(typeof data.detail==='string'?data.detail:`HTTP ${response.status}`); return data; }
         function duration(start) { const seconds=Math.max(0,Math.floor(Date.now()/1000-start)); return `${Math.floor(seconds/60).toString().padStart(2,'0')}:${(seconds%60).toString().padStart(2,'0')}`; }
@@ -298,6 +304,7 @@
             const meta=document.getElementById('taskMeta'); meta.replaceChildren();
             for(const text of state.package?[state.package.objects.join('、')||'元数据设计',`${state.package.field_count} 个字段`,`工作区 ${state.package.workspace}`]:['等待设计结果']) {const span=document.createElement('span'); span.textContent=text; meta.appendChild(span);}
             document.getElementById('completedCount').textContent=state.completed;
+            document.getElementById('totalCount').textContent=state.stages.length;
             document.getElementById('conversationLink').href=`/?session_id=${encodeURIComponent(currentSession)}`;
             const segments=document.getElementById('segments'); const list=document.getElementById('stepList'); segments.replaceChildren(); list.replaceChildren();
             for(const stage of state.stages) {
@@ -311,12 +318,15 @@
             }
             const stage=state.stages[(selectedStage||state.current)-1];
             document.getElementById('actionHeading').textContent=stage.number===state.current?'当前步骤':'步骤详情';
-            document.getElementById('stageKicker').textContent=`STEP ${String(stage.number).padStart(2,'0')} / 10`;
+            document.getElementById('stageKicker').textContent=`STEP ${String(stage.number).padStart(2,'0')} / ${state.stages.length}`;
             document.getElementById('stageTitle').textContent=stage.title;
             document.getElementById('stageDetail').textContent=stage.detail||explanations[stage.number-1];
             const actions=document.getElementById('stageActions'); actions.replaceChildren();
             if(stage.number<=4) {actions.appendChild(button(stage.number<=3?'查看需求':'查看设计',()=>details(stage.number))); if(stage.status!=='done') {const link=document.createElement('a');link.className='button primary';link.textContent='继续设计';link.href=document.getElementById('conversationLink').href;actions.appendChild(link);}}
-            stage.actions.forEach((item,index)=>actions.appendChild(button(item.label,()=>perform(item.id),item.enabled&&!submitting,index===0)));
+            stage.actions.forEach((item,index)=>actions.appendChild(button(item.label,()=>perform(item.id),item.enabled&&!submitting&&!state.active,index===0)));
+            document.querySelectorAll('[data-execution-summary]').forEach(node=>node.remove());
+            if(stage.number===8&&state.publication) {const summary=document.createElement('div');summary.className='execution-summary';summary.dataset.executionSummary='true';publicationSummary(summary,state.publication);actions.after(summary);}
+            if((stage.number===9||stage.number===10)&&state.wcf) {const link=document.createElement('a');link.className='button';link.textContent='下载 WCF 程序集';link.href=`/api/progress/${encodeURIComponent(currentSession)}/wcf?username=${encodeURIComponent(navigationUsername)}&package_id=${state.package.id}`;actions.appendChild(link);}
             if(state.package&&stage.number===5) {const link=document.createElement('a');link.className='button';link.textContent='下载变更 XML';link.href=`/api/progress/${encodeURIComponent(currentSession)}/changes?username=${encodeURIComponent(navigationUsername)}&package_id=${state.package.id}`;actions.appendChild(link);}
             document.getElementById('syncBtn').disabled=!state.package?.review||!!state.active||submitting;
             renderFiles();renderRuntime();
@@ -341,16 +351,35 @@
             else {content.className='requirements';for(const text of state.requirements){const p=document.createElement('p');p.textContent=text;content.appendChild(p);}}
             document.getElementById('detailsDialog').showModal();
         }
+        function summaryRow(container,label,value) {const row=document.createElement('div');const name=document.createElement('span');name.textContent=label;const text=document.createElement('b');text.textContent=value;row.append(name,text);container.appendChild(row);}
+        function publicationSummary(container,info) {
+            const fresh=created=>created&&Date.now()-Date.parse(created)>=0&&Date.now()-Date.parse(created)<=3600000;
+            summaryRow(container,'服务器',info.target.server||'未配置');summaryRow(container,'数据库',info.target.database||'未配置');
+            summaryRow(container,'发布检查',!info.plan?'未执行':!fresh(info.plan.created_utc)?'已过期':info.plan.ready_for_publish?'通过':'未通过');
+            summaryRow(container,'数据库备份',info.backup?.status==='backup_verified'?(fresh(info.backup.created_utc)?'已校验 · 1 小时内有效':'已过期'):'未完成');
+            if(info.backup?.created_utc)summaryRow(container,'备份时间',new Date(info.backup.created_utc).toLocaleString('zh-CN',{hour12:false}));
+            if(info.reason||info.plan?.blockers?.length){const note=document.createElement('p');note.textContent=info.plan?.blockers?.join('；')||info.reason;container.appendChild(note);}
+        }
         function askConfirmation(action) {
-            const titles={confirm_review:'确认已在 Designer 审核？',confirm_compile:'确认已在 Designer 编译？',confirm_publish:'确认已在 Designer 发布？',confirm_services:'确认服务已完成？',skip_services:'本次设计无需服务？',confirm_complete:'确认业务验收已完成？'};
-            document.getElementById('confirmTitle').textContent=titles[action];document.getElementById('confirmDialog').showModal();return new Promise(resolve=>confirmationResolve=resolve);
+            const titles={confirm_review:'确认已在 Designer 检查设计？',confirm_compile:'确认已在 Designer 编译？',confirm_publish:'确认已执行 Update Database？',confirm_wcf:'确认已生成并核对 WCF？',confirm_services:'确认 WCF 已部署并检查服务？',skip_services:'本次设计无需 WCF？',confirm_complete:'确认业务验收已完成？',backup:'备份目标数据库',publish:'执行 Update Database',wcf:'生成 WCF'};
+            const content=document.getElementById('confirmContent');content.replaceChildren();document.getElementById('confirmTitle').textContent=titles[action];
+            const note=document.createElement('p');note.className='confirm-note';note.textContent=action==='publish'?'更新以下数据库的设计元数据与存储结构。':action==='backup'?'创建独立备份并校验可读性。':action==='wcf'?'编译当前设计副本，全量生成 WCF，并核对所选对象的新字段。':'记录手动完成状态。';content.appendChild(note);
+            if(action==='publish'||action==='backup') {const summary=document.createElement('div');summary.className='execution-summary';publicationSummary(summary,state.publication);content.appendChild(summary);}
+            if(action==='publish') {const changes=state.publication.plan.changes||[];const names={create_cdo:'新增对象',add_field:'新增字段',create_field_type:'新增字段类型',patch:'修改属性',delete:'删除',change_field_type:'修改字段类型'};const table=document.createElement('table');table.className='detail-table';const head=table.createTHead().insertRow();for(const title of ['动作','对象','名称','内容']){const th=document.createElement('th');th.textContent=title;head.appendChild(th);}const body=table.createTBody();for(const change of changes){const row=body.insertRow();const description=[change.field_type,change.parent,...Object.entries(change.changes||change.properties||{}).map(([key,value])=>`${key}: ${typeof value==='object'?JSON.stringify(value):value}`)].filter(Boolean).join(' · ');for(const value of [names[change.action]||change.action,change.owner||change.kind||'',change.name||'',description])row.insertCell().textContent=value;}content.appendChild(table);}
+            if(action==='wcf') {const label=document.createElement('label');label.className='confirm-note';label.textContent='验收对象（英文逗号分隔，最多 20 个）';label.htmlFor='wcfTypes';const input=document.createElement('input');input.id='wcfTypes';input.className='wcf-input';input.value=state.package.objects.join(', ');content.append(label,input);}
+            document.getElementById('acceptConfirm').textContent=action==='publish'?'执行 Update Database':action==='backup'?'开始备份':action==='wcf'?'生成 WCF':'确认';
+            document.getElementById('confirmDialog').showModal();return new Promise(resolve=>confirmationResolve=resolve);
         }
         function answerConfirmation(value) {document.getElementById('confirmDialog').close();confirmationResolve?.(value);confirmationResolve=null;}
         async function perform(action) {
             if(submitting||state?.active||!state?.package)return;
-            if((action.startsWith('confirm_')||action==='skip_services')&&!await askConfirmation(action))return;
+            const session=currentSession,packageId=state.package.id;
+            const options=action==='publish'?{expected_plan_sha256:state.publication.plan.plan_sha256,expected_backup_sha256:state.publication.backup.receipt_sha256}:{};
+            if((action.startsWith('confirm_')||['skip_services','backup','publish','wcf'].includes(action))&&!await askConfirmation(action))return;
+            if(currentSession!==session||state?.package?.id!==packageId){notice('设计已更新，请刷新后重试');return;}
+            if(action==='wcf')options.verify_types=document.getElementById('wcfTypes').value.split(/[,，]/).map(value=>value.trim()).filter(Boolean);
             submitting=true;render();
-            try {await api('/api/progress/action',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:navigationUsername,session_id:currentSession,package_id:state.package.id,action})});selectedStage=null;await refresh();}
+            try {await api('/api/progress/action',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:navigationUsername,session_id:session,package_id:packageId,action,...options})});selectedStage=null;await refresh();}
             catch(error){notice(error.message);}
             finally{submitting=false;if(state)render();}
         }
