@@ -151,6 +151,18 @@
         .attachment-table th { background: #eff4f2; font-weight: 500; }
         .attachment-warning { color: #9a652b; font-size: 10px; line-height: 1.7; margin: 5px 0; }
         .message-attachments { display: grid; gap: 7px; margin-top: 10px; min-width: 0; }
+        .excel-design-preview { border:1px solid #cbded8; background:white; border-radius:10px; padding:18px; margin:14px 0; min-width:0; }
+        .excel-preview-heading { display:flex; justify-content:space-between; gap:12px; align-items:center; margin-bottom:8px; }
+        .excel-preview-heading strong { font-size:14px; font-weight:600; }
+        .excel-preview-status { color:var(--teal); font-size:11px; white-space:nowrap; }
+        .excel-preview-meta,.excel-preview-note { font-size:12px; color:var(--secondary); line-height:1.8; }
+        .excel-preview-table { overflow:auto; max-height:360px; margin:12px 0; }
+        .excel-preview-table table { border-collapse:collapse; width:100%; font-size:11px; }
+        .excel-preview-table th,.excel-preview-table td { padding:9px 10px; border-bottom:1px solid var(--border); text-align:left; white-space:nowrap; }
+        .excel-preview-table th { background:#f3f7f5; color:var(--secondary); font-weight:500; position:sticky; top:0; }
+        .excel-preview-source { color:var(--secondary); font-size:11px; margin:10px 0; }
+        .excel-preview-source summary { cursor:pointer; }
+        .excel-preview-source code { display:block; padding:7px 0; overflow-wrap:anywhere; white-space:pre-wrap; }
         .upload-status { color: var(--teal); font-size: 11px; margin-bottom: 10px; }
         .send-button { background: var(--teal); color: white; display: flex; align-items: center; gap: 8px; border-radius: 6px; padding: 8px 12px; font-size: 12px; font-weight: 550; }
         .send-button:hover { background: var(--teal-hover); }
@@ -334,6 +346,7 @@
         let sessions = [];
         let noticeTimer;
         let attachmentDrafts = [];
+        let pendingExcelPreview = null;
         let attachmentUploading = false;
         let reviewPreparing = false;
         const attachBtn = document.getElementById('attachBtn');
@@ -390,7 +403,7 @@
             sendBtn.disabled = locked;
             newChatTopBtn.disabled = locked;
             document.getElementById('recordsNav').disabled = locked;
-            attachBtn.disabled = locked || attachmentDrafts.length >= 3;
+            attachBtn.disabled = locked || !!pendingExcelPreview || attachmentDrafts.length >= 3;
             fileInput.disabled = locked;
             document.querySelectorAll('.session-item, .record-item, .prompt-card, .attachment-remove, .review-actions button').forEach(button => { button.disabled = locked; });
             sendBtn.hidden = busy;
@@ -555,7 +568,7 @@
         function renderAttachmentDrafts() {
             const list = document.getElementById('attachmentList');
             list.replaceChildren(...attachmentDrafts.map(attachment => attachmentCard(attachment, true)));
-            input.placeholder = attachmentDrafts.length ? '说明如何使用 Excel，例如：按附件创建对象，字段长度以表格为准…' : '描述你的对象或字段设计需求…';
+            input.placeholder = pendingExcelPreview ? '核对预览后输入“确定”或“确认”；输入“取消”可停止…' : attachmentDrafts.length ? '说明如何使用 Excel，例如：按附件创建对象，字段长度以表格为准…' : '描述你的对象或字段设计需求…';
             updateControls();
         }
 
@@ -630,8 +643,29 @@
             const steps = document.createElement('p'); steps.textContent = `选择客户工作区 ${result.workspace}，搜索 ${result.objects.join('、') || '目标对象'}。审核、编译和发布继续在 Designer 中执行。`; status.appendChild(steps);
         }
 
+        function excelPreviewStatus(id,status) {
+            const card=Array.from(messagesDiv.querySelectorAll('[data-excel-preview]')).find(node=>node.dataset.excelPreview===id);
+            if(card){card.querySelector('.excel-preview-status').textContent={pending:'待确认',confirmed:'已确认',cancelled:'已取消'}[status]||status;card.querySelector('.excel-preview-note').textContent=status==='pending'?'输入“确定”或“确认”后开始创建；输入“取消”可停止。':status==='cancelled'?'本批设计已取消。':'本批设计已由人员确认，执行结果请查看后续回复。';}
+            if(pendingExcelPreview?.id===id&&status!=='pending')pendingExcelPreview=null;
+            renderAttachmentDrafts();updateControls();
+        }
+        function showExcelPreview(preview) {
+            const card=document.createElement('section');card.className='excel-design-preview';card.dataset.excelPreview=preview.id;card.setAttribute('aria-label','Excel 设计预览');
+            const heading=document.createElement('div');heading.className='excel-preview-heading';const title=document.createElement('strong');title.textContent='Excel 设计预览';const status=document.createElement('span');status.className='excel-preview-status';heading.append(title,status);card.appendChild(heading);
+            const meta=document.createElement('p');meta.className='excel-preview-meta';meta.textContent=`${preview.attachments.map(item=>item.name).join('、')} · ${preview.object_count} 个新对象 · ${preview.field_count} 个字段`;card.appendChild(meta);
+            const scroll=document.createElement('div');scroll.className='excel-preview-table';const table=document.createElement('table');const head=table.createTHead().insertRow();for(const text of ['动作','对象','字段 / 名称','类型','长度','持久化','列表','说明']){const th=document.createElement('th');th.textContent=text;head.appendChild(th);}const body=table.createTBody();
+            for(const item of preview.rows){const row=body.insertRow();const yes=value=>value==null?'—':value?'是':'否';const details=[item.parent?`继承 ${item.parent}`:'',item.description,Object.keys(item.details||{}).length?JSON.stringify(item.details):''].filter(Boolean).join(' · ');for(const value of [item.action,item.owner||item.name,item.name,item.data_type||'—',item.max_length===''?'—':item.max_length,yes(item.persistent),yes(item.is_list),details||'—'])row.insertCell().textContent=value;}
+            scroll.appendChild(table);card.appendChild(scroll);
+            const source=document.createElement('details');source.className='excel-preview-source';const summary=document.createElement('summary');summary.textContent='来源与工作区';source.appendChild(summary);for(const target of preview.targets){const code=document.createElement('code');code.textContent=`${target.mdb_file||target.xml_file}\n工作区：${target.workspace||'唯一活跃客户工作区'}`;source.appendChild(code);}card.appendChild(source);
+            const note=document.createElement('p');note.className='excel-preview-note';card.appendChild(note);
+            const previous=Array.from(messagesDiv.querySelectorAll('[data-excel-preview]')).find(node=>node.dataset.excelPreview===preview.id);if(previous)previous.replaceWith(card);else messagesDiv.insertBefore(card,typingIndicator);
+            if(preview.status==='pending')pendingExcelPreview=preview;
+            excelPreviewStatus(preview.id,preview.status);scrollToBottom();
+        }
+
         async function loadHistory() {
             historyLoading = true;
+            pendingExcelPreview = null;renderAttachmentDrafts();
             updateControls();
             messagesDiv.replaceChildren(typingIndicator);
             typingIndicator.hidden = true;
@@ -642,8 +676,9 @@
                 let hasVisible = false;
                 (data.messages || []).forEach(message => {
                     if (message.role === 'user') { appendMessage('user', message.content, message.attachments || []); hasVisible = true; }
-                    else if (message.role === 'assistant' && message.content) { appendMessage('agent', message.content); hasVisible = true; }
+                    else if (message.role === 'assistant') {if(message.content){appendMessage('agent',message.content);hasVisible=true;}if(message.excel_preview){showExcelPreview(message.excel_preview);hasVisible=true;}}
                 });
+                if(data.pending_excel_preview){showExcelPreview(data.pending_excel_preview);hasVisible=true;}
                 if (!hasVisible) showWelcome();
                 if (data.designer_results?.length) showDesignerResult(data.designer_results[data.designer_results.length - 1]);
             } catch (error) {
@@ -722,7 +757,9 @@
                     else refreshSessionsList().catch(() => showNotice('对话标题刷新失败，可稍后刷新页面。'));
                 } else if (data.type === 'done') {
                     typingIndicator.hidden = true;
-                    appendMessage('agent', data.reply);
+                    if(data.excel_preview)showExcelPreview(data.excel_preview);else appendMessage('agent', data.reply);
+                } else if (data.type === 'excel_preview_status') {
+                    excelPreviewStatus(data.id,data.status);
                 } else if (data.type === 'error') {
                     typingIndicator.hidden = true;
                     appendMessage('agent', '处理失败：' + data.message);

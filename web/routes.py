@@ -197,13 +197,20 @@ def new_session_endpoint(username: str):
 
 
 @router.get("/history/{username}")
-def history_endpoint(username: str, session_id: str = None):
+async def history_endpoint(username: str, session_id: str = None):
     """获取指定用户的聊天历史。"""
     if session_id:
         set_active_session(username, session_id)
     messages = get_user_messages(username, session_id)
     from designer.review import session_packages
-    return {"designer_results": session_packages(messages), "messages": [
+    from agent import langgraph_runtime as runtime
+    pending_preview = None
+    if runtime._graph is not None:
+        actual = runtime._actual_session_id(username, session_id)
+        state = await runtime._graph.aget_state(runtime._graph_config(username, actual))
+        if runtime._has_interrupt(state):
+            pending_preview = (runtime._first_interrupt_value(state) or {}).get('excel_preview')
+    return {"designer_results": session_packages(messages), 'pending_excel_preview': pending_preview, "messages": [
         {**{key: value for key, value in message.items() if key != 'display_content'},
          'content': message.get('display_content', message.get('content', ''))}
         for message in messages

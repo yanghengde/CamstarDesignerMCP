@@ -50,6 +50,7 @@ from tools import get_tool_func
 from designer.attachments import attachment_context, attachment_summary
 from agent.titles import first_message_title
 from designer import progress_store
+from agent import excel_preview
 
 
 class AgentState(TypedDict, total=False):
@@ -65,6 +66,9 @@ class AgentState(TypedDict, total=False):
     pending_tool_calls: list[dict[str, Any]]
     final_reply: str
     stop_reason: str
+    excel_sources: list[dict]
+    excel_approved_calls: list[str]
+    excel_confirmation_response: str
 
 
 _client: Any = None
@@ -144,7 +148,7 @@ async def _agent_node(state: AgentState) -> dict[str, Any]:
         )
         # UI metadata is retained in checkpoints/history, never sent as API fields.
         model_messages = [
-            {key: value for key, value in message.items() if key not in {'display_content', 'attachments'}}
+            {key: value for key, value in message.items() if key not in {'display_content', 'attachments', 'excel_preview'}}
             for message in state.get("messages", [])
         ]
         language_message = {
@@ -248,24 +252,36 @@ def _route_after_agent(state: AgentState) -> str:
 
 def _policy_node(state: AgentState) -> dict[str, Any]:
     pending = state.get("pending_tool_calls", [])
-    if state.get("approval_granted"):
+    design_calls = [call for call in pending if (call.get('function') or {}).get('name') in excel_preview.DESIGN_TOOLS
+                    and excel_preview.fingerprint(call) not in state.get('excel_approved_calls', [])]
+    needs_preview = bool(state.get('excel_sources') and design_calls)
+    if state.get("approval_granted") and not needs_preview:
         return {}
     decision = evaluate_mutations(_completed_counts(state), pending)
-    if not decision.requires_approval:
+    if not decision.requires_approval and not needs_preview:
         return {}
-
+    preview = excel_preview.build(design_calls, state['excel_sources']) if needs_preview else None
     approval = interrupt(
         {
             "type": "approval_required",
-            "message": approval_prompt(decision),
+            "message": preview['message'] if preview else approval_prompt(decision),
+            "excel_preview": preview,
             "counts": decision.totals.as_dict(),
             "categories": list(decision.categories),
         }
     )
     if isinstance(approval, dict) and approval.get("approved") is True:
-        return {"approval_granted": True}
+        update = {"approval_granted": state.get('approval_granted', False) or decision.requires_approval}
+        if preview:
+            if not excel_preview.confirmation(approval.get('response', '')):
+                raise ValueError('Excel 设计需要人员输入“确定”或“确认”')
+            update.update(excel_approved_calls=state.get('excel_approved_calls', []) + preview['call_fingerprints'],
+                          excel_confirmation_response=approval['response'],
+                          messages=excel_preview.attach_preview(state.get('messages', []), {**preview, 'status': 'confirmed'}, pending))
+        return update
 
-    cancelled_messages = list(state.get("messages", []))
+    cancelled_messages = (excel_preview.attach_preview(state.get('messages', []), {**preview, 'status': 'cancelled'}, pending)
+                          if preview else list(state.get('messages', [])))
     for tool_call in pending:
         function = tool_call.get("function") or {}
         cancelled_messages.append(
@@ -276,7 +292,9 @@ def _policy_node(state: AgentState) -> dict[str, Any]:
                 "content": "Action cancelled by the user before execution.",
             }
         )
-    reply = "已取消本次待确认操作，未继续执行被拦截的工具。"
+    if preview and isinstance(approval, dict):
+        cancelled_messages.append({'role': 'user', 'content': approval.get('response', '取消')})
+    reply = "已取消本次 Excel 设计，尚未写入 Designer。" if preview else "已取消本次待确认操作，未继续执行被拦截的工具。"
     cancelled_messages.append({"role": "assistant", "content": reply})
     return {
         "messages": cancelled_messages,
@@ -312,6 +330,10 @@ async def _execute_tool_node(state: AgentState) -> dict[str, Any]:
     else:
         started = time.time()
         try:
+            if state.get('excel_sources') and func_name in excel_preview.DESIGN_TOOLS:
+                if excel_preview.fingerprint(tool_call) not in state.get('excel_approved_calls', []):
+                    raise ValueError('Excel 设计尚未通过预览确认')
+                await asyncio.to_thread(excel_preview.validate_sources, state['excel_sources'], state['username'], state['session_id'])
             tool_func = get_tool_func(func_name)
             if tool_func is None:
                 result = f"Error: tool '{func_name}' not found"
@@ -385,9 +407,15 @@ async def _execute_tool_node(state: AgentState) -> dict[str, Any]:
         "name": func_name,
         "content": str(result),
     }
+    messages = state.get('messages', []) + [tool_message]
+    response = state.get('excel_confirmation_response', '')
+    if not pending and response:
+        messages.append({'role': 'user', 'content': response})
     return {
-        "messages": state.get("messages", []) + [tool_message],
+        "messages": messages,
         "pending_tool_calls": pending,
+        "excel_approved_calls": [item for item in state.get('excel_approved_calls', []) if item != excel_preview.fingerprint(tool_call)],
+        "excel_confirmation_response": response if pending else '',
         "create_count": creates,
         "update_count": updates,
         "delete_count": deletes,
@@ -478,16 +506,22 @@ async def langgraph_chat_stream(
 
     snapshot = await _graph.aget_state(graph_config)
     if _has_interrupt(snapshot):
+        interrupt_value = _first_interrupt_value(snapshot) or {}
         if attachments:
             yield _sse({"type": "error", "message": "当前设计正在等待确认，请先确认或取消，再发送新的附件。"})
             return
-        if is_explicit_confirmation(message):
+        confirmed = excel_preview.confirmation(message) if interrupt_value.get('excel_preview') else is_explicit_confirmation(message)
+        if confirmed:
             try:
+                if interrupt_value.get('excel_preview'):
+                    await asyncio.to_thread(excel_preview.validate_sources, interrupt_value['excel_preview']['attachments'], username, actual_session_id)
                 async for event in _stream_graph(
                     Command(resume={"approved": True, "response": message}),
                     graph_config,
                 ):
                     yield event
+                if interrupt_value.get('excel_preview'):
+                    yield _sse({'type': 'excel_preview_status', 'id': interrupt_value['excel_preview']['id'], 'status': 'confirmed'})
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -500,18 +534,19 @@ async def langgraph_chat_stream(
                     graph_config,
                 ):
                     yield event
+                if interrupt_value.get('excel_preview'):
+                    yield _sse({'type': 'excel_preview_status', 'id': interrupt_value['excel_preview']['id'], 'status': 'cancelled'})
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
                 yield _sse({"type": "error", "message": f"工作流取消失败: {exc}"})
                 return
         else:
-            interrupt_value = _first_interrupt_value(snapshot) or {}
             prompt = interrupt_value.get(
                 "message",
                 "当前有操作等待确认。请回复明确的确认指令，或回复“取消执行”。",
             )
-            yield _sse({"type": "done", "reply": prompt})
+            yield _sse({"type": "done", "reply": prompt, 'excel_preview': interrupt_value.get('excel_preview')})
             return
     else:
         record = {"role": "user", "content": message + attachment_context(attachments or [])}
@@ -553,6 +588,9 @@ async def langgraph_chat_stream(
             "pending_tool_calls": [],
             "final_reply": "",
             "stop_reason": "",
+            "excel_sources": excel_preview.sources(chat_messages),
+            "excel_approved_calls": [],
+            "excel_confirmation_response": '',
         }
         try:
             async for event in _stream_graph(initial_state, graph_config):
@@ -583,6 +621,7 @@ async def langgraph_chat_stream(
                 "reply": interrupt_value.get(
                     "message", "操作已暂停，请明确确认或取消。"
                 ),
+                "excel_preview": interrupt_value.get('excel_preview'),
             }
         )
         return

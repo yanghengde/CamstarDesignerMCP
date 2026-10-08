@@ -191,8 +191,9 @@ def test_chat_rejects_wrong_session_attachment_before_streaming(api):
     assert response.status_code == 404
 
 
-def test_upload_to_graph_to_design_tool_and_reload_history(api, monkeypatch):
-    """Exercise real graph execution with fake model/vendor, never a real MDB."""
+@pytest.fixture
+def design_runtime(monkeypatch):
+    """Exercise the real graph with a fake model/vendor, never a real MDB."""
     calls = []
     model_requests = []
 
@@ -206,8 +207,8 @@ def test_upload_to_graph_to_design_tool_and_reload_history(api, monkeypatch):
     async def create(**kwargs):
         model_requests.append(kwargs['messages'])
         for message in kwargs['messages']:
-            assert 'display_content' not in message and 'attachments' not in message
-        user = next(message['content'] for message in reversed(kwargs['messages']) if message['role'] == 'user')
+            assert not {'display_content', 'attachments', 'excel_preview'} & message.keys()
+        user = next(message['content'] for message in reversed(kwargs['messages']) if message['role'] == 'user' and 'Excel 附件设计数据' in message['content'])
         assert '长度改为 300' in user
         assert 'ExProduct' in user and 'ExDescription' in user and '对象字段设计' in user
         if not any(message['role'] == 'tool' for message in kwargs['messages']):
@@ -228,17 +229,101 @@ def test_upload_to_graph_to_design_tool_and_reload_history(api, monkeypatch):
     monkeypatch.setattr(runtime, 'record_perf', lambda *args, **kwargs: None)
     monkeypatch.setattr(runtime, 'record_tool_outcome', lambda **kwargs: None)
     monkeypatch.setattr(runtime, 'build_runtime_experience_context', lambda *args: '')
+    return calls, model_requests
+
+
+@pytest.mark.parametrize('confirmation', ['确定', '确认', '确认导入。'])
+def test_upload_to_graph_to_design_tool_and_reload_history(api, design_runtime, confirmation):
+    calls, model_requests = design_runtime
     session = api.post('/sessions/user/new').json()['session_id']
     attachment = upload(api, session).json()
     response = api.post('/chat', json={'username':'user', 'session_id':session, 'message':'按附件创建对象，长度改为 300', 'attachment_ids':[attachment['id']]})
     assert response.status_code == 200
-    assert 'message_saved' in response.text and 'generate_designer_cdo_package' in response.text
+    assert 'message_saved' in response.text and 'excel_preview' in response.text
+    assert not calls and len(model_requests) == 1
+    pending = api.get(f'/history/user?session_id={session}').json()['pending_excel_preview']
+    assert pending['rows'][1]['max_length'] == 300
+    assert pending['object_count'] == pending['field_count'] == 1
+    for ambiguous in ['继续', '好的', '确认，但先别创建', '修改长度为 400']:
+        repeated = api.post('/chat', json={'username':'user', 'session_id':session, 'message':ambiguous})
+        assert 'excel_preview' in repeated.text and not calls
+    other = api.post('/sessions/user/new').json()['session_id']
+    assert api.get(f'/history/user?session_id={other}').json()['pending_excel_preview'] is None
+    response = api.post('/chat', json={'username':'user', 'session_id':session, 'message':confirmation})
+    assert 'generate_designer_cdo_package' in response.text and 'excel_preview_status' in response.text
+    assert len(calls) == 1
     assert calls[0]['cdo_name'] == 'ExProduct'
     assert calls[0]['fields'][0] == {'name':'ExDescription','data_type':'String','max_length':300,'persistent':True}
     assert len(model_requests) == 2
     persisted = memory.get_user_messages('user', session)[1]
     assert 'Excel 附件设计数据' in persisted['content']
-    history = api.get(f'/history/user?session_id={session}').json()['messages'][1]
+    result = api.get(f'/history/user?session_id={session}').json()
+    assert result['pending_excel_preview'] is None
+    assert any(item.get('excel_preview', {}).get('status') == 'confirmed' for item in result['messages'])
+    assert any(item['role'] == 'user' and item['content'] == confirmation for item in result['messages'])
+    history = result['messages'][1]
     assert history['content'] == '按附件创建对象，长度改为 300'
     assert history['attachments'][0]['name'] == '设计.xlsx'
     assert 'display_content' not in history
+
+
+def test_cancel_excel_preview_never_writes(api, design_runtime):
+    calls, model_requests = design_runtime
+    session = api.post('/sessions/user/new').json()['session_id']
+    attachment = upload(api, session).json()
+    api.post('/chat', json={'username':'user', 'session_id':session, 'message':'确认按附件创建，长度改为 300', 'attachment_ids':[attachment['id']]})
+    assert not calls
+    result = api.post('/chat', json={'username':'user', 'session_id':session, 'message':'取消'})
+    assert '已取消本次 Excel 设计' in result.text
+    history = api.get(f'/history/user?session_id={session}').json()
+    assert history['pending_excel_preview'] is None
+    assert any(item.get('excel_preview', {}).get('status') == 'cancelled' for item in history['messages'])
+    assert not calls and len(model_requests) == 1
+
+
+def test_changed_excel_cannot_be_confirmed_but_can_be_cancelled(api, design_runtime):
+    calls, _ = design_runtime
+    session = api.post('/sessions/user/new').json()['session_id']
+    attachment = upload(api, session).json()
+    api.post('/chat', json={'username':'user', 'session_id':session, 'message':'按附件创建，长度改为 300', 'attachment_ids':[attachment['id']]})
+    (Path(config.EXCEL_ATTACHMENT_ROOT) / attachment['id'] / 'source.xlsx').write_bytes(b'changed')
+    result = api.post('/chat', json={'username':'user', 'session_id':session, 'message':'确认'})
+    assert '发生变化' in result.text and not calls
+    assert api.get(f'/history/user?session_id={session}').json()['pending_excel_preview']
+    api.post('/chat', json={'username':'user', 'session_id':session, 'message':'取消'})
+    assert api.get(f'/history/user?session_id={session}').json()['pending_excel_preview'] is None
+    assert not calls
+
+
+def test_excel_preview_survives_sqlite_restart(isolated_store, design_runtime, monkeypatch):
+    from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+    calls, _ = design_runtime
+    session = memory.create_session('user')
+    attachment = excel.save_attachment(workbook_bytes(), '设计.xlsx', 'user', session)
+    documents = excel.resolve_attachments([attachment['id']], 'user', session)
+    async def run():
+        checkpoint_file = str(isolated_store / 'checkpoints.sqlite')
+        async with AsyncSqliteSaver.from_conn_string(checkpoint_file) as saver:
+            monkeypatch.setattr(runtime, '_graph', runtime._build_graph(saver))
+            events = [event async for event in runtime.langgraph_chat_stream('user', '按附件创建，长度改为 300', session, documents)]
+            assert any('excel_preview' in event for event in events) and not calls
+        async with AsyncSqliteSaver.from_conn_string(checkpoint_file) as saver:
+            monkeypatch.setattr(runtime, '_graph', runtime._build_graph(saver))
+            snapshot = await runtime._graph.aget_state(runtime._graph_config('user', session))
+            assert runtime._first_interrupt_value(snapshot)['excel_preview']['status'] == 'pending'
+            events = [event async for event in runtime.langgraph_chat_stream('user', '确定', session)]
+            assert any('excel_preview_status' in event for event in events)
+            assert len(calls) == 1
+    asyncio.run(run())
+
+
+def test_preview_matches_generic_field_defaults_and_keeps_operation_details():
+    from agent import excel_preview
+    call = {'id': 'batch', 'function': {'name': 'generate_designer_design_package', 'arguments': json.dumps({
+        'operations': [{'action': 'add_field', 'owner': 'ExProduct', 'name': 'ExStatus', 'field_type': 'Integer'},
+                       {'action': 'reorder_clf_functions', 'owner': 'ExFlow', 'function_ids': [2, 1], 'expected_function_ids': [1, 2]}]})}}
+    preview = excel_preview.build([call], [])
+    assert preview['rows'][0]['persistent'] is False
+    assert preview['rows'][1]['details']['function_ids'] == [2, 1]
+    changed = {**call, 'id': 'another-batch'}
+    assert excel_preview.fingerprint(changed) not in preview['call_fingerprints']
