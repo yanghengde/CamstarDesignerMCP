@@ -58,12 +58,13 @@ async def generate_title(message: str) -> str:
         return "新对话"
 
 
-async def chat_stream(username: str, message: str, session_id: str = None):
+async def chat_stream(username: str, message: str, session_id: str = None, attachments: list[dict] | None = None):
     """Stream Designer conversations through the checkpointed execution engine."""
     try:
         from agent.langgraph_runtime import langgraph_chat_stream
 
-        async for event in langgraph_chat_stream(username, message, session_id):
+        stream = langgraph_chat_stream(username, message, session_id, attachments=attachments) if attachments else langgraph_chat_stream(username, message, session_id)
+        async for event in stream:
             yield event
     except asyncio.CancelledError:
         raise

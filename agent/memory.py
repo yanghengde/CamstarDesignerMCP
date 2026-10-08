@@ -199,7 +199,10 @@ def get_user_messages(username: str, session_id: str = None) -> list:
 
 def init_memory():
     """系统启动时的统一外层装载点。"""
-    global user_memories
-    user_memories = load_memory()
+    # Other modules hold a reference to this dictionary. Rebinding it leaves
+    # the graph with stale session IDs and causes saves to target "unknown".
+    loaded = load_memory()
+    user_memories.clear()
+    user_memories.update(loaded)
     # 如果系统刚从单体记忆切换过来，顺便把它们切片冲刷到磁盘中
     save_memory()

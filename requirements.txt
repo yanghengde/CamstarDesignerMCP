@@ -8,6 +8,9 @@ fastapi>=0.142.0,<0.143.0
 starlette>=1.7.0,<2.0.0
 uvicorn>=0.20.0
 defusedxml>=0.7.1,<1.0.0
+python-multipart>=0.0.32,<0.1.0
+openpyxl>=3.1.5,<4.0.0
+xlrd>=2.0.2,<3.0.0
 pyodbc>=5.2.0,<6.0.0; sys_platform == 'win32'
 # 0.6.x stays compatible with the LangChain 0.3 packages used in this environment.
 langgraph>=0.6.11,<0.7.0

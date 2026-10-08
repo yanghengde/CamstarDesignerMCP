@@ -1,23 +1,50 @@
 import os
+import asyncio
 from typing import Literal
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, File, Form, HTTPException, UploadFile
 from fastapi.responses import HTMLResponse, StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from config import CHAT_USERNAME, ENABLE_PERFORMANCE_LOG
 from agent.memory import get_user_messages, get_sessions, create_session, set_active_session
 from agent.llm_client import chat_stream
 from agent.experience import get_experience_status, list_candidates
 from core.perf_logger import get_perf_logs
+from designer.attachments import AttachmentError, MAX_FILE_BYTES, resolve_attachments, save_attachment
 
 router = APIRouter()
 
 
 class ChatRequest(BaseModel):
-    message: str
+    message: str = Field(max_length=10000)
     username: str
     session_id: str = None
+    attachment_ids: list[str] = Field(default_factory=list, max_length=3)
+
+
+def require_session(username: str, session_id: str) -> None:
+    if not session_id or not any(session['id'] == session_id for session in get_sessions(username)):
+        raise HTTPException(404, "对话不存在，请新建对话后添加附件。")
+
+
+@router.post('/attachments/excel')
+async def upload_excel(
+    file: UploadFile = File(...), username: str = Form(...), session_id: str = Form(...),
+):
+    """Parse an Excel upload without executing any Designer operation."""
+    try:
+        require_session(username, session_id)
+        data = bytearray()
+        while chunk := await file.read(64 * 1024):
+            data.extend(chunk)
+            if len(data) > MAX_FILE_BYTES:
+                raise AttachmentError("Excel 附件不能超过 10 MB。", 413)
+        return await asyncio.to_thread(save_attachment, bytes(data), file.filename or '', username, session_id)
+    except AttachmentError as exc:
+        raise HTTPException(exc.status_code, str(exc)) from exc
+    finally:
+        await file.close()
 
 
 @router.get("/")
@@ -52,14 +79,29 @@ def history_endpoint(username: str, session_id: str = None):
     """获取指定用户的聊天历史。"""
     if session_id:
         set_active_session(username, session_id)
-    return {"messages": get_user_messages(username, session_id)}
+    messages = get_user_messages(username, session_id)
+    return {"messages": [
+        {**{key: value for key, value in message.items() if key != 'display_content'},
+         'content': message.get('display_content', message.get('content', ''))}
+        for message in messages
+    ]}
 
 
 @router.post("/chat")
 async def chat_endpoint(req: ChatRequest):
     """流式聊天接口 (SSE)。"""
+    if not req.message.strip():
+        raise HTTPException(400, "请填写设计要求，或说明希望如何处理附件。")
+    attachments = []
+    if req.attachment_ids:
+        require_session(req.username, req.session_id)
+        try:
+            attachments = await asyncio.to_thread(resolve_attachments, req.attachment_ids, req.username, req.session_id)
+        except AttachmentError as exc:
+            raise HTTPException(exc.status_code, str(exc)) from exc
+    stream = chat_stream(req.username, req.message, req.session_id, attachments=attachments) if attachments else chat_stream(req.username, req.message, req.session_id)
     return StreamingResponse(
-        chat_stream(req.username, req.message, req.session_id),
+        stream,
         media_type="text/event-stream"
     )
 

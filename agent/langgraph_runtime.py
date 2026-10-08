@@ -47,6 +47,7 @@ from config import (
 )
 from core.perf_logger import record_perf
 from tools import get_tool_func
+from designer.attachments import attachment_context, attachment_summary
 
 
 class AgentState(TypedDict, total=False):
@@ -136,7 +137,11 @@ async def _agent_node(state: AgentState) -> dict[str, Any]:
         experience_context = build_runtime_experience_context(
             state.get("request_message", ""), tool_names
         )
-        model_messages = list(state.get("messages", []))
+        # UI metadata is retained in checkpoints/history, never sent as API fields.
+        model_messages = [
+            {key: value for key, value in message.items() if key not in {'display_content', 'attachments'}}
+            for message in state.get("messages", [])
+        ]
         language_message = {
             "role": "system",
             "content": USER_FACING_LANGUAGE_RULE,
@@ -433,6 +438,7 @@ async def langgraph_chat_stream(
     username: str,
     message: str,
     session_id: str | None = None,
+    attachments: list[dict] | None = None,
 ) -> AsyncIterator[str]:
     if _graph is None:
         raise RuntimeError("LangGraph runtime has not been initialized")
@@ -444,6 +450,9 @@ async def langgraph_chat_stream(
 
     snapshot = await _graph.aget_state(graph_config)
     if _has_interrupt(snapshot):
+        if attachments:
+            yield _sse({"type": "error", "message": "当前设计正在等待确认，请先确认或取消，再发送新的附件。"})
+            return
         if is_explicit_confirmation(message):
             try:
                 async for event in _stream_graph(
@@ -477,8 +486,13 @@ async def langgraph_chat_stream(
             yield _sse({"type": "done", "reply": prompt})
             return
     else:
-        chat_messages.append({"role": "user", "content": message})
+        record = {"role": "user", "content": message + attachment_context(attachments or [])}
+        if attachments:
+            record['display_content'] = message
+            record['attachments'] = [attachment_summary(item) for item in attachments]
+        chat_messages.append(record)
         save_user_session(username, actual_session_id)
+        yield _sse({"type": "message_saved", "session_id": actual_session_id})
 
         if is_first_message and actual_session_id != "unknown":
             # Imported lazily to avoid a module cycle with llm_client.

@@ -126,6 +126,32 @@
         .composer-bottom { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 10px; }
         .composer-label { display: flex; align-items: center; gap: 6px; color: var(--secondary); font-size: 10px; }
         .composer-label .icon { width: 13px; height: 13px; color: #7d918a; }
+        .composer-tools { display: flex; align-items: center; gap: 14px; }
+        .attach-button { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--secondary); padding: 5px 0; }
+        .attach-button:hover { color: var(--teal); }
+        .attach-button .icon { width: 15px; height: 15px; }
+        .attachment-list { display: grid; gap: 7px; max-height: 190px; overflow-y: auto; margin-bottom: 12px; }
+        .attachment-list:empty { display: none; }
+        .attachment-item { position: relative; min-width: 0; }
+        .attachment-card { background: #f6f9f8; border: 1px solid #dfe9e5; border-radius: 7px; overflow: hidden; font-size: 11px; white-space: normal; }
+        .attachment-card summary { cursor: pointer; padding: 10px 37px 10px 12px; display: flex; align-items: center; gap: 8px; list-style: none; }
+        .attachment-card summary::-webkit-details-marker { display: none; }
+        .attachment-card summary > .icon { color: var(--teal); width: 16px; height: 16px; }
+        .attachment-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; font-weight: 550; }
+        .attachment-card small { color: var(--secondary); font-size: 10px; flex-shrink: 0; }
+        .attachment-card[open] summary { border-bottom: 1px solid #dfe9e5; }
+        .attachment-remove { position: absolute; top: 6px; right: 6px; width: 25px; height: 25px; color: var(--secondary); font-size: 16px; border-radius: 5px; }
+        .attachment-remove:hover { background: #e6eeea; }
+        .attachment-preview { padding: 12px; color: var(--secondary); }
+        .attachment-sheet { margin-bottom: 12px; }
+        .attachment-sheet strong { display: block; font-size: 11px; margin-bottom: 6px; font-weight: 550; color: var(--text); }
+        .attachment-table { overflow-x: auto; max-width: 100%; }
+        .attachment-table table { border-collapse: collapse; font-size: 10px; background: white; width: 100%; }
+        .attachment-table th, .attachment-table td { border: 1px solid var(--border); padding: 5px 7px; text-align: left; min-width: 55px; max-width: 220px; overflow-wrap: anywhere; }
+        .attachment-table th { background: #eff4f2; font-weight: 500; }
+        .attachment-warning { color: #9a652b; font-size: 10px; line-height: 1.7; margin: 5px 0; }
+        .message-attachments { display: grid; gap: 7px; margin-top: 10px; min-width: 0; }
+        .upload-status { color: var(--teal); font-size: 11px; margin-bottom: 10px; }
         .send-button { background: var(--teal); color: white; display: flex; align-items: center; gap: 8px; border-radius: 6px; padding: 8px 12px; font-size: 12px; font-weight: 550; }
         .send-button:hover { background: var(--teal-hover); }
         .send-button .icon { width: 14px; height: 14px; }
@@ -191,6 +217,12 @@
             .welcome-footnote .icon { margin-top: 2px; }
             .composer-area { padding: 8px 14px 14px; }
             .composer-hint span:last-child { display: none; }
+            .composer-tools { gap: 10px; }
+            .composer-label { display: none; }
+            .attachment-card summary { flex-wrap: wrap; }
+            .attachment-card small { margin-left: 24px; flex-basis: calc(100% - 24px); }
+            .attachment-table th, .attachment-table td { min-width: 100px; }
+            .attachment-table th:first-child, .attachment-table td:first-child { min-width: 34px; }
             .guide { top: 58px; width: min(290px, 100%); }
             .records { padding: 30px 20px; }
             .bubble { font-size: 13px; } .agent-wrapper { gap: 9px; }
@@ -214,6 +246,7 @@
         <symbol id="i-check" viewBox="0 0 24 24"><path d="m4 12 5 5L20 6"/></symbol>
         <symbol id="i-menu" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/></symbol>
         <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="1"/></symbol>
+        <symbol id="i-attach" viewBox="0 0 24 24"><path d="m8 12 6-6a3 3 0 0 1 4 4l-8 8a5 5 0 0 1-7-7l9-9M7 13l7-7"/></symbol>
     </svg>
     <button class="sidebar-backdrop" id="sidebarBackdrop" aria-label="关闭导航"></button>
     <div class="app-shell">
@@ -242,14 +275,17 @@
                     <div class="messages is-empty" id="msgs" aria-label="对话内容" aria-busy="true"></div>
                     <div class="composer-area">
                         <form class="composer" id="composerForm">
+                            <input type="file" id="excelFileInput" accept=".xlsx,.xls" multiple hidden>
+                            <div class="attachment-list" id="attachmentList" aria-label="待发送的 Excel 附件"></div>
+                            <p class="upload-status" id="uploadStatus" role="status" hidden>正在读取 Excel…</p>
                             <textarea id="inputBox" rows="2" aria-label="设计需求" placeholder="描述你的对象或字段设计需求…" autocomplete="off"></textarea>
-                            <div class="composer-bottom"><span class="composer-label"><svg class="icon"><use href="#i-design"/></svg>Opcenter Designer</span><button class="send-button" id="sendBtn" type="submit">发送<svg class="icon"><use href="#i-send"/></svg></button><button class="send-button stop-button" id="stopBtn" type="button" hidden>停止回答<svg class="icon"><use href="#i-stop"/></svg></button></div>
+                            <div class="composer-bottom"><div class="composer-tools"><button class="attach-button" id="attachBtn" type="button"><svg class="icon"><use href="#i-attach"/></svg>添加 Excel</button><span class="composer-label"><svg class="icon"><use href="#i-design"/></svg>Opcenter Designer</span></div><button class="send-button" id="sendBtn" type="submit">发送<svg class="icon"><use href="#i-send"/></svg></button><button class="send-button stop-button" id="stopBtn" type="button" hidden>停止回答<svg class="icon"><use href="#i-stop"/></svg></button></div>
                         </form>
                         <div class="composer-hint"><span>设计完成后，在 Designer 中审核并发布</span><span>Enter 发送 · Shift + Enter 换行</span></div>
                     </div>
                 </section>
                 <section class="records" id="recordsView" aria-label="设计记录" hidden><h2>每一次设计，都有迹可循。</h2><p class="records-description">打开历史对话，继续查看需求、设计结果与变更说明。</p><div id="recordList"></div></section>
-                <aside class="guide" id="designGuide" aria-label="设计指南" hidden><div class="guide-title"><svg class="icon"><use href="#i-design"/></svg>从想法到设计</div><p class="guide-intro">用自然语言描述需求，逐步完成对象与字段定义。</p><ol><li><strong>确认设计范围</strong><p>说明 MDB、客户工作区与目标对象。不确定时，先查询可用文件和已有定义。</p></li><li><strong>描述对象或字段</strong><p>新建对象时指定父对象；新增字段时说明类型、长度与是否持久化。</p></li><li><strong>核对设计结果</strong><p>检查返回的对象定义、字段属性、关联存储及变更包。</p></li><li><strong>交接给 Designer</strong><p>在 Designer 中审核设计，按现有流程执行发布。</p></li></ol><div class="guide-note">例如：创建 ExProduct，继承 Product，新增 ExDescription 字段，String 最长 200 字符，需要持久化。</div></aside>
+                <aside class="guide" id="designGuide" aria-label="设计指南" hidden><div class="guide-title"><svg class="icon"><use href="#i-design"/></svg>从想法到设计</div><p class="guide-intro">用自然语言描述需求，或添加 Excel 设计表，再说明如何创建对象与字段。</p><ol><li><strong>确认设计范围</strong><p>说明 MDB、客户工作区与目标对象。不确定时，先查询可用文件和已有定义。</p></li><li><strong>描述对象或字段</strong><p>新建对象时指定父对象；新增字段时说明类型、长度与是否持久化。</p></li><li><strong>核对设计结果</strong><p>检查返回的对象定义、字段属性、关联存储及变更包。</p></li><li><strong>交接给 Designer</strong><p>在 Designer 中审核设计，按现有流程执行发布。</p></li></ol><div class="guide-note"><strong>Excel 推荐列</strong><p>对象名、父对象、字段名、数据类型、最大长度、是否持久化、是否列表、描述。</p><p>每行一个字段，可用多张表。支持 .xlsx / .xls，每个文件最多 10 MB，每次最多 3 个。公式请先粘贴为值；.xls 请先计算并保存。</p><p>例如：“按附件创建对象，把 ExDescription 的长度改为 200，生成设计包。”</p></div></aside>
             </div>
         </main>
     </div>
@@ -286,6 +322,10 @@
         let historyLoading = false;
         let sessions = [];
         let noticeTimer;
+        let attachmentDrafts = [];
+        let attachmentUploading = false;
+        const attachBtn = document.getElementById('attachBtn');
+        const fileInput = document.getElementById('excelFileInput');
         const mobileLayout = matchMedia('(max-width: 600px)');
 
         function syncNavigation() {
@@ -305,7 +345,10 @@
 
         async function fetchJson(url, options) {
             const response = await fetch(url, options);
-            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            if (!response.ok) {
+                const error = await response.json().catch(() => ({}));
+                throw new Error(typeof error.detail === 'string' ? error.detail : `HTTP ${response.status}`);
+            }
             return response.json();
         }
 
@@ -315,7 +358,7 @@
         }
 
         function setView(view) {
-            if (busy || historyLoading) return;
+            if (busy || historyLoading || attachmentUploading) return;
             const records = view === 'records';
             document.getElementById('chatColumn').hidden = records;
             document.getElementById('recordsView').hidden = !records;
@@ -330,12 +373,14 @@
         }
 
         function updateControls() {
-            const locked = busy || historyLoading;
+            const locked = busy || historyLoading || attachmentUploading;
             input.disabled = locked;
             sendBtn.disabled = locked;
             newChatTopBtn.disabled = locked;
             document.getElementById('recordsNav').disabled = locked;
-            document.querySelectorAll('.session-item, .record-item, .prompt-card').forEach(button => { button.disabled = locked; });
+            attachBtn.disabled = locked || attachmentDrafts.length >= 3;
+            fileInput.disabled = locked;
+            document.querySelectorAll('.session-item, .record-item, .prompt-card, .attachment-remove').forEach(button => { button.disabled = locked; });
             sendBtn.hidden = busy;
             stopBtn.hidden = !busy;
             messagesDiv.setAttribute('aria-busy', String(locked));
@@ -379,7 +424,8 @@
         }
 
         async function selectSession(id) {
-            if (busy || historyLoading) return;
+            if (busy || historyLoading || attachmentUploading) return;
+            if (id !== currentSessionId) { attachmentDrafts = []; renderAttachmentDrafts(); }
             currentSessionId = id;
             setView('design');
             renderSessions();
@@ -420,11 +466,117 @@
             return bubble;
         }
 
-        function appendMessage(role, text) {
+        function appendMessage(role, text, attachments = []) {
             const bubble = createBubble(role);
             if (role === 'agent') renderMarkdown(bubble, text || '');
-            else bubble.textContent = text;
+            else {
+                const content = document.createElement('div');
+                content.textContent = text;
+                bubble.appendChild(content);
+                if (attachments.length) {
+                    const list = document.createElement('div');
+                    list.className = 'message-attachments';
+                    attachments.forEach(attachment => list.appendChild(attachmentCard(attachment, false)));
+                    bubble.appendChild(list);
+                }
+            }
             scrollToBottom();
+            return bubble;
+        }
+
+        function attachmentCard(attachment, removable) {
+            const item = document.createElement('div');
+            item.className = 'attachment-item';
+            const details = document.createElement('details');
+            details.className = 'attachment-card';
+            const summary = document.createElement('summary');
+            summary.innerHTML = '<svg class="icon" aria-hidden="true"><use href="#i-field"/></svg><span class="attachment-name"></span><small></small>';
+            summary.querySelector('span').textContent = attachment.name;
+            summary.querySelector('span').title = attachment.name;
+            summary.querySelector('small').textContent = `${attachment.sheets.length} 张表 · ${attachment.row_count} 行 · 点击预览`;
+            details.appendChild(summary);
+            const preview = document.createElement('div');
+            preview.className = 'attachment-preview';
+            for (const sheet of attachment.sheets) {
+                const section = document.createElement('div');
+                section.className = 'attachment-sheet';
+                const title = document.createElement('strong');
+                title.textContent = `${sheet.name}${sheet.hidden ? '（隐藏）' : ''} · ${sheet.row_count} 行`;
+                section.appendChild(title);
+                const table = document.createElement('table');
+                const columns = [...new Set(sheet.preview.flatMap(row => Object.keys(row.cells)))].sort((a, b) => a.length - b.length || a.localeCompare(b));
+                const header = table.createTHead().insertRow();
+                for (const label of ['行', ...columns]) {
+                    const cell = document.createElement('th'); cell.textContent = label; header.appendChild(cell);
+                }
+                const body = table.createTBody();
+                for (const row of sheet.preview) {
+                    const tr = body.insertRow();
+                    for (const value of [row.row, ...columns.map(column => row.cells[column] ?? '')]) {
+                        const td = tr.insertCell(); const text = String(value);
+                        td.textContent = text.length > 180 ? text.slice(0, 180) + '…' : text;
+                    }
+                }
+                const scroll = document.createElement('div'); scroll.className = 'attachment-table'; scroll.appendChild(table);
+                section.appendChild(scroll); preview.appendChild(section);
+            }
+            const caption = document.createElement('p');
+            caption.textContent = '预览每张表前 6 行；发送时使用完整数据。'; preview.appendChild(caption);
+            for (const warning of attachment.warnings || []) {
+                const note = document.createElement('p'); note.className = 'attachment-warning'; note.textContent = warning; preview.appendChild(note);
+            }
+            details.appendChild(preview); item.appendChild(details);
+            if (removable) {
+                const remove = document.createElement('button');
+                remove.type = 'button'; remove.className = 'attachment-remove'; remove.textContent = '×';
+                remove.setAttribute('aria-label', `移除附件 ${attachment.name}`);
+                remove.addEventListener('click', () => {
+                    if (busy || attachmentUploading) return;
+                    attachmentDrafts = attachmentDrafts.filter(candidate => candidate.id !== attachment.id);
+                    renderAttachmentDrafts();
+                });
+                item.appendChild(remove);
+            }
+            return item;
+        }
+
+        function renderAttachmentDrafts() {
+            const list = document.getElementById('attachmentList');
+            list.replaceChildren(...attachmentDrafts.map(attachment => attachmentCard(attachment, true)));
+            input.placeholder = attachmentDrafts.length ? '说明如何使用 Excel，例如：按附件创建对象，字段长度以表格为准…' : '描述你的对象或字段设计需求…';
+            updateControls();
+        }
+
+        async function uploadFiles(files) {
+            if (!files.length || busy || historyLoading || attachmentUploading) return;
+            if (files.length + attachmentDrafts.length > 3) { showNotice('每次最多添加 3 个 Excel 附件。'); return; }
+            attachmentUploading = true;
+            updateControls();
+            const status = document.getElementById('uploadStatus');
+            status.hidden = false;
+            try {
+                if (!currentSessionId) {
+                    const session = await fetchJson(`/sessions/${encodeURIComponent(currentUsername)}/new`, {method:'POST'});
+                    currentSessionId = session.session_id;
+                    await refreshSessionsList();
+                }
+                for (const file of files) {
+                    if (!/\.(xlsx|xls)$/i.test(file.name)) { showNotice(`“${file.name}” 格式不支持，请选择 .xlsx 或 .xls。`); continue; }
+                    if (file.size > 10 * 1024 * 1024) { showNotice(`“${file.name}” 超过 10 MB，请拆分文件。`); continue; }
+                    status.textContent = `正在读取 ${file.name}…`;
+                    const form = new FormData();
+                    form.append('file', file); form.append('username', currentUsername); form.append('session_id', currentSessionId);
+                    try {
+                        const attachment = await fetchJson('/attachments/excel', {method:'POST',body:form});
+                        if (attachmentDrafts.some(item => item.sha256 === attachment.sha256)) { showNotice('这个 Excel 已添加，请勿重复上传。'); continue; }
+                        attachmentDrafts.push(attachment);
+                        renderAttachmentDrafts();
+                    } catch (error) { showNotice(`附件读取失败：${error.message}`); }
+                }
+            } catch (error) { showNotice(`附件上传失败：${error.message}`); }
+            finally {
+                attachmentUploading = false; status.hidden = true; fileInput.value = ''; updateControls(); input.focus();
+            }
         }
 
         function scrollToBottom() { messagesDiv.scrollTop = messagesDiv.scrollHeight; }
@@ -440,7 +592,7 @@
                 const data = await fetchJson(url);
                 let hasVisible = false;
                 (data.messages || []).forEach(message => {
-                    if (message.role === 'user') { appendMessage('user', message.content); hasVisible = true; }
+                    if (message.role === 'user') { appendMessage('user', message.content, message.attachments || []); hasVisible = true; }
                     else if (message.role === 'assistant' && message.content) { appendMessage('agent', message.content); hasVisible = true; }
                 });
                 if (!hasVisible) showWelcome();
@@ -475,16 +627,19 @@
                 showNotice(`无法加载设计记录：${error.message}`);
             }
             await loadHistory();
+            if (!currentSessionId) await refreshSessionsList().catch(() => {});
         }
 
         async function handleSend() {
-            const text = input.value.trim();
-            if (!text || busy || historyLoading) return;
+            const text = input.value.trim() || (attachmentDrafts.length ? '请读取附件中的设计信息，说明对象和字段设计方案。' : '');
+            if (!text || busy || historyLoading || attachmentUploading) return;
+            const sentAttachments = attachmentDrafts.slice();
+            let messageSaved = false;
             busy = true;
             input.value = '';
             input.style.height = '';
             updateControls();
-            appendMessage('user', text);
+            const userBubble = appendMessage('user', text, sentAttachments);
             typingIndicator.hidden = false;
             const typingText = typingIndicator.querySelector('span');
             typingText.textContent = '正在分析设计需求…';
@@ -495,7 +650,11 @@
             function handleEvent(line) {
                 if (!line.startsWith('data: ')) return;
                 const data = JSON.parse(line.substring(6));
-                if (data.type === 'step') {
+                if (data.type === 'message_saved') {
+                    messageSaved = true;
+                    if (data.session_id) currentSessionId = data.session_id;
+                    attachmentDrafts = []; renderAttachmentDrafts();
+                } else if (data.type === 'step') {
                     typingIndicator.hidden = false;
                     typingText.textContent = '正在查询与核对设计定义…';
                     scrollToBottom();
@@ -520,8 +679,12 @@
             try {
                 const reqBody = { message: text, username: currentUsername };
                 if (currentSessionId) reqBody.session_id = currentSessionId;
+                if (sentAttachments.length) reqBody.attachment_ids = sentAttachments.map(attachment => attachment.id);
                 const response = await fetch('/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(reqBody), signal: abortController.signal });
-                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                if (!response.ok) {
+                    const error = await response.json().catch(() => ({}));
+                    throw new Error(typeof error.detail === 'string' ? error.detail : `HTTP ${response.status}`);
+                }
                 if (!response.body) throw new Error('服务器未返回可读取的响应流');
                 const reader = response.body.getReader();
                 const decoder = new TextDecoder('utf-8');
@@ -539,6 +702,10 @@
             } catch (error) {
                 appendMessage('agent', error.name === 'AbortError' ? '本次回答已停止。' : '网络或服务错误：' + error.message);
             } finally {
+                if (!messageSaved && sentAttachments.length) {
+                    input.value = text;
+                    userBubble.parentElement.remove();
+                }
                 abortController = null;
                 busy = false;
                 typingIndicator.hidden = true;
@@ -550,13 +717,14 @@
         }
 
         newChatTopBtn.addEventListener('click', async () => {
-            if (busy || historyLoading) return;
+            if (busy || historyLoading || attachmentUploading) return;
             setView('design');
             historyLoading = true;
             updateControls();
             try {
                 const data = await fetchJson(`/sessions/${encodeURIComponent(currentUsername)}/new`, { method: 'POST' });
                 currentSessionId = data.session_id;
+                attachmentDrafts = []; renderAttachmentDrafts();
                 input.value = '';
                 input.style.height = '';
                 await refreshSessionsList();
@@ -600,6 +768,8 @@
         });
         document.getElementById('composerForm').addEventListener('submit', event => { event.preventDefault(); handleSend(); });
         stopBtn.addEventListener('click', () => abortController?.abort());
+        attachBtn.addEventListener('click', () => fileInput.click());
+        fileInput.addEventListener('change', () => uploadFiles(Array.from(fileInput.files)));
         input.addEventListener('keydown', event => {
             if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); handleSend(); }
         });
