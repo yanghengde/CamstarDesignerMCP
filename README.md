@@ -1,53 +1,83 @@
 # CamstarDesignerMCP
 
-Siemens Opcenter (Camstar) Designer 元数据助手。FastMCP、浏览器聊天和 LangGraph 共用设计工具，项目仅包含 Designer 相关能力。
+Siemens Opcenter（Camstar）Designer 元数据设计助手。通过自然语言和 Excel 描述对象、字段及设计要求，在独立 MDB 副本中生成设计，再通过 Designer 或工作台完成审核、编译、数据库更新与结果核验。
 
-通过客户安装的 `Camstar.Metadata.dll` 调用真实对象模型，在独立 MDB 副本设计并导出官方差异 XML，不需要先提供字段 XML 模板。
+浏览器工作台、LangGraph 对话流程与 FastMCP 共用 Designer 工具。项目通过已安装的 `Camstar.Metadata.dll` 调用厂商对象模型，保存并回读 MDB，导出官方差异 XML。
 
-| 能力 | 状态 |
-|---|---|
-| 有效 CDO、继承字段、类型、CLF、函数、事件、Query、表列、索引、映射、标签、工作区目录 | 已接入官方模型；保留原始 MDB 查询 |
-| 新建 CDO、专用字段类型、持久化或非持久化字段 | 真实 MDB 保存与回读验证 |
-| 字段类型长度与持久化列映射 | 已验证 String 200 与存储列 Precision 200 |
-| Query、CLF、事件绑定、函数顺序与参数、标签、表列、索引、映射及属性设计 | 已实现厂商对象与专用方法；修改要求原值 |
-| 官方差异导出、工作区编译、包完整性 | 已实现，不依赖独立 MetadataExport.exe |
-| 发布目标数据库检查、列冲突与发布计划 | 已实现，只读 |
-| 官方 Update DB、校验备份与恢复 | 已在授权测试库实际执行；数据库更新与服务部署分别报告 |
-| 发布后父对象、字段类型、列长度与边界验证 | 已验证 ExProduct；临时表接受200、拒绝201字符 |
-| WCF 隔离生成 | ProductMaint 实测生成329个数据契约、4个服务并检查ProductChanges；没有部署 |
-| 原生 XML Import、REST 生成与服务部署 | 继续验证；不得将数据库发布当作服务已部署 |
+## 快速启动
 
-参数和验收证据见 [能力说明](docs/designer_capabilities.md)，后续路线见 [开发计划](docs/development_plan.md)。
-
-## 运行
+在项目根目录执行：
 
 ```powershell
 python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
-Copy-Item .env.example .env  # 已有配置时不要覆盖
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+# 仅首次创建配置，保留已有 .env
+if (-not (Test-Path .env)) { Copy-Item .env.example .env }
+```
+
+编辑 `.env`，填写模型接口与 Designer 环境配置，然后启动：
+
+```powershell
 .\.venv\Scripts\python.exe main.py
 ```
 
-默认聊天地址 http://127.0.0.1:8031/。自然语言聊天需要 LLM 配置，文件工具与官方对象模型不需要 LLM。
+默认端口为 **8032**，访问 [设计工作台](http://127.0.0.1:8032/)。`.env` 中的 `SERVER_PORT` 或启动进程的同名环境变量可覆盖默认值，修改后需重启服务。
 
 ```ini
+SERVER_PORT=8032
+CHAT_USERNAME=designer
+LLM_API_KEY=your-api-key
+LLM_BASE_URL=https://api.deepseek.com/v1
+LLM_MODEL=deepseek-chat
 DESIGNER_ROOT=data/designer
 DESIGNER_METADATA_ASSEMBLY=C:\实际安装目录\Camstar.Metadata.dll
 DESIGNER_BRIDGE_TIMEOUT=180
-DESIGNER_METADATA_EXPORT_EXE=
-DESIGNER_UI_EXE=C:\Program Files (x86)\Camstar\Designer2\Designer.Net.UI.exe
-DESIGNER_SERVER_IMPORT_EXE=C:\Program Files (x86)\Camstar\InSite Administration\Designer\ImportMetaData.exe
 ```
 
-需要 Windows PowerShell 5.1、.NET Framework 和匹配进程位数的 ACE OLEDB 驱动。厂商 DLL 不包含在仓库中。这些是已检查安装版本中的公开成员，未确认是厂商承诺兼容的独立 SDK，升级后需重新验收。
+`CHAT_USERNAME` 是工作台会话标识，不是 Designer 登录账号。自然语言聊天需要配置模型接口；直接调用文件工具和官方对象模型不需要 LLM。
 
-将本地测试 MDB 放入 `DESIGNER_ROOT`。工具只把副本交给厂商组件。工作区省略时，仅选择唯一描述为 Site 的活跃客户工作区；否则须指定。
+### 环境要求
 
-## 自然语言示例
+- Python 与项目依赖；Designer 桥接需要 Windows PowerShell 5.1、.NET Framework，以及匹配进程位数的 ACE OLEDB 驱动。
+- 已安装并可访问的 Designer 组件。厂商 DLL 不包含在仓库内。
+- 本地测试 MDB 放在 `DESIGNER_ROOT` 下。工具使用独立副本执行设计。
+- 数据库发布、服务器文件交接与 WCF 生成需要额外配置，见下文及 [.env.example](.env.example)。
+
+当前集成依据已检查安装版本中的公开成员实现；厂商版本升级后需要重新验证兼容性。
+
+## 工作台页面
+
+| 菜单 | 地址 | 用途 |
+|---|---|---|
+| 设计助手 | [打开](http://127.0.0.1:8032/) | 自然语言设计、Excel 附件、预览确认、设计文件交接 |
+| 设计记录 | [打开](http://127.0.0.1:8032/?view=records) | 查看历史对话、继续原设计 |
+| 设计进度 | [打开](http://127.0.0.1:8032/progress) | 查看完整流程、当前步骤及可执行操作 |
+| 运行日志 | [打开](http://127.0.0.1:8032/logs) | 查看模型推理、工具调用和耗时 |
+
+各页面保留一致的左侧导航，设计进度位于运行日志上方。新对话首次发送需求后自动提炼名称，最多 20 个字符，并同步到最近对话和设计记录。
+
+## 自然语言设计
+
+例如：
 
 > 在测试 MDB 中创建 ExProduct，继承 Product，新增 ExDescription，String 最多 200 字符，持久化，并生成变更包。
 
-助手检查父对象和来源哈希后调用 `generate_designer_cdo_package`。工具创建专用类型 `ExDescription200`，避免修改共享 String 类型，生成：
+助手检查父对象、工作区和来源文件后调用设计工具。新建字符串字段可生成专用类型（例如 `ExDescription200`），避免修改共享类型。工作区未指定时，仅自动选择唯一描述为 Site 的活跃客户工作区；存在歧义时需明确指定。
+
+主要能力：
+
+| 能力 | 当前支持 |
+|---|---|
+| 查询元数据 | CDO、继承字段、类型、CLF、函数、事件、Query、表列、索引、映射、标签、工作区，以及原始 MDB 查询 |
+| 对象与字段设计 | 新建继承 CDO、专用字段类型、持久化或非持久化字段，保存并回读验证 |
+| 其他设计操作 | Query、CLF、事件绑定、函数顺序与参数、标签、表列、索引、映射及允许修改的属性 |
+| 设计验证 | 官方差异导出、工作区编译、包完整性检查 |
+| 数据库发布 | 目标检查、发布预检、校验备份、官方 Update DB、发布后核验及授权恢复 |
+| WCF | 隔离生成、类型与字段核对、程序集下载；运行环境部署由人员完成 |
+
+修改操作按工具要求提供原值和来源哈希。原生 XML Import、REST 生成及自动服务部署尚未作为完整工作流交付。具体参数与验收证据见 [能力说明](docs/designer_capabilities.md)，后续安排见 [开发计划](docs/development_plan.md)。
+
+### 设计产物
 
 ```text
 data/designer/artifacts/<id>/
@@ -56,73 +86,150 @@ data/designer/artifacts/<id>/
   changes.xml    官方比较引擎输出的差异
   manifest.json  来源、工作区、文件哈希和执行证据
   report.md      设计与验证说明
-  export/        XML、项目渲染的 HTML 报告及官方日志
+  export/        XML、HTML 报告及官方日志
 ```
 
-`saved_to_test_copy_and_exported` 表示本地副本已保存和导出，服务器 MDB、业务数据库和运行服务尚未更新。
+`saved_to_test_copy_and_exported` 表示设计副本已保存并导出。服务器正在打开的 MDB、业务数据库和运行服务分别通过后续步骤更新。
 
-## 在 Designer 中查看
+## Excel 导入：先预览，再确认
 
-设计完成后，对话下方显示 **在 Designer 中查看** 和 **下载设计 MDB**。查看按钮会检查该对话设计包的哈希，将最终 `modified.mdb` 与已配置站点的 `SiteInfo.mdb` 复制到服务器 `C:\Temp\DesignerMCP\Review_<id>`，保留原 MDB。需要已配置的服务器 C 共享、Windows 凭据及 `DESIGNER_UI_EXE`。
+1. 在设计助手中点击 **添加 Excel**，选择 `.xlsx` 或 `.xls`，查看文件卡片和工作表预览。
+2. 输入设计要求。文字中的明确修正优先于表格，例如“按附件创建对象，ExDescription 长度改为 300”。
+3. 助手读取和核对设计信息，在实际创建前展示 **Excel 设计预览**，列出本批对象、字段、类型、长度、持久化、列表属性及来源工作区。
+4. 人员核对后在聊天中输入 **确定** 或 **确认**，后端才执行本批设计；也支持“确认导入”等明确指令。
+5. 输入 **取消** 可停止本批操作。需要调整时，取消后补充需求并重新预览。
 
-有写权限时，工具备份 Designer 配置并设置下次启动的 MDB；保存并关闭当前 Designer，再重新打开。无配置写权限时，仍返回完整 MDB / SiteInfo 路径，在 Designer 的打开文件入口手动选择。进入客户工作区（例如 Site / 200），搜索生成的对象。文件复制成功与配置切换均不等于已在 Designer 界面验收；后续审核、编译和发布在 Designer 内完成。
+确认绑定本批具体操作参数。首次需求或 Excel 单元格中的“确认”不算人员确认；“继续”“好的”以及带附加要求的确认句不会触发导入。后续新增批次需要再次预览确认。刷新页面或重启服务后可恢复待确认状态，附件变化会阻止执行并要求重新上传。
 
-自然语言也可要求“把这份设计准备好，让我在 Designer 中查看”，助手调用 `prepare_designer_review`。多批设计应交接最终包含全部内容的 MDB。
+### 推荐表格
 
-## 我的设计进度
-
-左侧 **设计进度** 菜单位于运行日志上方，打开 `/progress`。选择自己的设计对话，可查看从需求到验收的完整流程，后续步骤为检查设计、Compile、Update Database、生成 WCF、部署 WCF、验证结果。
-
-页面依据工具回执展示真实进度，支持核对设计包、准备 Designer 文件、同步服务器文件状态、Compile 和只读数据库核验。Update Database 先执行“检查发布”，展示目标和变更，再执行并校验数据库备份；用户确认后调用官方 Update DB，仅限已配置为允许发布的测试库。确认绑定检查结果与备份哈希，凭证一小时有效；执行时再次核对目标设计指纹，漂移会停止更新。
-
-“生成 WCF”会编译当前副本并全量生成程序集，核对所选设计对象及新字段，支持下载已核验的客户端/服务端 DLL。下载不包含可能带连接信息的生成配置，部署时沿用运行环境配置。部署 WCF 仍在运行环境手动完成，页面仅提供“手动部署确认”。所有手动完成步骤均标注“用户确认”；数据库更新、WCF 生成和部署分别显示状态。耗时操作在后台执行，显示已耗时和最近更新时间。
-
-当前对话以最新设计包为准，仅累计该对话中作为来源的设计包；其他用户及独立分支不会混入。服务器文件被改动时会阻止后续操作，需回到设计对话重新核对。进度回执存入 `data/designer_progress.sqlite`，可用 `DESIGNER_PROGRESS_DB` 修改路径。
-
-## Excel 附件设计
-
-实际创建前会显示完整的 **Excel 设计预览**（对象、字段、类型、长度、持久化和工作区）。人员查看后在聊天中输入“确定”或“确认”，后端才执行本批设计；输入“取消”可停止，调整需求后重新预览。首次消息或 Excel 单元格中的确认文字不算确认。每批新增设计均需重新确认，刷新页面或重启服务可恢复待确认预览；附件变化时阻止执行并要求重新上传。
-
-聊天输入框点击 **添加 Excel**，选择 `.xlsx` 或 `.xls`，核对文件卡片中的工作表与前 6 行预览，再输入例如：
-
-> 按附件创建 Designer 对象，ExDescription 的长度改为 300，生成设计副本和变更包。
-
-推荐每行一个字段，第一行使用中文或英文表头；同一对象的对象名、父对象可逐行填写，多个对象也可分工作表组织。例如：
+每行一个字段，第一行使用中文或英文表头。同一对象的对象名、父对象可逐行填写，多个对象可分工作表组织。
 
 | 对象名 | 父对象 | 字段名 | 数据类型 | 最大长度 | 是否持久化 | 是否列表 | 描述 |
 |---|---|---|---|---|---|---|---|
 | ExProduct | Product | ExDescription | String | 200 | 是 | 否 | 扩展描述 |
 | ExProduct | Product | ExEnabled | Boolean | | 否 | 否 | 启用标记 |
 
-表格数据与自然语言一起交给当前配置的模型，由助手识别设计参数并调用已有 Designer 工具。明确的文字修正优先于表格；来源、工作区、引用及名称冲突仍通过真实工具核对。上传本身仅解析文件，未填写文字时发送只要求读取并说明设计方案。超过工具单次字段/操作限制的设计需按工具合同逐步生成并核对，不会因附件功能而取消工具限制。
+上传仅解析文件；未填写文字时，默认请求读取附件并说明设计方案。来源、引用与名称冲突通过真实工具核对。超过工具单次操作限制的设计需要分批处理。
 
-每次最多 3 个附件，每个最多 10 MB、10 张表，每张表范围最多 2000 行和 64 列；合计非空单元格和上下文另有上限，超限返回错误，不静默截断。预览只展示前 6 行，发送使用完整解析数据。包含隐藏工作表时会标注。`.xlsx` 公式与错误值要求先修正或粘贴为值；`.xls` 读取已保存结果，不重新计算。不执行宏；不支持 `.xlsm`、加密或损坏文件。
+### 附件限制
 
-原始文件与解析快照存放在被 Git 忽略的 `data/excel_attachments/<id>`，绑定上传用户与对话；发送时检查原文件哈希。历史记录显示原始文字及附件卡片，完整表格内容保留在模型会话与检查点中用于后续设计。切换或新建对话会清空未发送的附件选择。
+- 每次最多 3 个附件，每个最多 10 MB、10 张工作表；每张表范围最多 2000 行、64 列。
+- 非空单元格、文本和总上下文另有限制，超限报错，不静默截断。
+- 文件卡片只展示前 6 行；模型接收完整解析数据，执行前的设计预览展示本批全部操作。
+- 隐藏工作表会标注。`.xlsx` 中公式及错误值需先修正或粘贴为值；`.xls` 读取已保存结果，不重新计算。
+- 不执行宏，不支持 `.xlsm`、加密或损坏文件。
 
-## MCP 与数据库预检
+附件绑定上传用户及对话，保存于 `data/excel_attachments/<id>`。发送和确认执行时校验原文件哈希。历史记录保留文字、附件与已确认或已取消的设计预览；切换或新建对话会清空未发送附件。
+
+## 在 Designer 中查看设计
+
+设计结果提供 **在 Designer 中查看** 与 **下载设计 MDB**。查看操作核对设计包哈希，将最终 `modified.mdb` 与站点 `SiteInfo.mdb` 复制至服务器 `C:\Temp\DesignerMCP\Review_<id>`。
+
+需要配置服务器共享、Windows 凭据、Designer 路径及站点文件：
+
+| 配置 | 用途 |
+|---|---|
+| `DESIGNER_DB_SERVER` | 目标服务器 |
+| `DESIGNER_SERVER_SHARE` | 与服务器对应的 C 共享，当前实现使用 `\\服务器\C` |
+| `DESIGNER_WINDOWS_USER` / `DESIGNER_WINDOWS_PASSWORD` | 访问服务器文件所需的 Windows 凭据 |
+| `DESIGNER_UI_EXE` | 服务器 Designer 可执行文件路径 |
+| `DESIGNER_SERVER_SITEINFO` | 站点 SiteInfo MDB 路径 |
+
+具有配置写权限时，工具备份 Designer 配置并设置下次启动使用的 MDB。保存并关闭当前 Designer，再重新打开；无配置写权限时，按页面返回路径手动打开。进入对应客户工作区（例如 Site / 200），搜索目标对象核对。
+
+也可输入“把这份设计准备好，让我在 Designer 中查看”。多批设计应交接包含全部内容的最终 MDB。文件准备成功仅表示交接完成，仍需在 Designer 中查看实际内容。
+
+## 我的设计进度
+
+完整流程与页面一致：
+
+**提交需求 → 识别设计 → 检查现有定义 → 生成设计 → 核对结果 → 检查设计 → Compile → Update Database → 生成 WCF → 部署 WCF → 验证结果**
+
+选择自己的设计对话后，页面显示已完成步骤、当前步骤和可用操作。耗时任务在后台执行，展示已耗时及最近更新时间。
+
+| 步骤 | 页面操作 |
+|---|---|
+| 检查设计 | 核对设计包、准备 Designer 文件、同步服务器文件状态、记录人工审核 |
+| Compile | 编译设计副本，或记录在 Designer 中已完成的编译 |
+| Update Database | 检查发布目标和变更、备份数据库、确认执行官方 Update DB；也可记录手动更新 |
+| 生成 WCF | 编译当前副本并生成程序集，核对目标类型和新字段，下载已核验 DLL |
+| 部署 WCF | 人员在运行环境部署后，点击手动部署确认；无需 WCF 时可按页面条件跳过 |
+| 验证结果 | 执行已支持的发布后核验并记录完成状态 |
+
+页面根据工具回执与人工确认展示进度，人工完成步骤标注“用户确认”。数据库更新、WCF 生成和部署分别记录。WCF 下载包不包含可能携带连接信息的生成配置，部署时使用运行环境配置。
+
+当前对话以最新设计包为准，只累计该对话中作为来源的设计包。其他用户和独立分支不会自动合并；服务器文件发生变化时，后续操作会要求重新核对。此页面用于跟踪本人的设计流程，不是整个 Designer 环境所有改动的全局看板。
+
+## 数据库发布与 WCF 配置
+
+仅在本地 `.env` 配置数据库和 Windows 凭据，不提交到仓库。
+
+| 配置 | 用途 |
+|---|---|
+| `DESIGNER_DB_SERVER/NAME/USER/PASSWORD` | 数据库连接；备份与恢复需要对应权限 |
+| `DESIGNER_UPDATE_DB_USER/PASSWORD` | 官方 Update DB 账号，默认 schema 必须与应用 schema 一致 |
+| `DESIGNER_TEST_TARGET_CONFIRMED=true` | 明确允许对已确认的测试目标发布 |
+| `DESIGNER_SERVER_IMPORT_EXE` | 服务器官方 ImportMetaData 程序路径 |
+| `DESIGNER_WCF_DIRECTORY` | WCF 组件目录 |
+| `DESIGNER_SERVER_WCF_GENERATOR` | 服务器 WCF 生成程序路径 |
+| `DESIGNER_WCF_ADDRESS` | WCF 生成所需地址 |
+| `DESIGNER_PUBLICATION_TIMEOUT` | 发布超时，默认 900 秒 |
+| `DESIGNER_SERVICE_TIMEOUT` | 服务生成超时，默认 1800 秒 |
+
+服务器 WCF 生成还需要已认证的共享和执行临时 SQL Agent 作业所需权限。
+
+发布顺序为：**检查设计包 → 发布预检 → 校验数据库备份 → 确认 Update Database → 发布后核验**。发布确认绑定检查结果、设计清单及备份哈希，有效备份凭证为一小时；执行前再次核对目标设计指纹，变化时停止更新。
+
+Update DB 更新设计与存储结构，不等同于部署运行服务。失败可能留下部分更新；`restore_designer_test_database` 使用校验后的备份凭证与哈希恢复明确授权的测试目标，会覆盖备份之后的变更。
+
+## MCP 接入
+
+HTTP MCP 默认关闭，启用时在 `.env` 设置：
 
 ```ini
 ENABLE_MCP_HTTP=True
 MCP_HTTP_PATH=/mcp
-MCP_API_KEY=高强度随机字符串
+MCP_API_KEY=replace-with-a-long-random-secret
 MCP_ALLOWED_HOSTS=localhost:*,127.0.0.1:*,[::1]:*
 ```
 
-端点 http://127.0.0.1:8031/mcp/，使用 `Authorization: Bearer <MCP_API_KEY>`。HTTP MCP 默认关闭，与浏览器聊天 SSE 分开。
+重启后端点为 `http://127.0.0.1:8032/mcp/`，使用 `Authorization: Bearer <MCP_API_KEY>`。浏览器 `/chat` SSE 与 MCP 协议端点分开。上文 Excel 预览确认由浏览器对话的 LangGraph 流程执行，直接调用 MCP 工具的客户端需自行管理其操作确认。
 
-仅在本机 `.env` 配置 `DESIGNER_DB_SERVER/NAME/USER/PASSWORD`。管理员账号用于备份和恢复；`DESIGNER_UPDATE_DB_USER/PASSWORD` 用于官方 Update DB，其默认 schema 必须与应用 schema 一致。通过用户确认后配置 `DESIGNER_TEST_TARGET_CONFIRMED=true`。凭据不进入仓库和工具结果，工具不接受自由 SQL。
+## 数据目录
 
-发布流程：检查设计包 → 发布预检 → `backup_designer_test_database` → `publish_designer_test_database` → `verify_designer_published_design`。发布需要精确清单哈希和一小时内的有效备份，Update DB 只更新设计和存储结构。失败可能部分更新；`restore_designer_test_database` 使用已校验备份凭证和哈希恢复明确授权的测试目标，会覆盖备份后的变更。
+| 路径 | 内容 |
+|---|---|
+| `data/sessions/` | 对话、名称与历史消息 |
+| `data/excel_attachments/` | 原始 Excel 与解析快照 |
+| `data/designer/artifacts/` | 设计副本、差异文件、清单与报告 |
+| `data/langgraph_checkpoints.sqlite` | 工作流检查点与待确认状态 |
+| `data/designer_progress.sqlite` | 设计进度与操作回执 |
+| `data/agent_experience.sqlite` | 助手经验记录 |
 
-## 测试
+设计根目录、检查点与进度数据库可通过 `DESIGNER_ROOT`、`LANGGRAPH_CHECKPOINT_DB`、`DESIGNER_PROGRESS_DB` 配置。保留对话、附件和检查点，才能继续已有的 Excel 确认流程。
+
+## 开发与测试
 
 ```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
 .\.venv\Scripts\python.exe -m pytest tests -q
-# 可选：真实本地快照及已配置的官方 DLL
+```
+
+测试覆盖附件解析与归属、预览确认和取消、检查点恢复、设计工具及进度流程。真实厂商集成测试需要额外配置本地测试快照和已安装 DLL：
+
+```powershell
 $env:DESIGNER_TEST_MDB='data/designer/server_snapshot/InSite.mdb'
 $env:DESIGNER_TEST_VENDOR='1'
 .\.venv\Scripts\python.exe -m pytest tests -q
 ```
 
-真实测试检查原输入哈希不变，并验证 CDO、字段类型、持久化列与官方 XML。合成 XML 演示保留在 `examples/designer`，不能当成厂商导入样例。
+真实测试检查原始输入哈希，并验证 CDO、字段类型、持久化列及官方 XML。`examples/designer` 中合成 XML 演示不作为厂商导入样例。
+
+## 常见问题
+
+- **仍访问旧端口**：核对 `.env` 和启动进程的 `SERVER_PORT=8032`，重启后打开 `http://127.0.0.1:8032/`。
+- **Excel 上传后没有创建对象**：先发送设计要求，待生成设计预览，再输入“确定”或“确认”。
+- **Designer 看不到新对象**：确认打开的是交接路径中的最终 MDB，选择正确工作区；设置下次启动文件后需重新打开 Designer。
+- **页面提示文件发生变化**：重新同步并核对设计来源；附件变化则取消待确认操作并重新上传。
+- **数据库已更新但服务未生效**：继续完成所需 WCF 生成、运行环境部署和结果验证。
