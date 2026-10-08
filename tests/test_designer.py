@@ -200,6 +200,15 @@ def test_registry_contains_only_designer_tools_in_clean_process():
         "get_designer_cdo", "validate_designer_xml", "compare_designer_xml",
         "generate_designer_field_package", "check_designer_package",
         "export_designer_metadata_diff", "get_mcp_server_status",
+        "get_designer_capabilities", "get_designer_catalog", "list_designer_entities",
+        "get_designer_entity", "get_designer_entity_schema", "analyze_designer_where_used",
+        "generate_designer_design_package", "generate_designer_cdo_package", "export_designer_vendor_diff",
+        "inspect_designer_database", "prepare_designer_publish_plan",
+        "compile_designer_mdb",
+        "backup_designer_test_database", "publish_designer_test_database",
+        "restore_designer_test_database", "verify_designer_published_design",
+        "generate_designer_wcf_package",
+        "inspect_designer_installation",
     }
 
 

@@ -1,86 +1,89 @@
 # CamstarDesignerMCP
 
-Siemens Opcenter (Camstar) Designer 元数据助手，复用 FastMCP、FastAPI、LangGraph 和自然语言对话框架。
+Siemens Opcenter (Camstar) Designer 元数据助手。FastMCP、浏览器聊天和 LangGraph 共用设计工具，项目仅包含 Designer 相关能力。
 
-当前是第一阶段 MVP：读取本地元数据、生成字段变更草案、校验并比较差异。所有工具仅服务于 Designer 元数据设计。
-
-## 当前能力
+通过客户安装的 `Camstar.Metadata.dll` 调用真实对象模型，在独立 MDB 副本设计并导出官方差异 XML，不需要先提供字段 XML 模板。
 
 | 能力 | 状态 |
 |---|---|
-| MDB 表结构、CDO、字段与类型读取 | 已在服务器 MDB 的本地副本验证，只读；工作区和继承尚未合并 |
-| XML 的 CDO/字段检索 | 支持手册中的 InSiteMetaData 1.0 |
-| 简单字段草案生成 | 复制现有非持久化、非列表字段模板，附来源哈希与报告 |
-| 结构校验、包完整性、来源漂移 | 已实现，不等同于官方导入验证 |
-| XML 定义差异比较 | 已实现，仅比较输入 XML 中出现的定义 |
-| 官方 MetadataExport 封装 | 按手册参数执行输入副本，真实程序尚待验证 |
-| 存储映射、自动导入、Update DB、服务生成 | 尚未实现 |
+| 有效 CDO、继承字段、类型、CLF、函数、事件、Query、表列、索引、映射、标签、工作区目录 | 已接入官方模型；保留原始 MDB 查询 |
+| 新建 CDO、专用字段类型、持久化或非持久化字段 | 真实 MDB 保存与回读验证 |
+| 字段类型长度与持久化列映射 | 已验证 String 200 与存储列 Precision 200 |
+| Query、CLF、事件绑定、函数顺序与参数、标签、表列、索引、映射及属性设计 | 已实现厂商对象与专用方法；修改要求原值 |
+| 官方差异导出、工作区编译、包完整性 | 已实现，不依赖独立 MetadataExport.exe |
+| 发布目标数据库检查、列冲突与发布计划 | 已实现，只读 |
+| 官方 Update DB、校验备份与恢复 | 已在授权测试库实际执行；数据库更新与服务部署分别报告 |
+| 发布后父对象、字段类型、列长度与边界验证 | 已验证 ExProduct；临时表接受200、拒绝201字符 |
+| WCF 隔离生成 | ProductMaint 实测生成329个数据契约、4个服务并检查ProductChanges；没有部署 |
+| 原生 XML Import、REST 生成与服务部署 | 继续验证；不得将数据库发布当作服务已部署 |
+
+参数和验收证据见 [能力说明](docs/designer_capabilities.md)，后续路线见 [开发计划](docs/development_plan.md)。
 
 ## 运行
 
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
-Copy-Item .env.example .env  # 已有 .env 时不要覆盖
+Copy-Item .env.example .env  # 已有配置时不要覆盖
 .\.venv\Scripts\python.exe main.py
 ```
 
-聊天地址默认 http://127.0.0.1:8031/。
-
-配置 `.env` 中的 LLM 接口用于自然语言聊天。离线演示和 MCP 文件工具不需要调用 LLM。
+默认聊天地址 http://127.0.0.1:8031/。自然语言聊天需要 LLM 配置，文件工具与官方对象模型不需要 LLM。
 
 ```ini
-SERVER_PORT=8031
 DESIGNER_ROOT=data/designer
+DESIGNER_METADATA_ASSEMBLY=C:\实际安装目录\Camstar.Metadata.dll
+DESIGNER_BRIDGE_TIMEOUT=180
 DESIGNER_METADATA_EXPORT_EXE=
-DESIGNER_EXPORT_TIMEOUT=120
+DESIGNER_UI_EXE=C:\Program Files (x86)\Camstar\Designer2\Designer.Net.UI.exe
+DESIGNER_SERVER_IMPORT_EXE=C:\Program Files (x86)\Camstar\InSite Administration\Designer\ImportMetaData.exe
 ```
 
-把测试 MDB 的副本和 Designer 导出的 XML 放入 `DESIGNER_ROOT`。不要把生产 MDB 作为实验输入。需要官方差异导出时，再填写已安装的 `MetadataExport.exe` 的绝对路径。MDB 读取要求 Windows Access ODBC 驱动与 Python 位数一致。
+需要 Windows PowerShell 5.1、.NET Framework 和匹配进程位数的 ACE OLEDB 驱动。厂商 DLL 不包含在仓库中。这些是已检查安装版本中的公开成员，未确认是厂商承诺兼容的独立 SDK，升级后需重新验收。
 
-## 离线演示与测试
+将本地测试 MDB 放入 `DESIGNER_ROOT`。工具只把副本交给厂商组件。工作区省略时，仅选择唯一描述为 Site 的活跃客户工作区；否则须指定。
 
-```powershell
-.\.venv\Scripts\python.exe -m designer.demo
-.\.venv\Scripts\python.exe -m pytest tests -q
-# 可选：真实 MDB 副本集成测试，前后校验文件哈希
-$env:DESIGNER_TEST_MDB="data/designer/server_snapshot/InSite.mdb"
-.\.venv\Scripts\python.exe -m pytest tests/test_designer_mdb_integration.py -q
-```
+## 自然语言示例
 
-演示使用 `examples/designer/demo_metadata.xml` 合成数据，不代表真实 Siemens 导出或已验证的导入模板。每次生成独立目录：
+> 在测试 MDB 中创建 ExProduct，继承 Product，新增 ExDescription，String 最多 200 字符，持久化，并生成变更包。
+
+助手检查父对象和来源哈希后调用 `generate_designer_cdo_package`。工具创建专用类型 `ExDescription200`，避免修改共享 String 类型，生成：
 
 ```text
 data/designer/artifacts/<id>/
-  changes.xml     字段变更草案
-  baseline.xml    本次读取定义的审计快照
-  manifest.json   来源 SHA256、工作区、校验状态和计划
-  report.md       变更说明与测试导入步骤
+  baseline.mdb   原始快照
+  modified.mdb   已保存并回读的设计副本
+  changes.xml    官方比较引擎输出的差异
+  manifest.json  来源、工作区、文件哈希和执行证据
+  report.md      设计与验证说明
+  export/        XML、项目渲染的 HTML 报告及官方日志
 ```
 
-可在聊天中输入：
+`saved_to_test_copy_and_exported` 表示本地副本已保存和导出，服务器 MDB、业务数据库和运行服务尚未更新。
 
-> 检查 Designer 环境，列出可用元数据文件。
-
-> 查询 demo_metadata.xml 中 DemoContainer 的定义，使用 ExistingText 模板，在 customer 工作区生成 ExternalLotNumber 字段草案，描述为“外部批次号”。
-
-真实需求应使用真实导出文件及用户指定的客户工作区。MVP 不生成持久化字段或存储映射。
-
-## MCP 接入
+## MCP 与数据库预检
 
 ```ini
 ENABLE_MCP_HTTP=True
 MCP_HTTP_PATH=/mcp
-MCP_API_KEY=替换为高强度随机字符串
+MCP_API_KEY=高强度随机字符串
 MCP_ALLOWED_HOSTS=localhost:*,127.0.0.1:*,[::1]:*
 ```
 
-客户端使用 `http://127.0.0.1:8031/mcp/` 和 `Authorization: Bearer <MCP_API_KEY>`。端点默认关闭；启用后要求 Bearer 认证。HTTP 传输与浏览器聊天 SSE 分开。
+端点 http://127.0.0.1:8031/mcp/，使用 `Authorization: Bearer <MCP_API_KEY>`。HTTP MCP 默认关闭，与浏览器聊天 SSE 分开。
 
-## 验证边界
+仅在本机 `.env` 配置 `DESIGNER_DB_SERVER/NAME/USER/PASSWORD`。管理员账号用于备份和恢复；`DESIGNER_UPDATE_DB_USER/PASSWORD` 用于官方 Update DB，其默认 schema 必须与应用 schema 一致。通过用户确认后配置 `DESIGNER_TEST_TARGET_CONFIRMED=true`。凭据不进入仓库和工具结果，工具不接受自由 SQL。
 
-生成包始终标记为 `draft_requires_test_import`，`ready_for_publish=false`。工作区只记录在 manifest，需在 Designer 中选择。Action=Create 不保证目标字段不存在；Stop 仅对已指定预期值的属性冲突生效。XML 导出可能仅包含差异，不能据此确认目标 MDB 中字段不存在或已删除。
+发布流程：检查设计包 → 发布预检 → `backup_designer_test_database` → `publish_designer_test_database` → `verify_designer_published_design`。发布需要精确清单哈希和一小时内的有效备份，Update DB 只更新设计和存储结构。失败可能部分更新；`restore_designer_test_database` 使用已校验备份凭证和哈希恢复明确授权的测试目标，会覆盖备份后的变更。
 
-已取得服务器 MDB 的本地副本，并验证表结构、CDO/字段与类型读取。下一步仍需要真实字段导出样例和可用的 Designer/MetadataExport 程序，完成工作区继承解析、测试导入和导出核对，再开发存储映射及发布。
+## 测试
 
-工具参数、文档依据和实施范围见 [Designer MVP 说明](docs/designer_mvp.md)。
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests -q
+# 可选：真实本地快照及已配置的官方 DLL
+$env:DESIGNER_TEST_MDB='data/designer/server_snapshot/InSite.mdb'
+$env:DESIGNER_TEST_VENDOR='1'
+.\.venv\Scripts\python.exe -m pytest tests -q
+```
+
+真实测试检查原输入哈希不变，并验证 CDO、字段类型、持久化列与官方 XML。合成 XML 演示保留在 `examples/designer`，不能当成厂商导入样例。

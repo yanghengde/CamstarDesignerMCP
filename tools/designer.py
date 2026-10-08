@@ -36,12 +36,23 @@ async def get_designer_environment() -> dict:
                 if len(files) == 100:
                     break
     executable = Path(config.DESIGNER_METADATA_EXPORT_EXE) if config.DESIGNER_METADATA_EXPORT_EXE else None
+    from designer import vendor
+    published_baseline=None
+    baseline_file=root/"published_baseline.json"
+    if baseline_file.is_file():
+        published_baseline=json.loads(baseline_file.read_text(encoding="utf-8"))
     return {
         "root": str(root), "root_exists": root.is_dir(), "files": files,
+        "published_baseline":published_baseline,
         "inventory_limit": 100, "access_drivers": await asyncio.to_thread(mdb.access_drivers),
         "metadata_export_configured": bool(executable),
         "metadata_export_available": bool(executable and executable.is_file() and executable.suffix.lower() == ".exe"),
-        "automatic_import_available": False, "database_publish_available": False,
+        "automatic_import_available": False,
+        "database_publish_available": config.DESIGNER_TEST_TARGET_CONFIRMED and bool(config.DESIGNER_DB_SERVER) and bool(config.DESIGNER_METADATA_ASSEMBLY and Path(config.DESIGNER_METADATA_ASSEMBLY).is_file()),
+        "source_candidates": sorted(str(p.relative_to(root)) for p in root.rglob("*.mdb") if "artifacts" not in p.relative_to(root).parts and p.resolve().is_relative_to(root))[:20] if root.is_dir() else [],
+        "vendor_backend_available": bool(config.DESIGNER_METADATA_ASSEMBLY and Path(config.DESIGNER_METADATA_ASSEMBLY).is_file()),
+        "design_entity_kinds": vendor.KINDS,
+        "recommended_design_tool": "generate_designer_cdo_package",
     }
 
 
@@ -191,6 +202,19 @@ async def check_designer_package(manifest_file: str) -> dict:
     if path.stat().st_size > 1024 * 1024:
         raise ValueError("manifest 文件过大")
     manifest = json.loads(path.read_text(encoding="utf-8"))
+    if manifest.get("format_version") == 2:
+        from designer import vendor
+        checks = {}
+        for name, expected in manifest["artifacts"].items():
+            file = source_path(str(path.parent / name), Path(name).suffix)
+            checks[name] = vendor.digest(file) == expected
+            if file.suffix.lower() == ".xml":
+                validate(load_xml(file)[0])
+        source = source_path(manifest["source_file"], ".mdb")
+        checks["source_unchanged"] = vendor.digest(source) == manifest["source_sha256"]
+        return {"intact": all(checks.values()), "checks": checks, "ready_for_publish": False,
+                "scope": "file_integrity_only", "status": manifest["status"],
+                "official_xml_import_verified": False, "database_published": False}
     checks = {}
     for name, key in (("changes.xml", "changes_sha256"), ("baseline.xml", "baseline_sha256")):
         file = source_path(str(path.parent / name), ".xml")

@@ -1,1 +1,1 @@
-"""Local Designer metadata adapters. Never writes to MDBs or production APIs."""
+"""Designer metadata adapters, isolated design copies and confirmed test publication."""

@@ -15,16 +15,18 @@ mcp = FastMCP(
     "CamstarDesigner",
     instructions=(
         "Siemens Opcenter Designer metadata tools: read-only MDB inspection, "
-        "XML definition search, template-based draft field packages, validation "
-        "and MetadataExport comparison. Generated packages require verification "
-        "in a test MDB. No automated import or database publication is available."
+        "effective definitions via the installed vendor object model, CDO and field "
+        "design on isolated MDB copies, property schemas, where-used analysis, "
+        "official difference XML export and integrity validation. "
+        "Official Update DB, verified backups and rollback target a confirmed test database. "
+        "Report publication separately from XML import and runtime service deployment."
     ),
 )
 
 # -------------------------------------------------------
 # 按模块导入工具 —— 工具通过 @mcp.tool 自动注册
 # -------------------------------------------------------
-_module_names = ["designer", "system_info"]
+_module_names = ["designer", "designer_design", "system_info"]
 _modules = [importlib.import_module(f"tools.{name}") for name in _module_names]
 
 

@@ -79,9 +79,20 @@ def definition_index(root: ET.Element) -> dict[str, tuple]:
     index = {}
 
     def visit(node: ET.Element, context: str):
+        # Official CLF diffs carry separate before/after function lists. A
+        # function may appear more than once in either list; Sequence identifies
+        # its call site, while Name identifies the shared function definition.
+        if node.tag in {"BaseCLFFunctions", "NewCLFFunctions"}:
+            context = f"{context}/{node.tag}"
         name = node.get("Name")
         if name is not None:
-            context = f"{context}/{node.tag}:{name.casefold()}"
+            identity = name.casefold()
+            if node.tag == "CLFFunction":
+                sequence = effective(node).findtext("Attributes/Sequence")
+                if sequence is None or not sequence.strip().isdigit():
+                    raise ValueError("CLFFunction 必须包含有效的 Attributes/Sequence")
+                identity += f"@{int(sequence)}"
+            context = f"{context}/{node.tag}:{identity}"
             if context in index:
                 raise ValueError(f"XML 存在重复定义：{context}")
             own = ET.Element(node.tag, node.attrib)
