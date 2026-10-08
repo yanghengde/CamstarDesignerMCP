@@ -10,6 +10,8 @@ uvicorn>=0.20.0
 python-multipart>=0.0.32
 pandas>=2.0.0
 openpyxl>=3.1.0
+defusedxml>=0.7.1,<1.0.0
+pyodbc>=5.2.0,<6.0.0; sys_platform == 'win32'
 # 0.6.x stays compatible with the LangChain 0.3 packages used in this environment.
 langgraph>=0.6.11,<0.7.0
 langgraph-checkpoint-sqlite>=2.0.11,<3.0.0

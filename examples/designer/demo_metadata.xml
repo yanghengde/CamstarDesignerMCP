@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Synthetic offline fixture. Not a real Siemens export or a validated import template. -->
+<InSiteMetaData>
+  <Header><Version>1.0</Version></Header>
+  <Import>
+    <CDODefinitions>
+      <CDODefinition Name="DemoContainer" Action="Import">
+        <Attributes><CDODescription>离线演示对象</CDODescription></Attributes>
+        <CDOFieldDefinitions>
+          <CDOFieldDefinition Name="ExistingText" Action="Import">
+            <Attributes>
+              <FieldDef><Name>String</Name></FieldDef>
+              <FieldDescription>演示用非持久化字符串模板</FieldDescription>
+              <IsPersistent>False</IsPersistent>
+              <IsList>False</IsList>
+            </Attributes>
+          </CDOFieldDefinition>
+        </CDOFieldDefinitions>
+      </CDODefinition>
+    </CDODefinitions>
+  </Import>
+</InSiteMetaData>

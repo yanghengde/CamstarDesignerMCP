@@ -118,3 +118,10 @@ SAFE_DELETE_THRESHOLD = int(os.getenv("SAFE_DELETE_THRESHOLD", "0")) # Default 0
 # 日志与性能监控开关
 # ---------------------------------------------------------------------------
 ENABLE_PERFORMANCE_LOG = os.getenv("ENABLE_PERFORMANCE_LOG", "True").lower() in ("true", "1", "yes")
+
+# Designer uses local metadata files; legacy REST tools are opt-in.
+ENABLE_LEGACY_MODELING_TOOLS = os.getenv("ENABLE_LEGACY_MODELING_TOOLS", "False").lower() in ("true", "1", "yes")
+DESIGNER_ROOT = os.getenv("DESIGNER_ROOT", os.path.join("data", "designer"))
+DESIGNER_METADATA_EXPORT_EXE = os.getenv("DESIGNER_METADATA_EXPORT_EXE", "")
+DESIGNER_EXPORT_TIMEOUT = int(os.getenv("DESIGNER_EXPORT_TIMEOUT", "120"))
+SERVER_PORT = int(os.getenv("SERVER_PORT", "8031"))

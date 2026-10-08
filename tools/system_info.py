@@ -12,7 +12,7 @@ from tools import mcp
 async def get_mcp_server_status() -> dict[str, object]:
     """Return MCP protocol/runtime information without contacting Camstar."""
     return {
-        "server": "CamstarModeling",
+        "server": "CamstarDesigner",
         "protocol_version": LATEST_PROTOCOL_VERSION,
         "fastmcp_version": version("fastmcp"),
         "mcp_sdk_version": version("mcp"),

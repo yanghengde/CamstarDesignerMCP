@@ -69,7 +69,7 @@ def test_streamable_http_auth_initialize_list_and_call(monkeypatch):
         assert initialized.status_code == 200
         init_result = initialized.json()["result"]
         assert init_result["protocolVersion"] == "2025-11-25"
-        assert init_result["serverInfo"]["name"] == "CamstarModeling"
+        assert init_result["serverInfo"]["name"] == "CamstarDesigner"
 
         listed = client.post(
             "/mcp/",
@@ -78,7 +78,7 @@ def test_streamable_http_auth_initialize_list_and_call(monkeypatch):
         )
         assert listed.status_code == 200
         tool_names = {tool["name"] for tool in listed.json()["result"]["tools"]}
-        assert "container_start" in tool_names
+        assert "generate_designer_field_package" in tool_names
         assert "get_mcp_server_status" in tool_names
 
         called = client.post(
@@ -94,8 +94,16 @@ def test_streamable_http_auth_initialize_list_and_call(monkeypatch):
         assert called.status_code == 200
         call_result = called.json()["result"]
         assert call_result["isError"] is False
-        assert call_result["structuredContent"]["server"] == "CamstarModeling"
+        assert call_result["structuredContent"]["server"] == "CamstarDesigner"
         assert (
             call_result["structuredContent"]["protocol_version"]
             == LATEST_PROTOCOL_VERSION
         )
+
+        environment = client.post(
+            "/mcp/",
+            json={"jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": {"name": "get_designer_environment", "arguments": {}}},
+            headers=_headers("integration-secret"),
+        )
+        assert environment.status_code == 200
+        assert environment.json()["result"]["structuredContent"]["automatic_import_available"] is False

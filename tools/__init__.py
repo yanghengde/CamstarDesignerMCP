@@ -6,37 +6,34 @@ MCP 工具注册中心
 """
 
 import logging
+import importlib
 from fastmcp import FastMCP
+from config import ENABLE_LEGACY_MODELING_TOOLS
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
 mcp = FastMCP(
-    "CamstarModeling",
+    "CamstarDesigner",
     instructions=(
-        "MCP Server for Siemens Opcenter (Camstar) Modeling, Shopfloor, and "
-        "Query APIs. Provides tools to manage modeling entities, execute "
-        "manufacturing Container transactions, and run read-only queries."
+        "Siemens Opcenter Designer metadata tools: read-only MDB inspection, "
+        "XML definition search, template-based draft field packages, validation "
+        "and MetadataExport comparison. Generated packages require verification "
+        "in a test MDB. No automated import or database publication is available."
     ),
 )
 
 # -------------------------------------------------------
 # 按模块导入工具 —— 工具通过 @mcp.tool 自动注册
 # -------------------------------------------------------
-from tools import specs                # Spec 实体
-from tools import operations           # Operation 实体
-from tools import workflows            # Workflow 实体
-from tools import products             # Product 实体
-from tools import mfgorders            # MfgOrder 实体
-from tools import container_start       # Shopfloor Container Start 事务
-from tools import container_moves       # Shopfloor Move/MoveIn/MoveOut 事务
-from tools import container_quality     # Shopfloor ContainerDefect/Rework 事务
-from tools import numbering_rules       # NumberingRule 查询
-from tools import container_levels      # ContainerLevel 查询
-from tools import queries               # Query API 查询
-from tools import mfglines             # MfgLine 实体
-from tools import producttypes         # ProductType 实体
-from tools import excel_importer       # Excel 导入工具
-from tools import system_info          # MCP 服务诊断（无外部副作用）
+_module_names = ["designer", "system_info"]
+if ENABLE_LEGACY_MODELING_TOOLS:
+    _module_names += [
+        "specs", "operations", "workflows", "products", "mfgorders",
+        "container_start", "container_moves", "container_quality",
+        "numbering_rules", "container_levels", "queries", "mfglines",
+        "producttypes", "excel_importer",
+    ]
+_modules = [importlib.import_module(f"tools.{name}") for name in _module_names]
 
 
 def get_tool_func(name: str):
@@ -44,12 +41,8 @@ def get_tool_func(name: str):
     按函数名查找已注册的工具函数，供 Agent 直接调用。
     新增模块时，将对应 module 加入列表即可。
     """
-    for module in [specs, operations, workflows, products, mfgorders,
-                   container_start, container_moves, container_quality,
-                   numbering_rules,
-                   container_levels, queries,
-                   mfglines, producttypes, excel_importer, system_info]:
+    for module in _modules:
         func = getattr(module, name, None)
-        if func is not None:
+        if callable(func) and hasattr(func, "__fastmcp__") and getattr(func, "__module__", None) == module.__name__:
             return func
     return None

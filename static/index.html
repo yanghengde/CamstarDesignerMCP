@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Siemens Opcenter Modeling AI Agent</title>
+    <title>Siemens Opcenter Designer AI Agent</title>
     <!-- Favicon SVG -->
     <link rel="icon" type="image/svg+xml" href="/svg/opcenter.svg">
     <!-- Use Siemens-ish modern font -->
@@ -377,7 +377,7 @@
             <div
                  style="font-family: inherit; font-weight: 800; font-size: 26px; letter-spacing: 3px; color: var(--siemens-teal); user-select: none;">
                 SIEMENS</div>
-            <h1>Opcenter Modeling Agent</h1>
+            <h1>Opcenter Designer Agent</h1>
 
             <div style="margin-left: auto; position: relative;">
                 <button id="sessionsToggleBtn" style="background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.3); border-radius: 8px; color: white; padding: 8px 16px; height: auto; width: auto; font-size: 0.9rem; cursor: pointer; display: flex; align-items: center; gap: 8px; box-shadow: none;">
@@ -584,7 +584,7 @@
                 }
 
                 if (!hasVisible) {
-                    appendMessage('agent', '你好！我是西门子 Opcenter Modeling 智能建模助手。我可以帮你查询参数、创建并管理 Spec。\n\n例如你可以问我：**"查询一下系统里名为 HD-002 的 Spec 的详细信息。"**');
+                    appendMessage('agent', '你好！我是西门子 Opcenter Designer 设计助手，可以读取元数据定义、生成字段变更草案并核对差异。\n\n可以先问：**"检查 Designer 环境，列出可用的元数据文件。"**\n\n生成包需要在测试 MDB 中导入验证；自动导入和数据库发布尚未接入。');
                 }
             } catch (err) {
                 console.error("加载历史失败", err);

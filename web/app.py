@@ -12,6 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from config import (
     AGENT_ENGINE,
     CAMSTAR_BASE_URL,
+    ENABLE_LEGACY_MODELING_TOOLS,
     ENABLE_MCP_HTTP,
     MCP_ALLOWED_HOSTS,
     MCP_ALLOWED_ORIGINS,
@@ -28,7 +29,7 @@ from web.mcp_transport import BearerTokenMiddleware
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期：启动时加载记忆和注册工具。"""
-    if not CAMSTAR_BASE_URL or CAMSTAR_BASE_URL == "http://localhost/Modeling":
+    if ENABLE_LEGACY_MODELING_TOOLS and (not CAMSTAR_BASE_URL or CAMSTAR_BASE_URL == "http://localhost/Modeling"):
         print("[WARN] 未找到有效的 CAMSTAR_BASE_URL，请检查 .env 配置。")
 
     # 恢复历史记忆
@@ -67,7 +68,7 @@ async def lifespan(app: FastAPI):
 def create_app() -> FastAPI:
     """创建并返回配置完毕的 FastAPI 实例。"""
     app = FastAPI(
-        title="Siemens Opcenter Modeling AI Agent",
+        title="Siemens Opcenter Designer AI Agent",
         lifespan=lifespan
     )
 
