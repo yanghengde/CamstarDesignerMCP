@@ -2,7 +2,6 @@ from agent.safety import (
     MutationCounts,
     count_tool_calls,
     evaluate_mutations,
-    infer_intended_mutations,
     is_explicit_confirmation,
     is_explicit_rejection,
 )
@@ -36,43 +35,28 @@ def test_rejection_is_explicit_and_narrow():
 
 def test_batch_count_uses_list_or_count_arguments():
     calls = [
-        _call("container_start", '{"container_names":["SN1","SN2","SN3"]}'),
-        _call("create_spec", '{"count": 4}'),
-        _call("get_spec"),
+        _call("create_designer_cdo", '{"items":["FieldA","FieldB","FieldC"]}'),
+        _call("create_designer_field", '{"count": 4}'),
+        _call("get_designer_cdo"),
     ]
     assert count_tool_calls(calls) == MutationCounts(creates=7)
 
 
 def test_safety_decision_uses_cumulative_counts():
     completed = MutationCounts(creates=SAFE_CREATE_THRESHOLD)
-    decision = evaluate_mutations(completed, [_call("container_start")])
+    decision = evaluate_mutations(completed, [_call("create_designer_cdo")])
     assert decision.requires_approval is True
     assert "创建" in decision.categories
 
 
 def test_delete_threshold_blocks_as_configured():
-    pending = [_call("delete_spec") for _ in range(SAFE_DELETE_THRESHOLD + 1)]
+    pending = [_call("delete_designer_cdo") for _ in range(SAFE_DELETE_THRESHOLD + 1)]
     decision = evaluate_mutations(MutationCounts(), pending)
     assert decision.requires_approval is True
     assert "删除" in decision.categories
 
 
-def test_explicit_container_count_blocks_before_first_write():
-    pending = [_call("container_start")]
-    intended = infer_intended_mutations(
-        "请生成50个独立的container，每个qty为1", pending
-    )
-    decision = evaluate_mutations(
-        MutationCounts(), pending, intended=intended
-    )
 
-    assert intended.creates == 50
-    assert decision.requires_approval is True
-    assert decision.totals.creates == 50
-
-
-def test_serial_range_is_counted_as_intended_creations():
-    intended = infer_intended_mutations(
-        "创建 SN0000001 到 SN0000050", [_call("container_start")]
-    )
-    assert intended.creates == 50
+def test_local_packages_are_not_definition_mutations():
+    calls = [_call("generate_designer_field_package"), _call("export_designer_metadata_diff")]
+    assert count_tool_calls(calls) == MutationCounts()

@@ -1,13 +1,11 @@
 import os
-import uuid
-import shutil
 from typing import Literal
 
-from fastapi import APIRouter, File, Query, UploadFile
+from fastapi import APIRouter, Query
 from fastapi.responses import HTMLResponse, StreamingResponse
 from pydantic import BaseModel
 
-from config import CAMSTAR_USERNAME, ENABLE_PERFORMANCE_LOG
+from config import CHAT_USERNAME, ENABLE_PERFORMANCE_LOG
 from agent.memory import get_user_messages, get_sessions, create_session, set_active_session
 from agent.llm_client import chat_stream
 from agent.experience import get_experience_status, list_candidates
@@ -33,7 +31,7 @@ def index():
 @router.get("/config")
 def config_endpoint():
     """返回前端所需的配置（如当前绑定用户名）。"""
-    return {"username": CAMSTAR_USERNAME}
+    return {"username": CHAT_USERNAME}
 
 
 @router.get("/sessions/{username}")
@@ -97,24 +95,3 @@ def experience_candidates_endpoint(
 ):
     """List sanitized experience candidates for human review (read-only)."""
     return {"candidates": list_candidates(status=status, limit=limit)}
-
-
-UPLOAD_DIR = os.path.join("data", "uploads")
-
-
-@router.post("/api/upload")
-async def upload_file(file: UploadFile = File(...)):
-    """接收并暂存上传的文件，返回文件本地路径"""
-    os.makedirs(UPLOAD_DIR, exist_ok=True)
-    
-    unique_filename = f"{uuid.uuid4().hex}_{file.filename}"
-    file_path = os.path.join(UPLOAD_DIR, unique_filename)
-    
-    with open(file_path, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
-        
-    return {
-        "success": True,
-        "filename": file.filename,
-        "file_path": file_path.replace("\\", "/")
-    }

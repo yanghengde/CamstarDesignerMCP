@@ -41,7 +41,6 @@ async def get_designer_environment() -> dict:
         "inventory_limit": 100, "access_drivers": await asyncio.to_thread(mdb.access_drivers),
         "metadata_export_configured": bool(executable),
         "metadata_export_available": bool(executable and executable.is_file() and executable.suffix.lower() == ".exe"),
-        "legacy_modeling_tools_enabled": config.ENABLE_LEGACY_MODELING_TOOLS,
         "automatic_import_available": False, "database_publish_available": False,
     }
 

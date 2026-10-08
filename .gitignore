@@ -31,9 +31,6 @@ memory.json
 .DS_Store
 Thumbs.db
 
-# Legacy files (kept for reference, remove when ready)
-
-# Local scratch output and settings
+# Local development output
 tmp/
-.claude/settings.local.json
 ~$*

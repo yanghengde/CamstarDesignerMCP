@@ -264,19 +264,6 @@
             align-items: center;
         }
 
-        #uploadBtn {
-            background: #f1f3f4;
-            color: #5f6368;
-            box-shadow: none;
-            border: 1px solid #dadce0;
-        }
-
-        #uploadBtn:hover {
-            background: #e8eaed;
-            transform: translateY(-2px);
-            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
-        }
-
         input[type="text"] {
             flex-grow: 1;
             padding: 16px 24px;
@@ -402,24 +389,9 @@
             <!-- Content will be injected dynamically via JS -->
         </div>
 
-        <!-- Attachment Area -->
-        <div id="attachmentArea" style="display: none; padding: 10px 30px; background: #f8f9fa; border-top: 1px solid #eee; align-items: center; gap: 10px; font-size: 0.85rem; color: #5f6368;">
-            <svg viewBox="0 0 24 24" style="width: 16px; height: 16px; fill: #5f6368;">
-                <path d="M16.5 6v11.5c0 2.21-1.79 4-4 4s-4-1.79-4-4V5c0-3.31 2.69-6 6-6s6 2.69 6 6v10c0 4.42-3.58 8-8 8s-8-3.58-8-8V4h2v11c0 3.31 2.69 6 6 6s6-2.69 6-6V5c0-2.21-1.79-4-4-4s-4 1.79-4 4v12.5c0 1.1.9 2 2 2s2-.9 2-2V6h2z"></path>
-            </svg>
-            <span id="attachmentName">file.xlsx</span>
-            <span id="removeAttachmentBtn" style="color: #e74c3c; cursor: pointer; font-weight: bold; margin-left: auto;" title="清除附件">✕</span>
-        </div>
-
         <!-- Input Area -->
         <div class="input-panel">
-            <input type="file" id="fileInput" accept=".xlsx,.xls,.csv" style="display: none;">
-            <button id="uploadBtn" title="上传 Excel 文件">
-                <svg viewBox="0 0 24 24" style="fill: #5f6368;">
-                    <path d="M16.5 6v11.5c0 2.21-1.79 4-4 4s-4-1.79-4-4V5c0-3.31 2.69-6 6-6s6 2.69 6 6v10c0 4.42-3.58 8-8 8s-8-3.58-8-8V4h2v11c0 3.31 2.69 6 6 6s6-2.69 6-6V5c0-2.21-1.79-4-4-4s-4 1.79-4 4v12.5c0 1.1.9 2 2 2s2-.9 2-2V6h2z"></path>
-                </svg>
-            </button>
-            <input type="text" id="inputBox" placeholder="输入自然语言指令进行系统操作..." autocomplete="off">
+            <input type="text" id="inputBox" placeholder="输入 Designer 元数据设计需求..." autocomplete="off">
             <button id="sendBtn">
                 <!-- Send Icon SVG -->
                 <svg viewBox="0 0 24 24">
@@ -440,19 +412,12 @@
         const sendBtn = document.getElementById('sendBtn');
         const stopBtn = document.getElementById('stopBtn');
         const messagesDiv = document.getElementById('msgs');
-        const uploadBtn = document.getElementById('uploadBtn');
-        const fileInput = document.getElementById('fileInput');
-        const attachmentArea = document.getElementById('attachmentArea');
-        const attachmentName = document.getElementById('attachmentName');
-        const removeAttachmentBtn = document.getElementById('removeAttachmentBtn');
-        let cachedAttachment = null;
-
         const typingIndicator = document.createElement('div');
         typingIndicator.className = 'typing';
         typingIndicator.id = 'typing';
         typingIndicator.innerHTML = '<div class="typing-dots"><div class="dot"></div><div class="dot"></div><div class="dot"></div></div><span>Agent 正在查询并处理决策...</span>';
 
-        let currentUsername = "CamstarAdmin";
+        let currentUsername = "designer";
         let currentSessionId = null;
         let abortController = null;
 
@@ -593,25 +558,14 @@
 
         async function handleSend() {
             const text = input.value.trim();
-            if (!text && !cachedAttachment) return;
-
-            let finalMessage = text;
-            let displayMessage = text;
-
-            if (cachedAttachment) {
-                finalMessage = `${text}\n\n(已附带上传文件 [${cachedAttachment.filename}]，本地路径: [${cachedAttachment.file_path}])`;
-                displayMessage = `${text ? text + ' ' : ''}📎 [${cachedAttachment.filename}]`;
-            }
+            if (!text) return;
 
             input.value = '';
             input.disabled = true;
             sendBtn.style.display = 'none';
             stopBtn.style.display = 'flex';
 
-            appendMessage('user', displayMessage);
-
-            cachedAttachment = null;
-            attachmentArea.style.display = 'none';
+            appendMessage('user', text);
 
             typingIndicator.style.display = 'flex';
             const typingText = typingIndicator.querySelector('span');
@@ -621,7 +575,7 @@
             abortController = new AbortController();
 
             try {
-                const reqBody = { message: finalMessage, username: currentUsername };
+                const reqBody = { message: text, username: currentUsername };
                 if (currentSessionId) reqBody.session_id = currentSessionId;
                 
                 const response = await fetch('/chat', {
@@ -723,57 +677,6 @@
             if (abortController) {
                 abortController.abort();
             }
-        });
-
-        uploadBtn.addEventListener('click', () => {
-            fileInput.click();
-        });
-
-        fileInput.addEventListener('change', async (e) => {
-            const file = e.target.files[0];
-            if (!file) return;
-
-            const formData = new FormData();
-            formData.append('file', file);
-
-            input.disabled = true;
-            sendBtn.style.display = 'none';
-            stopBtn.style.display = 'flex';
-            typingIndicator.style.display = 'flex';
-            typingIndicator.querySelector('span').textContent = `正在上传文件 ${file.name}...`;
-            scrollToBottom();
-
-            try {
-                const response = await fetch('/api/upload', {
-                    method: 'POST',
-                    body: formData
-                });
-                
-                const result = await response.json();
-                if (result.success) {
-                    cachedAttachment = {
-                        filename: result.filename,
-                        file_path: result.file_path
-                    };
-                    attachmentName.textContent = result.filename;
-                    attachmentArea.style.display = 'flex';
-                } else {
-                    alert(`文件上传失败: ${result.message || '未知错误'}`);
-                }
-            } catch (err) {
-                alert(`文件上传请求失败: ${err.message}`);
-            } finally {
-                fileInput.value = '';
-                input.disabled = false;
-                stopBtn.style.display = 'none';
-                sendBtn.style.display = 'flex';
-                typingIndicator.style.display = 'none';
-            }
-        });
-
-        removeAttachmentBtn.addEventListener('click', () => {
-            cachedAttachment = null;
-            attachmentArea.style.display = 'none';
         });
 
         sendBtn.addEventListener('click', handleSend);

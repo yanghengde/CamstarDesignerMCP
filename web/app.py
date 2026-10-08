@@ -10,9 +10,6 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
 from config import (
-    AGENT_ENGINE,
-    CAMSTAR_BASE_URL,
-    ENABLE_LEGACY_MODELING_TOOLS,
     ENABLE_MCP_HTTP,
     MCP_ALLOWED_HOSTS,
     MCP_ALLOWED_ORIGINS,
@@ -24,24 +21,19 @@ from agent.llm_client import oai_client, openai_tools, register_tools
 from tools import mcp
 from web.routes import router
 from web.mcp_transport import BearerTokenMiddleware
+from agent.langgraph_runtime import init_langgraph_runtime, close_langgraph_runtime
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期：启动时加载记忆和注册工具。"""
-    if ENABLE_LEGACY_MODELING_TOOLS and (not CAMSTAR_BASE_URL or CAMSTAR_BASE_URL == "http://localhost/Modeling"):
-        print("[WARN] 未找到有效的 CAMSTAR_BASE_URL，请检查 .env 配置。")
-
     # 恢复历史记忆
     init_memory()
 
     # 注册 MCP 工具
     await register_tools()
 
-    if AGENT_ENGINE == "langgraph":
-        from agent.langgraph_runtime import init_langgraph_runtime
-
-        await init_langgraph_runtime(oai_client, openai_tools)
+    await init_langgraph_runtime(oai_client, openai_tools)
 
     print("[READY] Web 服务启动就绪！")
     mcp_http_app = getattr(app.state, "mcp_http_app", None)
@@ -54,14 +46,7 @@ async def lifespan(app: FastAPI):
         else:
             yield
     finally:
-        if AGENT_ENGINE == "langgraph":
-            from agent.langgraph_runtime import close_langgraph_runtime
-
-            await close_langgraph_runtime()
-        # 应用关闭时，清理 HTTP 连接池，释放网络端口
-        from core.http_client import close_client
-
-        await close_client()
+        await close_langgraph_runtime()
 
 
 
@@ -84,7 +69,7 @@ def create_app() -> FastAPI:
         if not MCP_API_KEY:
             raise RuntimeError(
                 "ENABLE_MCP_HTTP=True requires MCP_API_KEY. "
-                "Refusing to expose Camstar write tools without authentication."
+                "Refusing to expose Designer metadata tools without authentication."
             )
 
         mcp_http_app = mcp.http_app(

@@ -20,10 +20,6 @@ from config import EXPERIENCE_DB
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-CONTAINER_START_SKILL_DIR = (
-    PROJECT_ROOT / ".codex" / "skills" / "camstar-container-start"
-)
-
 _ERROR_MARKERS = (
     "❌",
     "error",
@@ -230,30 +226,6 @@ def get_experience_status() -> dict[str, int]:
     }
 
 
-def _is_container_start_context(message: str, tool_names: set[str]) -> bool:
-    if "container_start" in tool_names:
-        return True
-    normalized = message.casefold()
-    keywords = (
-        "container start",
-        "container_start",
-        "序列号",
-        "容器启动",
-        "启动container",
-        "启动 container",
-        "自动编号",
-    )
-    return any(keyword in normalized for keyword in keywords)
-
-
-def _read_skill_reference(name: str) -> str:
-    path = CONTAINER_START_SKILL_DIR / "references" / name
-    try:
-        return path.read_text(encoding="utf-8")
-    except OSError:
-        return ""
-
-
 def build_runtime_experience_context(
     message: str,
     tool_names: set[str] | None = None,
@@ -261,26 +233,12 @@ def build_runtime_experience_context(
     """Build reviewed, relevant context without changing persisted chat history."""
     tool_names = tool_names or set()
     sections: list[str] = []
-    is_start_context = _is_container_start_context(message, tool_names)
-    if is_start_context:
-        contract = _read_skill_reference("start-contract.md")
-        failures = _read_skill_reference("known-failures.md")
-        if contract or failures:
-            sections.append(
-                "The following project rules are verified Container Start "
-                "knowledge. Follow them over generic assumptions:\n"
-                f"{contract}\n{failures}"
-            )
-
     approved = list_candidates("approved", limit=50)
     relevant_rules = []
     for item in approved:
         tool_name = item["tool_name"]
-        if tool_names and tool_name not in tool_names:
+        if not tool_names or tool_name not in tool_names:
             continue
-        if not tool_names:
-            if not (is_start_context and tool_name == "container_start"):
-                continue
         relevant_rules.append(
             f"- Tool {tool_name}, approved candidate #{item['id']}: "
             f"{item['resolution']}"

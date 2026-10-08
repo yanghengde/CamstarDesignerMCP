@@ -8,7 +8,6 @@ MCP 工具注册中心
 import logging
 import importlib
 from fastmcp import FastMCP
-from config import ENABLE_LEGACY_MODELING_TOOLS
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
@@ -26,13 +25,6 @@ mcp = FastMCP(
 # 按模块导入工具 —— 工具通过 @mcp.tool 自动注册
 # -------------------------------------------------------
 _module_names = ["designer", "system_info"]
-if ENABLE_LEGACY_MODELING_TOOLS:
-    _module_names += [
-        "specs", "operations", "workflows", "products", "mfgorders",
-        "container_start", "container_moves", "container_quality",
-        "numbering_rules", "container_levels", "queries", "mfglines",
-        "producttypes", "excel_importer",
-    ]
 _modules = [importlib.import_module(f"tools.{name}") for name in _module_names]
 
 

@@ -21,7 +21,6 @@ def test_chat_stream_serializes_unhandled_runtime_error(monkeypatch):
             )
         ]
 
-    monkeypatch.setattr(llm_client, "AGENT_ENGINE", "langgraph")
     monkeypatch.setattr(runtime, "langgraph_chat_stream", broken_stream)
 
     events = asyncio.run(collect())

@@ -18,17 +18,6 @@ from config import (
 )
 
 
-CREATE_TOOL_NAMES = {"container_start"}
-UPDATE_TOOL_NAMES = {
-    "container_move",
-    "container_move_in",
-    "container_move_out",
-    "container_defect",
-    "rework",
-    "execute_query_inquiry_event",
-}
-
-
 @dataclass(frozen=True)
 class MutationCounts:
     creates: int = 0
@@ -59,9 +48,9 @@ class SafetyDecision:
 
 def classify_tool(name: str) -> str | None:
     """Return the mutation category for a tool, or ``None`` if read-only."""
-    if name.startswith("create_") or name in CREATE_TOOL_NAMES:
+    if name.startswith("create_"):
         return "create"
-    if name.startswith(("update_", "patch_", "rebuild_")) or name in UPDATE_TOOL_NAMES:
+    if name.startswith(("update_", "patch_", "rebuild_")):
         return "update"
     if name.startswith("delete_"):
         return "delete"
@@ -78,7 +67,7 @@ def _argument_item_count(arguments: str) -> int:
     if not isinstance(payload, dict):
         return 1
 
-    for key in ("container_names", "items", "records", "entities"):
+    for key in ("items", "records", "entities"):
         value = payload.get(key)
         if isinstance(value, list):
             return max(1, len(value))
@@ -124,47 +113,6 @@ def evaluate_mutations(
     if totals.deletes > SAFE_DELETE_THRESHOLD:
         categories.append("删除")
     return SafetyDecision(bool(categories), tuple(categories), totals)
-
-
-def infer_intended_mutations(
-    message: str,
-    pending_tool_calls: Iterable[dict],
-) -> MutationCounts:
-    """Conservatively infer an explicitly stated Container creation count.
-
-    This protects sequential tool planners that emit one Start call at a time:
-    an explicit request for 50 independent Containers must be approved before
-    the first write, not after call 20.
-    """
-    calls = list(pending_tool_calls)
-    if not any(
-        (call.get("function") or {}).get("name") == "container_start"
-        for call in calls
-    ):
-        return MutationCounts()
-
-    normalized = (message or "").casefold()
-    patterns = (
-        r"(?:生成|创建|启动|start)?\s*(\d{1,6})\s*(?:个|条)?\s*(?:独立的?)?\s*(?:container|容器|序列号)",
-        r"(?:container|容器|序列号).*?(\d{1,6})\s*(?:个|条)",
-    )
-    counts = [
-        int(match.group(1))
-        for pattern in patterns
-        for match in re.finditer(pattern, normalized, flags=re.IGNORECASE)
-    ]
-
-    range_match = re.search(
-        r"(?:sn)?(\d{3,})\s*(?:~|～|-|至|到)\s*(?:sn)?(\d{3,})",
-        normalized,
-        flags=re.IGNORECASE,
-    )
-    if range_match:
-        start, end = int(range_match.group(1)), int(range_match.group(2))
-        if end >= start:
-            counts.append(end - start + 1)
-
-    return MutationCounts(creates=max(counts, default=0))
 
 
 def is_explicit_confirmation(text: str) -> bool:

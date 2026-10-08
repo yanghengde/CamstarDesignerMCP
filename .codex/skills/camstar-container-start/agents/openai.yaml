@@ -1,4 +1,0 @@
-interface:
-  display_name: "Camstar Container Start"
-  short_description: "Safely validate and start Camstar Containers"
-  default_prompt: "Use $camstar-container-start to validate and start Camstar Containers safely."

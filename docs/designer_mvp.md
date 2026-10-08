@@ -1,6 +1,6 @@
 # Designer MCP 第一阶段
 
-服务名称为 `CamstarDesigner`。浏览器聊天和外部 MCP 共用工具。默认关闭复制过来的业务实例创建、Shopfloor 事务和 Query 工具；设置 `ENABLE_LEGACY_MODELING_TOOLS=True` 才注册这些兼容能力。
+服务名称为 `CamstarDesigner`。浏览器聊天和外部 MCP 共用工具。所有已注册工具均用于 Designer 元数据设计。
 
 ## 工具
 
@@ -70,7 +70,7 @@ MetadataExport -a -b base.mdb -m modified.mdb -o changes.xml -r report.html
 
 当前安装目录中已确认存在 CIMS.exe、CIMSClient.exe 和 Administration WebAPI 的 OECAdmin.WebApi.Server.dll。在已检查的 Camstar 和 Common Files/Camstar 目录内没有定位到独立 MetadataExport.exe。存在 WebAPI 组件不等于已经验证 Designer 编辑或导入 API；下一阶段需要检查其路由、身份验证、文件选择和实际操作语义。
 
-2026-10-08 验证记录：项目专用 .venv 安装 requirements-dev.txt，pip check 无依赖冲突；完整测试 90 项通过，包括三项显式启用的真实 MDB 本地副本集成测试及前后文件哈希检查。FastAPI 启动、首页响应和 LangGraph 检查点初始化通过，默认注册 13 个工具。
+验证使用项目专用 .venv 和 requirements-dev.txt；真实 MDB 本地副本集成测试需显式指定 DESIGNER_TEST_MDB，并在前后检查文件哈希。服务使用 LangGraph 检查点和 13 个 Designer 相关工具。
 
 1. 配置测试目录，放入真实 MDB 副本和一个已成功导入的简单客户字段 XML。
 2. 读取真实表结构，建立经过验证的对象、字段、继承、类型和存储映射读取适配器。
@@ -78,7 +78,7 @@ MetadataExport -a -b base.mdb -m modified.mdb -o changes.xml -r report.html
 4. 用官方 MetadataExport 比较导入前后副本，核对预期字段与意外变更。
 5. 在上述闭环通过后增加持久化字段映射、预期值更新、复杂定义和发布适配器。
 
-没有暴露未经验证的自动导入或 Update DB 工具。没有将 Modeling、Shopfloor 或 Query REST 当作 Designer 编辑 API。
+自动导入和 Update DB 尚未实现。
 
 ## 文档依据
 

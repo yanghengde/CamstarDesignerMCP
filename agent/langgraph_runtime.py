@@ -36,7 +36,6 @@ from agent.safety import (
     classify_tool,
     count_tool_calls,
     evaluate_mutations,
-    infer_intended_mutations,
     is_explicit_confirmation,
     is_explicit_rejection,
 )
@@ -232,12 +231,7 @@ def _policy_node(state: AgentState) -> dict[str, Any]:
     pending = state.get("pending_tool_calls", [])
     if state.get("approval_granted"):
         return {}
-    intended = infer_intended_mutations(
-        state.get("request_message", ""), pending
-    )
-    decision = evaluate_mutations(
-        _completed_counts(state), pending, intended=intended
-    )
+    decision = evaluate_mutations(_completed_counts(state), pending)
     if not decision.requires_approval:
         return {}
 

@@ -1,7 +1,7 @@
 """
 CLI 交互式 Agent
 ==================
-命令行版本的 Camstar AI 助手，用于终端调试。
+命令行版本的 Camstar Designer 助手，用于终端调试。
 Usage: python -m agent.cli
 """
 
@@ -13,30 +13,26 @@ sys.stdout.reconfigure(encoding='utf-8')
 
 import config  # noqa: F401  确保 .env 加载
 from openai import AsyncOpenAI
-from config import LLM_API_KEY, LLM_BASE_URL, LLM_MODEL, CAMSTAR_BASE_URL
+from config import LLM_API_KEY, LLM_BASE_URL, LLM_MODEL
 from agent.prompts import SYSTEM_PROMPT
 from agent.llm_client import register_tools, openai_tools
 from tools import get_tool_func
 
 
 async def main():
-    print("[START] 正在初始化 Camstar MCP Agent (CLI)...")
-
-    if not CAMSTAR_BASE_URL or CAMSTAR_BASE_URL == "http://localhost/Modeling":
-        print("[WARN] 未找到 CAMSTAR_BASE_URL，请确保 .env 文件配置正确")
-        return
+    print("[START] 正在初始化 Camstar Designer MCP Agent (CLI)...")
 
     client = AsyncOpenAI(api_key=LLM_API_KEY, base_url=LLM_BASE_URL)
 
     # 注册 MCP 工具
     await register_tools()
 
-    print(f"\n[OK] 成功加载了 {len(openai_tools)} 个 Camstar 建模能力 (MCP Tools)。\n")
+    print(f"\n[OK] 成功加载了 {len(openai_tools)} 个 Designer 工具 (MCP Tools)。\n")
     print("=" * 60)
-    print("欢迎使用 Camstar AI 助手！你可以问我类似于：")
-    print(" - '当前系统里有多少个 Spec？'")
-    print(" - '帮我查一下名叫 Incoming Inspection 的 Spec'")
-    print(" - '创建一个叫 TEST-001，版本号为1的Spec'")
+    print("欢迎使用 Camstar Designer 助手！你可以问我类似于：")
+    print(" - '检查 Designer 环境并列出元数据文件'")
+    print(" - '查询 InSite.mdb 中 Container 的字段和类型'")
+    print(" - '读取设计 XML，基于已有字段模板生成新增字段草案'")
     print("输入 'q' 或 'exit' 退出。")
     print("=" * 60)
 

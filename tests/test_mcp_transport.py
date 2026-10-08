@@ -50,7 +50,8 @@ def test_streamable_http_auth_initialize_list_and_call(monkeypatch):
     monkeypatch.setattr(app_module, "MCP_API_KEY", "integration-secret")
     monkeypatch.setattr(app_module, "MCP_ALLOWED_HOSTS", ["testserver:*"])
     monkeypatch.setattr(app_module, "MCP_ALLOWED_ORIGINS", [])
-    monkeypatch.setattr(app_module, "AGENT_ENGINE", "legacy")
+    monkeypatch.setattr(app_module, "init_langgraph_runtime", lambda *_: no_register())
+    monkeypatch.setattr(app_module, "close_langgraph_runtime", no_register)
     monkeypatch.setattr(app_module, "register_tools", no_register)
     monkeypatch.setattr(app_module, "init_memory", lambda: None)
 

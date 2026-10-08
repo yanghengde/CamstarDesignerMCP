@@ -7,9 +7,6 @@ openai>=1.0.0
 fastapi>=0.142.0,<0.143.0
 starlette>=1.7.0,<2.0.0
 uvicorn>=0.20.0
-python-multipart>=0.0.32
-pandas>=2.0.0
-openpyxl>=3.1.0
 defusedxml>=0.7.1,<1.0.0
 pyodbc>=5.2.0,<6.0.0; sys_platform == 'win32'
 # 0.6.x stays compatible with the LangChain 0.3 packages used in this environment.

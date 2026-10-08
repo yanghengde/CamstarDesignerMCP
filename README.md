@@ -2,7 +2,7 @@
 
 Siemens Opcenter (Camstar) Designer 元数据助手，复用 FastMCP、FastAPI、LangGraph 和自然语言对话框架。
 
-当前是第一阶段 MVP：读取本地元数据、生成字段变更草案、校验并比较差异。默认仅注册 Designer 工具；原有 Modeling/Shopfloor 工具保留在源码中，可显式启用。
+当前是第一阶段 MVP：读取本地元数据、生成字段变更草案、校验并比较差异。所有工具仅服务于 Designer 元数据设计。
 
 ## 当前能力
 
@@ -25,16 +25,15 @@ Copy-Item .env.example .env  # 已有 .env 时不要覆盖
 .\.venv\Scripts\python.exe main.py
 ```
 
-聊天地址默认 http://127.0.0.1:8031/，与原 Modeling 项目 8030 端口分开。
+聊天地址默认 http://127.0.0.1:8031/。
 
-配置 `.env` 中的 LLM 接口用于自然语言聊天。离线演示和 MCP 文件工具不需要调用 LLM 或 Camstar REST。
+配置 `.env` 中的 LLM 接口用于自然语言聊天。离线演示和 MCP 文件工具不需要调用 LLM。
 
 ```ini
 SERVER_PORT=8031
 DESIGNER_ROOT=data/designer
 DESIGNER_METADATA_EXPORT_EXE=
 DESIGNER_EXPORT_TIMEOUT=120
-ENABLE_LEGACY_MODELING_TOOLS=False
 ```
 
 把测试 MDB 的副本和 Designer 导出的 XML 放入 `DESIGNER_ROOT`。不要把生产 MDB 作为实验输入。需要官方差异导出时，再填写已安装的 `MetadataExport.exe` 的绝对路径。MDB 读取要求 Windows Access ODBC 驱动与 Python 位数一致。
@@ -84,4 +83,4 @@ MCP_ALLOWED_HOSTS=localhost:*,127.0.0.1:*,[::1]:*
 
 已取得服务器 MDB 的本地副本，并验证表结构、CDO/字段与类型读取。下一步仍需要真实字段导出样例和可用的 Designer/MetadataExport 程序，完成工作区继承解析、测试导入和导出核对，再开发存储映射及发布。
 
-工具参数、文档依据和实施范围见 [Designer MVP 说明](docs/designer_mvp.md)。复制前的功能说明保留在 [原 Modeling 文档](docs/legacy_modeling_readme.md)。
+工具参数、文档依据和实施范围见 [Designer MVP 说明](docs/designer_mvp.md)。

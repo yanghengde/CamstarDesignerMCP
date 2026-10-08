@@ -4,7 +4,6 @@ import asyncio
 from copy import deepcopy
 from hashlib import sha256
 import json
-import os
 from pathlib import Path
 import subprocess
 import sys
@@ -192,13 +191,16 @@ def test_compare_ignores_format_and_action_but_finds_attribute_change(metadata):
     assert "CDOFieldDefinition:existingtext" in diff["changed"][0]
 
 
-def test_default_registry_excludes_production_tools_in_clean_process():
-    env = dict(os.environ, ENABLE_LEGACY_MODELING_TOOLS="False")
-    code = "import asyncio,json; from tools import mcp,get_tool_func; print(json.dumps([t.name for t in asyncio.run(mcp.list_tools())])); assert get_tool_func('container_start') is None"
-    names = json.loads(subprocess.check_output([sys.executable, "-c", code], env=env, text=True))
-    assert "generate_designer_field_package" in names
-    assert "container_start" not in names
-    assert "create_spec" not in names
+def test_registry_contains_only_designer_tools_in_clean_process():
+    code = "import asyncio,json; from tools import mcp; print(json.dumps([t.name for t in asyncio.run(mcp.list_tools())]))"
+    names = json.loads(subprocess.check_output([sys.executable, "-c", code], text=True))
+    assert set(names) == {
+        "get_designer_environment", "inspect_designer_mdb", "read_designer_mdb_table",
+        "list_designer_mdb_cdos", "get_designer_mdb_cdo", "list_designer_cdos",
+        "get_designer_cdo", "validate_designer_xml", "compare_designer_xml",
+        "generate_designer_field_package", "check_designer_package",
+        "export_designer_metadata_diff", "get_mcp_server_status",
+    }
 
 
 def test_mdb_connect_enforces_readonly(monkeypatch, tmp_path):

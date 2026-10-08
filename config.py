@@ -1,51 +1,13 @@
 """
-Camstar Modeling MCP — 统一配置中心
+Camstar Designer MCP — 统一配置中心
 ====================================
 所有环境变量在此集中读取，其他模块通过 from config import xxx 使用。
 """
 
 import os
-from urllib.parse import urlsplit, urlunsplit
 from dotenv import load_dotenv
 
 load_dotenv()
-
-# ---------------------------------------------------------------------------
-# Camstar API 配置
-# ---------------------------------------------------------------------------
-CAMSTAR_BASE_URL = os.getenv("CAMSTAR_BASE_URL", "http://localhost/Modeling")
-
-
-def _derive_sibling_url(modeling_url: str, service_name: str) -> str:
-    """Derive a sibling Camstar API URL from a Modeling API URL."""
-    parsed = urlsplit(modeling_url.rstrip("/"))
-    path_parts = parsed.path.rstrip("/").split("/")
-    if path_parts[-1].casefold() == "modeling":
-        path_parts[-1] = service_name
-    else:
-        path_parts.append(service_name)
-    return urlunsplit((parsed.scheme, parsed.netloc, "/".join(path_parts), "", ""))
-
-
-def _derive_shopfloor_url(modeling_url: str) -> str:
-    """Derive the sibling Shopfloor API URL from a Modeling API URL."""
-    return _derive_sibling_url(modeling_url, "Shopfloor")
-
-
-CAMSTAR_SHOPFLOOR_BASE_URL = os.getenv(
-    "CAMSTAR_SHOPFLOOR_BASE_URL",
-    _derive_shopfloor_url(CAMSTAR_BASE_URL),
-)
-CAMSTAR_QUERY_BASE_URL = os.getenv(
-    "CAMSTAR_QUERY_BASE_URL",
-    _derive_sibling_url(CAMSTAR_BASE_URL, "Query"),
-)
-CAMSTAR_USERNAME = os.getenv("CAMSTAR_USERNAME", "CamstarAdmin")
-CAMSTAR_PASSWORD = os.getenv("CAMSTAR_PASSWORD", "Cam1star")
-CAMSTAR_TIMEOUT = int(os.getenv("CAMSTAR_TIMEOUT", "30"))
-
-# Maximum response characters before we trim to key fields only
-MAX_RESPONSE_LENGTH = int(os.getenv("MAX_RESPONSE_LENGTH", "4000"))
 
 # ---------------------------------------------------------------------------
 # LLM 大模型配置（兼容 OpenAI 协议的任意模型）
@@ -68,8 +30,6 @@ LANGGRAPH_RECURSION_LIMIT = max(
 MEMORY_FILE = os.path.join("data", "memory.json")
 SESSIONS_DIR = os.path.join("data", "sessions")
 
-# Agent execution engine.  Keep "legacy" as a rollback option during rollout.
-AGENT_ENGINE = os.getenv("AGENT_ENGINE", "langgraph").strip().lower()
 LANGGRAPH_CHECKPOINT_DB = os.getenv(
     "LANGGRAPH_CHECKPOINT_DB",
     os.path.join("data", "langgraph_checkpoints.sqlite"),
@@ -83,7 +43,7 @@ EXPERIENCE_DB = os.getenv(
 # MCP Streamable HTTP transport
 # ---------------------------------------------------------------------------
 # The browser's /chat SSE route is separate from the MCP protocol endpoint.
-# External MCP access is deliberately opt-in because most tools can mutate MES.
+# External access to local Designer metadata is opt-in.
 ENABLE_MCP_HTTP = os.getenv("ENABLE_MCP_HTTP", "False").lower() in (
     "true",
     "1",
@@ -119,9 +79,9 @@ SAFE_DELETE_THRESHOLD = int(os.getenv("SAFE_DELETE_THRESHOLD", "0")) # Default 0
 # ---------------------------------------------------------------------------
 ENABLE_PERFORMANCE_LOG = os.getenv("ENABLE_PERFORMANCE_LOG", "True").lower() in ("true", "1", "yes")
 
-# Designer uses local metadata files; legacy REST tools are opt-in.
-ENABLE_LEGACY_MODELING_TOOLS = os.getenv("ENABLE_LEGACY_MODELING_TOOLS", "False").lower() in ("true", "1", "yes")
+# Designer local metadata and browser session identity.
 DESIGNER_ROOT = os.getenv("DESIGNER_ROOT", os.path.join("data", "designer"))
 DESIGNER_METADATA_EXPORT_EXE = os.getenv("DESIGNER_METADATA_EXPORT_EXE", "")
 DESIGNER_EXPORT_TIMEOUT = int(os.getenv("DESIGNER_EXPORT_TIMEOUT", "120"))
 SERVER_PORT = int(os.getenv("SERVER_PORT", "8031"))
+CHAT_USERNAME = os.getenv("CHAT_USERNAME", "designer")
