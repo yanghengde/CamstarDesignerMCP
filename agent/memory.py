@@ -8,6 +8,7 @@ import os
 import glob
 import json
 import uuid
+import time
 
 from config import MEMORY_FILE, SESSIONS_DIR
 from agent.prompts import SYSTEM_PROMPT
@@ -15,6 +16,12 @@ from agent.titles import clean_title, first_message_title, is_placeholder_title
 
 # 内存中的状态字典
 user_memories: dict = {}
+
+
+def _ensure_session_times(session: dict, fallback: float = 0):
+    """Keep activity timestamps separate from reads and maintenance writes."""
+    session.setdefault('created_at', fallback)
+    session.setdefault('updated_at', fallback or session['created_at'])
 
 
 def get_user_dir(username: str) -> str:
@@ -54,6 +61,10 @@ def save_memory():
 
 def save_user_session(username: str, session_id: str):
     """增量保存单个会话及元数据，极大提升性能"""
+    session = user_memories[username]['sessions'][session_id]
+    _ensure_session_times(session)
+    session['updated_at'] = time.time()
+    user_memories[username]['active_session'] = session_id
     _save_metadata(username)
     save_session(username, session_id)
 
@@ -76,6 +87,8 @@ def load_memory() -> dict:
                         }
                     else:
                         mem[uname] = udata
+                    for session in mem[uname].get('sessions', {}).values():
+                        _ensure_session_times(session, os.path.getmtime(MEMORY_FILE))
         except Exception:
             pass
 
@@ -106,6 +119,7 @@ def load_memory() -> dict:
                         s_data = json.load(fs)
                         sid = s_data.get("id")
                         if sid:
+                            _ensure_session_times(s_data, os.path.getmtime(s_file))
                             mem[uname]["sessions"][sid] = s_data
                 except Exception:
                     pass
@@ -128,17 +142,23 @@ def _migrate_if_needed(username: str):
             "active_session": "default"
         }
         _save_metadata(username)
+        _ensure_session_times(user_memories[username]['sessions']['default'])
         save_session(username, "default")
 
 
 def get_sessions(username: str) -> list:
-    """获取指定用户的所有会话列表"""
+    """获取所有会话，按最后一次内容更新倒序排列。"""
     if username not in user_memories:
         return []
     _migrate_if_needed(username)
     sessions = user_memories[username].get("sessions", {})
-    # 按时间或自然序号直接吐出列表信息
-    return [{"id": k, "title": v.get("title", "会话")} for k, v in sessions.items()]
+    result = []
+    for sid, session in sessions.items():
+        _ensure_session_times(session)
+        result.append({'id': sid, 'title': session.get('title', '会话'),
+                       'created_at': session['created_at'], 'updated_at': session['updated_at']})
+    # Reverse insertion order provides a stable tie-breaker for legacy data.
+    return sorted(reversed(result), key=lambda session: (session['updated_at'], session['created_at']), reverse=True)
 
 
 def create_session(username: str) -> str:
@@ -149,9 +169,12 @@ def create_session(username: str) -> str:
         _migrate_if_needed(username)
     
     session_id = str(uuid.uuid4())
+    created = time.time()
     user_memories[username]["sessions"][session_id] = {
         "id": session_id,
         "title": f"新对话 {len(user_memories[username]['sessions']) + 1}",
+        "created_at": created,
+        "updated_at": created,
         "messages": [{"role": "system", "content": SYSTEM_PROMPT}]
     }
     user_memories[username]["active_session"] = session_id
@@ -209,8 +232,10 @@ def init_memory():
     user_memories.clear()
     user_memories.update(loaded)
     # Repair unnamed conversations using their first visible message only.
-    for user in user_memories.values():
-        for session in user.get('sessions', {}).values():
+    for username, user in user_memories.items():
+        for sid, session in user.get('sessions', {}).items():
+            file_path = os.path.join(get_user_dir(username), f'{sid}.json')
+            _ensure_session_times(session, os.path.getmtime(file_path) if os.path.isfile(file_path) else 0)
             if not is_placeholder_title(session.get('title', '')):
                 continue
             first = next((message for message in session.get('messages', [])

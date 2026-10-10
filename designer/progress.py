@@ -55,7 +55,7 @@ def same_file(a, b):
 
 def tasks(username):
     result = []
-    for session in reversed(get_sessions(username)):
+    for session in get_sessions(username):
         messages = get_user_messages(username, session['id'])
         if any(item.get('role') == 'user' for item in messages):
             result.append(session)

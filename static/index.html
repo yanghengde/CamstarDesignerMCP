@@ -431,12 +431,12 @@
             sessionListUI.replaceChildren();
             const recordList = document.getElementById('recordList');
             recordList.replaceChildren();
-            document.getElementById('sessionCount').textContent = sessions.length;
+            document.getElementById('sessionCount').textContent = Math.min(sessions.length, 30);
             if (!sessions.length) {
                 sessionListUI.innerHTML = '<p class="sidebar-empty">还没有历史对话</p>';
                 recordList.innerHTML = '<p class="sidebar-empty">开始一个设计对话，记录将显示在这里。</p>';
             }
-            sessions.forEach(session => {
+            sessions.forEach((session, index) => {
                 const item = document.createElement('button');
                 item.type = 'button';
                 item.className = 'session-item' + (currentSessionId === session.id ? ' active' : '');
@@ -444,7 +444,7 @@
                 item.title = item.textContent;
                 if (currentSessionId === session.id) item.setAttribute('aria-current', 'true');
                 item.addEventListener('click', () => selectSession(session.id));
-                sessionListUI.appendChild(item);
+                if (index < 30) sessionListUI.appendChild(item);
                 const record = document.createElement('button');
                 record.type = 'button';
                 record.className = 'record-item';
@@ -459,7 +459,7 @@
 
         async function refreshSessionsList() {
             const data = await fetchJson(`/sessions/${encodeURIComponent(currentUsername)}`);
-            sessions = (data.sessions || []).slice().reverse();
+            sessions = (data.sessions || []).slice();
             if (!currentSessionId && sessions.length) currentSessionId = sessions[0].id;
             renderSessions();
         }
@@ -722,7 +722,8 @@
             }
             document.getElementById('username').textContent = currentUsername;
             document.getElementById('userAvatar').textContent = currentUsername.slice(0, 1).toUpperCase();
-            try { await refreshSessionsList(); }
+            let sessionsLoaded = false;
+            try { await refreshSessionsList(); sessionsLoaded = true; }
             catch (error) {
                 sessionListUI.innerHTML = '<p class="sidebar-empty">记录加载失败，请刷新重试</p>';
                 showNotice(`无法加载设计记录：${error.message}`);
@@ -731,6 +732,13 @@
             if (requestedSession && sessions.some(session => session.id === requestedSession)) {
                 currentSessionId = requestedSession;
                 renderSessions();
+            }
+            if (sessionsLoaded && !currentSessionId) {
+                try {
+                    const data = await fetchJson(`/sessions/${encodeURIComponent(currentUsername)}/new`, { method: 'POST' });
+                    currentSessionId = data.session_id;
+                    await refreshSessionsList();
+                } catch (error) { showNotice(`创建对话失败：${error.message}`); }
             }
             await loadHistory();
             if (!currentSessionId) await refreshSessionsList().catch(() => {});
@@ -761,6 +769,7 @@
                     messageSaved = true;
                     if (data.session_id) currentSessionId = data.session_id;
                     attachmentDrafts = []; renderAttachmentDrafts();
+                    refreshSessionsList().catch(() => showNotice('最近对话刷新失败，可稍后刷新页面。'));
                 } else if (data.type === 'designer_result') {
                     showDesignerResult(data.result);
                 } else if (data.type === 'step') {

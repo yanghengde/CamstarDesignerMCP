@@ -249,7 +249,7 @@
                 document.getElementById('username').textContent = navigationUsername;
                 document.getElementById('userAvatar').textContent = navigationUsername.slice(0, 1).toUpperCase();
                 const data = await navigationJson(`/sessions/${encodeURIComponent(navigationUsername)}`);
-                const sessions = (data.sessions || []).slice().reverse();
+                const sessions = (data.sessions || []).slice(0, 30);
                 document.getElementById('sessionCount').textContent = sessions.length;
                 const list = document.getElementById('sessionListUI'); list.replaceChildren();
                 if (!sessions.length) { const empty = document.createElement('p'); empty.className = 'sidebar-empty'; empty.textContent = '还没有历史对话'; list.appendChild(empty); }
