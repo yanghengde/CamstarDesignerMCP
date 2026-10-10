@@ -10,9 +10,9 @@ from tools import mcp
 
 @mcp.tool
 async def prepare_designer_review(manifest_file: str, activate: bool = False) -> dict:
-    """把已成功保存的设计包复制到配置服务器的独立 Designer 查看目录，附带 SiteInfo。
+    """把最新设计更新到配置服务器的固定项目工作 MDB，附带 SiteInfo；后续批次使用相同路径。
 
-    activate=true 将 Designer 配置指向新副本并备份旧配置；用户明确要求在 Designer 中查看时可使用。
+    activate=true 将 Designer 配置指向固定工作文件并备份旧配置；用户明确要求在 Designer 中查看时可使用。
     已打开的 Designer 需先保存并关闭，再重新打开才能看到；不宣称已打开，不执行编译、发布或服务生成。
     """
     from designer.review import prepare
@@ -45,7 +45,7 @@ async def get_designer_capabilities() -> dict:
                          "wcf_generation_adapter_implemented": True,
                          "wcf_server_configured": bool(config.DESIGNER_SERVER_SHARE and config.DESIGNER_WINDOWS_USER and config.DESIGNER_WCF_ADDRESS),
                          "runtime_service_generation": False},
-            "scope": "isolated_local_mdb_copies_and_confirmed_test_database", "vendor_api_stability": "installed_assembly_version_requires_regression_tests"}
+            "scope": "stable_project_mdb_and_confirmed_test_database", "vendor_api_stability": "installed_assembly_version_requires_regression_tests"}
 
 
 @mcp.tool
@@ -132,7 +132,11 @@ async def analyze_designer_where_used(mdb_file: str, kind: str, name: str, owner
 
 @mcp.tool
 async def generate_designer_design_package(mdb_file: str, expected_sha256: str, operations: list[dict], workspace: str = "") -> dict:
-    """在独立MDB副本执行官方设计操作、重新加载并导出真实差异XML；不改原MDB，不发布数据库。
+    """执行官方设计操作、重新加载并导出真实差异XML，成功后更新同一个固定工作MDB；不发布数据库。
+
+    首次设计从指定来源建立项目工作文件，后续来源路径自动指向该工作文件，必须用最新读取的哈希。
+    发布后的下一轮首次修改前自动备份上一版，最多保留10个版本；后续批次不重复备份。
+    files['modified.mdb']与working_mdb返回固定工作路径；清单与核验快照单独留存。
 
     operations（顺序执行，最多50条）：
     create_cdo: name,parent,description,create_table,table_name,create_revision_base,create_maintenance。
@@ -161,7 +165,7 @@ async def generate_designer_cdo_package(
     mdb_file: str, expected_sha256: str, cdo_name: str, parent_cdo: str,
     fields: list[dict], workspace: str = "", description: str = "",
 ) -> dict:
-    """创建继承CDO和字段的设计副本及官方XML，不需要现有XML模板。例如ExProduct继承Product，ExDescription为String/max_length=200。
+    """创建继承CDO和字段并更新固定工作MDB，生成官方XML，不需要现有XML模板。例如ExProduct继承Product，ExDescription为String/max_length=200。
 
     fields每项{name,data_type,max_length,field_type,persistent,is_list,description}。
     String必须指定max_length；省略field_type时创建专用类型，避免改变共享类型。

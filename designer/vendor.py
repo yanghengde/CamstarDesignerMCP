@@ -68,7 +68,8 @@ def query(mdb_file: str, mode: str, kind: str, name: str = "", owner: str = "",
     if kind not in KINDS:
         raise ValueError(f"kind 必须为 {', '.join(KINDS)}")
     bounds(offset, limit)
-    source = source_path(mdb_file, ".mdb")
+    from designer import working
+    source = working.resolve(mdb_file)
     before = digest(source)
     assembly()  # Fail before creating a copy if the backend is not configured.
     folder = artifact_dir()
@@ -163,7 +164,9 @@ def export(folder: Path, baseline: Path, modified: Path) -> dict:
 
 def design(mdb_file: str, expected_sha256: str, workspace: str, operations: list[dict]) -> dict:
     validate_operations(operations)
-    source = source_path(mdb_file, ".mdb")
+    from designer import working
+    source = working.resolve(mdb_file)
+    project_id, work_state = working.context(source)
     before = digest(source)
     if before != expected_sha256:
         raise ValueError("来源 MDB SHA256 不匹配，请重新读取设计定义")
@@ -191,18 +194,33 @@ def design(mdb_file: str, expected_sha256: str, workspace: str, operations: list
     manifest = {
         "format_version": 2, "status": "saved_to_test_copy_and_exported", "ready_for_publish": False,
         "official_xml_import_verified": False, "database_published": False,
-        "source_file": str(source), "source_sha256": before, "source_suffix": ".mdb",
+        "source_file": str(baseline), "source_sha256": before, "source_suffix": ".mdb",
+        "working_project_id": project_id, "input_file": str(source),
+        "parent_manifest_file": work_state['latest_manifest'] if not work_state.get('backup_pending') else '',
         "workspace": workspace, "workspace_applied_to_mdb": True, "operations": operations,
         "artifacts": {"baseline.mdb": digest(baseline), "modified.mdb": digest(modified), "changes.xml": digest(xml_target)},
         "vendor_assembly_sha256": digest(assembly()), "validation": exported["validation"],
         "execution": applied,
     }
-    (folder / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    manifest_file = folder / "manifest.json"
+    manifest_file.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    working_mdb = working.commit(project_id, work_state, manifest_file, before)
     (folder / "report.md").write_text(
-        "# Designer 设计结果\n\n已通过官方元数据对象模型保存到独立 MDB 副本，并导出官方差异 XML。\n\n"
+        "# Designer 设计结果\n\n已通过官方元数据对象模型更新固定工作 MDB，并导出官方差异 XML。\n\n"
+        f"工作 MDB：{working_mdb}\n\n"
         f"工作区：{workspace}\n\n源 SHA256：{before}\n\n"
         "未通过 Designer XML Import 往返验证，未更新业务数据库，未生成运行服务。\n\n"
         "```json\n" + json.dumps(operations, ensure_ascii=False, indent=2) + "\n```\n", encoding="utf-8")
-    return {"status": manifest["status"], "ready_for_publish": False, "workspace": workspace,
+    result = {"status": manifest["status"], "ready_for_publish": False, "workspace": workspace,
             "execution": applied, "export": exported,
+            "working_project_id": project_id, "working_mdb": working_mdb,
             "files": {n: str(folder / n) for n in ("baseline.mdb", "modified.mdb", "changes.xml", "manifest.json", "report.md")}}
+    result['files']['modified.mdb'] = working_mdb
+    # Once handed to Designer, subsequent batches refresh the same server path.
+    if work_state.get('server_mdb'):
+        from designer import review
+        try:
+            result['review'] = review.prepare(str(manifest_file), False)
+        except ValueError as exc:
+            result['designer_sync_error'] = str(exc)
+    return result

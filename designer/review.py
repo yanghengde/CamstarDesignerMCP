@@ -15,12 +15,16 @@ from designer.publication import redact
 _lock = threading.Lock()
 
 
+def valid_server_file(value, name):
+    return bool(re.fullmatch(r'C:\\(?:Temp\\DesignerMCP\\Review_[0-9a-f]{32}|DesignerWorkspace\\[0-9a-f]{32})\\' + re.escape(name), value, re.IGNORECASE))
+
+
 def sync_file(manifest_file: str) -> dict:
     """Read the saved review MDB; never infer which file the GUI has open."""
     item = summary(manifest_file)
     receipt = item.get('review') or {}
     remote = receipt.get('server_mdb', '')
-    if not re.fullmatch(r'C:\\Temp\\DesignerMCP\\Review_[0-9a-f]{32}\\InSite\.mdb', remote, re.IGNORECASE):
+    if not valid_server_file(remote, 'InSite.mdb'):
         raise ValueError('请先准备本次设计的 Designer 文件')
     if config.DESIGNER_SERVER_SHARE.rstrip('\\').casefold() != ('\\\\' + config.DESIGNER_DB_SERVER + '\\C').casefold():
         raise ValueError('服务器共享配置不匹配')
@@ -55,6 +59,7 @@ def package(manifest_file: str) -> tuple[Path, dict]:
 
 
 def summary(manifest_file: str) -> dict:
+    from designer import working
     path, manifest = package(manifest_file)
     objects = list(dict.fromkeys(op.get('owner') or op.get('name') for op in manifest['operations']
                                if op.get('action') in ('create_cdo', 'add_field') or op.get('kind') == 'cdo'))
@@ -67,7 +72,13 @@ def summary(manifest_file: str) -> dict:
                 receipt = {key: saved.get(key) for key in ('server_mdb', 'server_siteinfo', 'activated', 'status')}
         except (ValueError, OSError):
             pass
-    return {'id': path.parent.name, 'manifest_file': str(path), 'mdb_file': str(path.parent / 'modified.mdb'),
+    work = working.summary(manifest['working_project_id']) if manifest.get('working_project_id') else None
+    current = True
+    if work:
+        current = digest(Path(work['mdb_file'])) == manifest['artifacts']['modified.mdb']
+    return {'id': path.parent.name, 'manifest_file': str(path),
+            'mdb_file': work['mdb_file'] if work and current else str(path.parent / 'modified.mdb'),
+            'working': work, 'is_current': current,
             'sha256': manifest['artifacts']['modified.mdb'], 'workspace': manifest['workspace'],
             'objects': [name for name in objects if name],
             'field_changes': sum(op.get('action') == 'add_field' for op in manifest['operations']),
@@ -91,8 +102,11 @@ def session_packages(messages: list[dict]) -> list[dict]:
 
 
 def prepare(manifest_file: str, activate: bool = False) -> dict:
-    """Copy into a unique remote review directory; optionally select for next launch."""
+    """Update the fixed project MDB; optionally select it for next launch."""
     item = summary(manifest_file)
+    from designer import working
+    _, manifest = package(manifest_file)
+    working.check_current(manifest)
     if not all((config.DESIGNER_SERVER_SHARE, config.DESIGNER_DB_SERVER, config.DESIGNER_WINDOWS_USER,
                 config.DESIGNER_WINDOWS_PASSWORD, config.DESIGNER_UI_EXE)):
         raise ValueError('请先配置 Designer 服务器共享、Windows 凭据和界面程序路径')
@@ -111,12 +125,29 @@ def prepare(manifest_file: str, activate: bool = False) -> dict:
         args = [str(shell), '-NoProfile', '-NonInteractive', '-File', str(Path(__file__).with_name('review_transfer.ps1')),
                 '-LocalMdb', item['mdb_file'], '-ExpectedSha256', item['sha256'], '-ResultFile', str(result_file),
                 '-Activate', str(bool(activate)).lower()]
+        if item.get('working'):
+            args += ['-ProjectId', item['working']['id'], '-BackupsDirectory', str(working.project_dir(item['working']['id']) / 'backups')]
         try:
             process = subprocess.run(args, env=env, capture_output=True, timeout=90,
                                      creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
             if process.returncode:
                 raise ValueError(redact(process.stderr.decode('utf-8', errors='replace'))[:2000])
             receipt = json.loads(result_file.read_text(encoding='utf-8-sig'))
+            if item.get('working'):
+                project_id = item['working']['id']
+                siteinfo = folder / 'review_siteinfo.mdb'
+                copied = subprocess.run([str(shell), '-NoProfile', '-NonInteractive', '-File', str(Path(__file__).with_name('progress_siteinfo.ps1')),
+                                         '-ServerFile', receipt['server_siteinfo'], '-LocalFile', str(siteinfo)],
+                                        env=env, capture_output=True, timeout=60,
+                                        creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+                if copied.returncode:
+                    raise ValueError('SiteInfo 保存失败：' + redact(copied.stderr.decode('utf-8', errors='replace'))[:1000])
+                state = working.load(project_id)
+                working.write_json(working.project_dir(project_id) / 'state.json', {**state,
+                                   'server_mdb': receipt['server_mdb'], 'server_siteinfo': receipt['server_siteinfo'],
+                                   'server_sha256': receipt['copied_sha256'],
+                                   'siteinfo_file': str(siteinfo)})
+                item['working'] = working.summary(project_id)
         except (OSError, subprocess.TimeoutExpired, ValueError) as exc:
             raise ValueError('Designer 交接失败：' + redact(str(exc))) from None
         instructions = ('保存并关闭当前 Designer，再重新打开。' if receipt.get('activated') else

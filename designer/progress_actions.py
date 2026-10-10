@@ -60,7 +60,17 @@ def publication_state(receipts, package):
 
 def prepare_plan(package, manifests):
     """Export the final owned MDB against its earliest owned baseline for a batch."""
+    if package.get('working'):
+        from designer import working
+        work = working.load(package['working']['id'])
+        if work['latest_manifest'] != package['manifest_file']:
+            raise ValueError('工作 MDB 已更新，请刷新后检查发布')
+        # A new chat still edits the same file. Compare its whole current cycle,
+        # including changes already saved to that file in earlier chats.
+        manifests = work.get('cycle_manifests') or manifests
     pairs = [publication.verified_manifest(path) for path in manifests]
+    if package.get('working'):
+        pairs.reverse()  # Stored in save order; the plan consumes newest first.
     if len({item['workspace'] for _, item in pairs}) != 1:
         raise ValueError('连续设计的工作区不一致，请在设计对话中核对')
     path = Path(package['manifest_file'])
@@ -129,7 +139,7 @@ def copy_siteinfo(package):
     import subprocess
     from designer.publication import redact
     remote = (package.get('review') or {}).get('server_siteinfo', '')
-    if not re.fullmatch(r'C:\\Temp\\DesignerMCP\\Review_[0-9a-f]{32}\\SiteInfo\.mdb', remote, re.IGNORECASE):
+    if not review.valid_server_file(remote, 'SiteInfo.mdb'):
         raise ValueError('请先准备 Designer 文件及 SiteInfo')
     if config.DESIGNER_SERVER_SHARE.rstrip('\\').casefold() != ('\\\\' + config.DESIGNER_DB_SERVER + '\\C').casefold():
         raise ValueError('服务器共享配置不匹配')

@@ -31,12 +31,12 @@ async def get_designer_environment() -> dict:
     files = []
     if root.is_dir():
         for path in root.rglob("*"):
-            if path.suffix.lower() in {".xml", ".mdb"} and path.is_file() and path.resolve().is_relative_to(root):
+            if path.suffix.lower() in {".xml", ".mdb"} and path.is_file() and path.resolve().is_relative_to(root) and not {'artifacts', 'backups'}.intersection(path.relative_to(root).parts):
                 files.append(str(path.relative_to(root)))
                 if len(files) == 100:
                     break
     executable = Path(config.DESIGNER_METADATA_EXPORT_EXE) if config.DESIGNER_METADATA_EXPORT_EXE else None
-    from designer import vendor
+    from designer import vendor, working
     published_baseline=None
     baseline_file=root/"published_baseline.json"
     if baseline_file.is_file():
@@ -44,12 +44,13 @@ async def get_designer_environment() -> dict:
     return {
         "root": str(root), "root_exists": root.is_dir(), "files": files,
         "published_baseline":published_baseline,
+        "working_projects": working.available(),
         "inventory_limit": 100, "access_drivers": await asyncio.to_thread(mdb.access_drivers),
         "metadata_export_configured": bool(executable),
         "metadata_export_available": bool(executable and executable.is_file() and executable.suffix.lower() == ".exe"),
         "automatic_import_available": False,
         "database_publish_available": config.DESIGNER_TEST_TARGET_CONFIRMED and bool(config.DESIGNER_DB_SERVER) and bool(config.DESIGNER_METADATA_ASSEMBLY and Path(config.DESIGNER_METADATA_ASSEMBLY).is_file()),
-        "source_candidates": sorted(str(p.relative_to(root)) for p in root.rglob("*.mdb") if "artifacts" not in p.relative_to(root).parts and p.resolve().is_relative_to(root))[:20] if root.is_dir() else [],
+        "source_candidates": sorted(str(p.relative_to(root)) for p in root.rglob("*.mdb") if not {'artifacts', 'backups'}.intersection(p.relative_to(root).parts) and p.resolve().is_relative_to(root))[:20] if root.is_dir() else [],
         "vendor_backend_available": bool(config.DESIGNER_METADATA_ASSEMBLY and Path(config.DESIGNER_METADATA_ASSEMBLY).is_file()),
         "design_entity_kinds": vendor.KINDS,
         "recommended_design_tool": "generate_designer_cdo_package",
@@ -212,6 +213,12 @@ async def check_designer_package(manifest_file: str) -> dict:
                 validate(load_xml(file)[0])
         source = source_path(manifest["source_file"], ".mdb")
         checks["source_unchanged"] = vendor.digest(source) == manifest["source_sha256"]
+        from designer import working
+        try:
+            working.check_current(manifest)
+            checks['working_mdb_current'] = True
+        except ValueError:
+            checks['working_mdb_current'] = False
         return {"intact": all(checks.values()), "checks": checks, "ready_for_publish": False,
                 "scope": "file_integrity_only", "status": manifest["status"],
                 "official_xml_import_verified": False, "database_published": False}

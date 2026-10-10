@@ -421,7 +421,7 @@
             for (const id of ['designNav', 'recordsNav']) document.getElementById(id).setAttribute('aria-disabled', String(locked));
             attachBtn.disabled = locked || !!pendingExcelPreview || attachmentDrafts.length >= 3;
             fileInput.disabled = locked;
-            document.querySelectorAll('.session-item, .record-item, .prompt-card, .attachment-remove, .review-actions button').forEach(button => { button.disabled = locked; });
+            document.querySelectorAll('.session-item, .record-item, .prompt-card, .attachment-remove, .review-actions button').forEach(button => { button.disabled = locked || button.dataset.archived === 'true'; });
             sendBtn.hidden = busy;
             stopBtn.hidden = !busy;
             messagesDiv.setAttribute('aria-busy', String(locked));
@@ -627,16 +627,20 @@
             const card = document.createElement('section'); card.className = 'designer-result';
             const title = document.createElement('h3'); title.textContent = '设计已保存 · 在 Designer 中继续'; card.appendChild(title);
             const objects = document.createElement('p'); objects.textContent = `对象：${result.objects.join('、') || '查看变更包'} · 客户工作区：${result.workspace}`; card.appendChild(objects);
-            const caption = document.createElement('p'); caption.textContent = '准备 Designer 可打开的 MDB 文件。当前打开的旧文件不会自动出现这次设计。'; card.appendChild(caption);
+            const caption = document.createElement('p'); caption.textContent = result.working ? (result.is_current?'后续设计继续更新同一个工作 MDB。发布后下一轮设计自动备份上一版，最多保留 10 个版本。':'这是历史设计版本。后续设计请使用当前工作 MDB。') : '准备 Designer 可打开的 MDB 文件。'; card.appendChild(caption);
+            if(result.working){const path=document.createElement('code');path.textContent=`工作 MDB：${result.working.server_mdb||result.working.mdb_file}`;card.appendChild(path);}
+            if(result.working?.server_mdb&&!result.working.server_current){const note=document.createElement('p');note.textContent='服务器文件尚未更新，请点击“在 Designer 中查看”重新准备。';card.appendChild(note);}
             const actions = document.createElement('div'); actions.className = 'review-actions';
             const button = document.createElement('button'); button.type = 'button'; button.textContent = '在 Designer 中查看'; actions.appendChild(button);
+            if(result.is_current===false){button.disabled=true;button.dataset.archived='true';button.textContent='历史设计版本';}
             const download = document.createElement('a'); download.textContent = '下载设计 MDB';
             download.href = `/designer/results/${encodeURIComponent(result.id)}/mdb?username=${encodeURIComponent(currentUsername)}&session_id=${encodeURIComponent(currentSessionId)}`;
             download.download = ''; actions.appendChild(download); card.appendChild(actions);
+            if(result.working){const versions=document.createElement('details');versions.className='working-backups';const heading=document.createElement('summary');heading.textContent=`MDB 备份 · ${result.working.backups.length} / ${result.working.backup_limit}`;versions.appendChild(heading);if(!result.working.backups.length){const note=document.createElement('p');note.textContent='发布成功后的下一次设计开始修改时，自动保存备份。';versions.appendChild(note);}for(const version of result.working.backups){const row=document.createElement('p');row.textContent=`${new Date(version.created_utc).toLocaleString('zh-CN',{hour12:false})} · ${(version.objects||[]).filter(Boolean).slice(0,3).join('、')||'设计版本'} · ${version.method==='manual'?'手动确认发布':'已发布版本'} `;for(const [kind,label] of version.siteinfo_sha256?[['mdb','下载 MDB'],['siteinfo','下载 SiteInfo']]:[['mdb','下载 MDB']]){const link=document.createElement('a');link.textContent=label+' ';link.href=`/designer/results/${result.id}/backups/${version.id}/${kind}?username=${encodeURIComponent(currentUsername)}&session_id=${encodeURIComponent(currentSessionId)}`;row.appendChild(link);}versions.appendChild(row);}card.appendChild(versions);}
             const status = document.createElement('div'); status.setAttribute('role', 'status'); card.appendChild(status);
             if (result.review) renderReviewReceipt(status, result.review, result);
             button.addEventListener('click', async () => {
-                if (busy || historyLoading || reviewPreparing) return;
+                if (busy || historyLoading || reviewPreparing || result.is_current===false) return;
                 reviewPreparing = true; updateControls(); button.textContent = '正在准备 Designer 文件…'; status.replaceChildren();
                 try {
                     const receipt = await fetchJson('/designer/review', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:currentUsername,session_id:currentSessionId,package_id:result.id})});

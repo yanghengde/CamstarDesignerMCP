@@ -133,6 +133,19 @@ def download_designer_mdb(package_id: str, username: str, session_id: str):
     return FileResponse(item['mdb_file'], filename=f"Designer_{package_id[:8]}.mdb", media_type='application/octet-stream')
 
 
+@router.get('/designer/results/{package_id}/backups/{backup_id}/{kind}')
+def download_designer_backup(package_id: str, backup_id: str, kind: str, username: str, session_id: str):
+    from designer import working
+    item = review_for_session(username, session_id, package_id)
+    if not item.get('working'):
+        raise HTTPException(404, '没有工作 MDB 备份')
+    try:
+        file = working.backup_file(item['working']['id'], backup_id, kind)
+    except (ValueError, OSError, KeyError) as exc:
+        raise HTTPException(404, str(exc)) from exc
+    return FileResponse(file, filename=f"{backup_id[:8]}_{file.name}", media_type='application/octet-stream')
+
+
 class ChatRequest(BaseModel):
     message: str = Field(max_length=10000)
     username: str

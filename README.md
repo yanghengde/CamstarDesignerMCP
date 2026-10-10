@@ -1,6 +1,6 @@
 # CamstarDesignerMCP
 
-Siemens Opcenter（Camstar）Designer 元数据设计助手。通过自然语言和 Excel 描述对象、字段及设计要求，在独立 MDB 副本中生成设计，再通过 Designer 或工作台完成审核、编译、数据库更新与结果核验。
+Siemens Opcenter（Camstar）Designer 元数据设计助手。通过自然语言和 Excel 描述对象、字段及设计要求，在固定工作 MDB 中连续设计，再通过 Designer 或工作台完成审核、编译、数据库更新与结果核验。
 
 浏览器工作台、LangGraph 对话流程与 FastMCP 共用 Designer 工具。项目通过已安装的 `Camstar.Metadata.dll` 调用厂商对象模型，保存并回读 MDB，导出官方差异 XML。
 
@@ -48,7 +48,7 @@ DESIGNER_BRIDGE_TIMEOUT=180
 
 - Python 与项目依赖；Designer 桥接需要 Windows PowerShell 5.1、.NET Framework，以及匹配进程位数的 ACE OLEDB 驱动。
 - 已安装并可访问的 Designer 组件。厂商 DLL 不包含在仓库内。
-- 本地测试 MDB 放在 `DESIGNER_ROOT` 下。工具使用独立副本执行设计。
+- 本地测试 MDB 放在 `DESIGNER_ROOT` 下。首次设计建立固定项目工作 MDB；后续设计持续更新同一文件。
 - 数据库发布、服务器文件交接与 WCF 生成需要额外配置，见下文及 [.env.example](.env.example)。
 
 当前集成依据已检查安装版本中的公开成员实现；厂商版本升级后需要重新验证兼容性。
@@ -134,7 +134,7 @@ data/designer/artifacts/<id>/
 
 ## 在 Designer 中查看设计
 
-设计结果提供 **在 Designer 中查看** 与 **下载设计 MDB**。查看操作核对设计包哈希，将最终 `modified.mdb` 与站点 `SiteInfo.mdb` 复制至服务器 `C:\Temp\DesignerMCP\Review_<id>`。
+设计结果提供 **在 Designer 中查看** 与 **下载设计 MDB**。查看操作核对当前设计，将工作 MDB 与站点文件放在服务器固定目录 `C:\DesignerWorkspace\<项目ID>\`，后续批次更新同一路径。旧设计包继续保留原有查看方式。
 
 需要配置服务器共享、Windows 凭据、Designer 路径及站点文件：
 
@@ -246,3 +246,11 @@ $env:DESIGNER_TEST_VENDOR='1'
 - **Designer 看不到新对象**：确认打开的是交接路径中的最终 MDB，选择正确工作区；设置下次启动文件后需重新打开 Designer。
 - **页面提示文件发生变化**：重新同步并核对设计来源；附件变化则取消待确认操作并重新上传。
 - **数据库已更新但服务未生效**：继续完成所需 WCF 生成、运行环境部署和结果验证。
+
+## 固定工作 MDB 与版本备份
+
+每个来源项目的固定工作文件为 `data/designer/workspaces/<项目ID>/InSite.mdb`（实际根目录取 `DESIGNER_ROOT`）。生成工具先完成厂商保存、回读和差异导出，成功后更新此文件；失败不会覆盖工作 MDB。连续聊天或新对话使用该文件及最新哈希，旧来源路径在项目建立后也会解析到当前工作文件。
+
+自动 Update Database 成功，或在进度页手动确认已更新数据库后，记录发布版本。下一轮设计首次实际修改前，备份该发布版本，再继续更新原工作文件；同一轮继续修改不重复备份。只保留最新 10 个备份，备份校验失败时停止修改，超过 10 个时删除最旧的完整备份。发布失败不会创建发布标记。备份包含 MDB，以及准备 Designer / 发布时保存的配套 SiteInfo；缺少 SiteInfo 时只备份 MDB。
+
+设计结果和进度页显示固定路径及备份列表，可下载备份。已准备 Designer 文件的项目，后续设计自动更新同一服务器路径；服务器不可写时返回同步错误，需重新准备文件，不宣称服务器已更新。服务器备份随文件交接同步，亦只保留 10 个版本。历史包只能下载对应快照，不能覆盖最新工作文件；文件变化后必须重新核对、编译和发布。每次设计的内部核验快照、差异和清单保留于 artifacts，不属于 10 个发布备份。多人文件合并和兼容由 Opcenter 处理。

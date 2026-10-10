@@ -1,4 +1,5 @@
-param([string]$LocalMdb,[string]$ExpectedSha256,[string]$ResultFile,[ValidateSet('true','false')][string]$Activate)
+param([string]$LocalMdb,[string]$ExpectedSha256,[string]$ResultFile,[ValidateSet('true','false')][string]$Activate,
+      [string]$ProjectId='', [string]$BackupsDirectory='')
 $ErrorActionPreference='Stop'
 $taskCredential=[pscredential]::new($env:DESIGNER_WINDOWS_USER,(ConvertTo-SecureString $env:DESIGNER_WINDOWS_PASSWORD -AsPlainText -Force))
 try {
@@ -13,11 +14,47 @@ try {
  if($taskSitePath -notmatch '^C:\\' -or $taskSitePath -match '\.\.|[\r\n]') {throw 'SiteInfo must be an existing C drive file'}
  $taskId=[guid]::NewGuid().ToString('N')
  $taskRelative='Temp\DesignerMCP\Review_'+$taskId
+ if($ProjectId) {
+  if($ProjectId -notmatch '^[0-9a-f]{32}$') {throw 'Invalid working project id'}
+  $taskRelative='DesignerWorkspace\'+$ProjectId
+ }
  $taskRemote='DesignerReview:\'+$taskRelative
- New-Item -ItemType Directory -Path $taskRemote | Out-Null
- Copy-Item -LiteralPath $LocalMdb -Destination ($taskRemote+'\InSite.mdb')
- if((Get-FileHash -LiteralPath ($taskRemote+'\InSite.mdb') -Algorithm SHA256).Hash -ne $ExpectedSha256) {throw 'Copied MDB checksum mismatch'}
- Copy-Item -LiteralPath ('DesignerReview:\'+$taskSitePath.Substring(3)) -Destination ($taskRemote+'\SiteInfo.mdb')
+ New-Item -ItemType Directory -Path $taskRemote -Force | Out-Null
+ $taskStaging=$taskRemote+'\InSite.'+$taskId+'.tmp'
+ try {
+  Copy-Item -LiteralPath $LocalMdb -Destination $taskStaging
+  if((Get-FileHash -LiteralPath $taskStaging -Algorithm SHA256).Hash -ne $ExpectedSha256) {throw 'Copied MDB checksum mismatch'}
+  Move-Item -LiteralPath $taskStaging -Destination ($taskRemote+'\InSite.mdb') -Force
+ } finally {if(Test-Path -LiteralPath $taskStaging) {Remove-Item -LiteralPath $taskStaging}}
+ if(-not(Test-Path -LiteralPath ($taskRemote+'\SiteInfo.mdb'))) {
+  Copy-Item -LiteralPath ('DesignerReview:\'+$taskSitePath.Substring(3)) -Destination ($taskRemote+'\SiteInfo.mdb')
+ }
+ if($ProjectId -and $BackupsDirectory -and (Test-Path -LiteralPath $BackupsDirectory)) {
+  $taskBackupRoot=$taskRemote+'\backups'
+  New-Item -ItemType Directory -Path $taskBackupRoot -Force | Out-Null
+  $taskSavedIds=@()
+  foreach($taskVersion in (Get-ChildItem -LiteralPath $BackupsDirectory -Directory)) {
+   if($taskVersion.Name -notmatch '^[0-9a-f]{32}$' -or -not(Test-Path -LiteralPath (Join-Path $taskVersion.FullName 'backup.json'))) {continue}
+   $taskSavedIds += $taskVersion.Name
+   $taskVersionRemote=Join-Path $taskBackupRoot $taskVersion.Name
+   New-Item -ItemType Directory -Path $taskVersionRemote -Force | Out-Null
+   $taskVersionRecord=Get-Content -LiteralPath (Join-Path $taskVersion.FullName 'backup.json') -Raw | ConvertFrom-Json
+   foreach($taskVersionFile in @('InSite.mdb','SiteInfo.mdb','backup.json')) {
+    $taskLocalVersion=Join-Path $taskVersion.FullName $taskVersionFile
+    if(Test-Path -LiteralPath $taskLocalVersion) {Copy-Item -LiteralPath $taskLocalVersion -Destination (Join-Path $taskVersionRemote $taskVersionFile) -Force}
+   }
+   if((Get-FileHash -LiteralPath (Join-Path $taskVersionRemote 'InSite.mdb') -Algorithm SHA256).Hash -ne $taskVersionRecord.sha256) {throw 'Remote backup MDB checksum mismatch'}
+   if($taskVersionRecord.siteinfo_sha256 -and (Get-FileHash -LiteralPath (Join-Path $taskVersionRemote 'SiteInfo.mdb') -Algorithm SHA256).Hash -ne $taskVersionRecord.siteinfo_sha256) {throw 'Remote backup SiteInfo checksum mismatch'}
+  }
+  foreach($taskOldVersion in (Get-ChildItem -LiteralPath $taskBackupRoot -Directory)) {
+   if($taskOldVersion.Name -match '^[0-9a-f]{32}$' -and $taskOldVersion.Name -notin $taskSavedIds) {
+    $taskDeletePath=(Resolve-Path -LiteralPath $taskOldVersion.FullName).ProviderPath
+    $taskAllowedRoot=(Resolve-Path -LiteralPath $taskBackupRoot).ProviderPath.TrimEnd('\')+'\'
+    if(-not $taskDeletePath.StartsWith($taskAllowedRoot,[StringComparison]::OrdinalIgnoreCase)) {throw 'Backup path escapes working project'}
+    Remove-Item -LiteralPath $taskDeletePath -Recurse -Force
+   }
+  }
+ }
  $taskPreviousMdb=[string]$taskMdbNode.value
  $taskPreviousSite=[string]$taskSiteNode.value
  $taskBackup=$null

@@ -143,6 +143,9 @@ def snapshot(username, session_id):
         path = saved[-1]['result']['files']['manifest.json']
         try:
             package = review.summary(path)
+            from designer import working
+            if package.get('working'):
+                working.check_current(json.loads(Path(path).read_text(encoding='utf-8')))
             owned = {str(Path(item['result']['files']['manifest.json']).resolve()): item for item in all_saved}
             cursor = path
             while cursor and len(manifests) < 100:
@@ -156,7 +159,10 @@ def snapshot(username, session_id):
                     design_turns.add(owned[str(manifest_path)]['turn_start'])
                 source = Path(manifest.get('source_file', ''))
                 parent = str((source.parent / 'manifest.json').resolve())
-                cursor = parent if source.name == 'modified.mdb' and parent in owned else ''
+                explicit_parent = manifest.get('parent_manifest_file')
+                if explicit_parent:
+                    parent = str(Path(explicit_parent).resolve())
+                cursor = parent if (explicit_parent or source.name == 'modified.mdb') and parent in owned else ''
             operations = [op for _, manifest in reversed(manifests) for op in manifest.get('operations', [])]
             package['objects'] = list(dict.fromkeys(op.get('owner') or op.get('name') for op in operations if op.get('action') in ('create_cdo', 'add_field')))
             package['field_count'] = len({(op['owner'], op['name']) for op in operations if op.get('action') == 'add_field'})
@@ -366,6 +372,12 @@ def start_action(username, session_id, package_id, action, options=None):
     confirmations = {'confirm_review': 6, 'confirm_compile': 7, 'confirm_publish': 8, 'confirm_wcf': 9, 'confirm_services': 10,
                      'skip_services': 9, 'confirm_complete': 11}
     if action in confirmations:
+        if action == 'confirm_publish':
+            from designer import working
+            if package.get('working'):
+                from designer import publication
+                publication.record_manual_baseline(package['manifest_file'])
+            working.mark_published(package['manifest_file'], method='manual')
         if action in ('confirm_wcf', 'skip_services', 'confirm_services'):
             store.clear_from(username, session_id, package_id, confirmations[action]+1)
         store.confirm(username, session_id, package_id, confirmations[action], 'skipped' if action == 'skip_services' else 'confirmed')

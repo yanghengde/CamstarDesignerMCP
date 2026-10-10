@@ -338,15 +338,17 @@
             document.querySelectorAll('[data-job-error]').forEach((node,index,nodes)=>{if(index<nodes.length-1||!['failed','interrupted'].includes(latest?.status))node.remove();});
         }
         function renderFiles() {
-            const area=document.getElementById('fileContent');area.replaceChildren();const pkg=state.package;
+            const area=document.getElementById('fileContent');const versionsOpen=area.querySelector('details')?.open;area.replaceChildren();const pkg=state.package;
             if(!pkg){const note=document.createElement('p');note.className='file-note';note.textContent='等待设计生成';area.appendChild(note);return;}
             const review=pkg.review;
-            for(const [label,path] of review?[['MDB',review.server_mdb],['SiteInfo',review.server_siteinfo]]:[['设计 MDB',pkg.mdb_file]]) {
+            if(pkg.working?.server_mdb&&!pkg.working.server_current){const note=document.createElement('p');note.className='file-note';note.textContent='服务器文件尚未更新，请重新准备 Designer 文件。';area.appendChild(note);}
+            for(const [label,path] of review?[['工作 MDB',review.server_mdb],['SiteInfo',review.server_siteinfo]]:[['工作 MDB',pkg.working?.server_mdb||pkg.mdb_file]]) {
                 const heading=document.createElement('div');heading.className='file-label';heading.textContent=label;
                 const copy=button('复制',()=>navigator.clipboard.writeText(path).then(()=>notice('路径已复制')).catch(()=>notice('请复制下方路径')));copy.className='file-note';heading.appendChild(copy);area.appendChild(heading);
                 const code=document.createElement('code');code.className='file-path';code.textContent=path;area.appendChild(code);
             }
             const link=document.createElement('a');link.className='file-note';link.textContent='下载设计 MDB ↗';link.href=`/designer/results/${pkg.id}/mdb?username=${encodeURIComponent(navigationUsername)}&session_id=${encodeURIComponent(currentSession)}`;area.appendChild(link);
+            if(pkg.working){const versions=document.createElement('details');versions.open=!!versionsOpen;versions.style.marginTop='20px';const heading=document.createElement('summary');heading.className='file-label';heading.textContent=`MDB 备份 · ${pkg.working.backups.length} / ${pkg.working.backup_limit}`;versions.appendChild(heading);if(!pkg.working.backups.length){const note=document.createElement('p');note.className='file-note';note.textContent='发布成功后，下次设计首次修改前自动备份。';versions.appendChild(note);}for(const version of pkg.working.backups){const row=document.createElement('div');row.style.marginTop='12px';const time=document.createElement('p');time.className='file-note';time.textContent=`${new Date(version.created_utc).toLocaleString('zh-CN',{hour12:false})} · ${(version.objects||[]).filter(Boolean).slice(0,3).join('、')||'设计版本'} · ${version.method==='manual'?'手动确认发布':'已发布版本'}`;row.appendChild(time);for(const [kind,label] of version.siteinfo_sha256?[['mdb','下载 MDB'],['siteinfo','下载 SiteInfo']]:[['mdb','下载 MDB']]){const link=document.createElement('a');link.className='file-note';link.style.marginRight='12px';link.textContent=label;link.href=`/designer/results/${pkg.id}/backups/${version.id}/${kind}?username=${encodeURIComponent(navigationUsername)}&session_id=${encodeURIComponent(currentSession)}`;row.appendChild(link);}versions.appendChild(row);}area.appendChild(versions);}
         }
         function details(number) {
             const content=document.getElementById('detailsContent');content.replaceChildren();content.className='';document.getElementById('detailsTitle').textContent=number===4?'设计结果':'设计需求';

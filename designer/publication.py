@@ -66,11 +66,26 @@ def metadata_fingerprint(cursor, schema: str) -> str:
 def record_published_baseline(manifest_path: Path, report: dict, cursor, schema: str) -> dict:
     modified=source_path(str(manifest_path.parent/"modified.mdb"),".mdb")
     record={"status":"verified","target":report["target"],"mdb_file":str(modified),"sha256":vendor.digest(modified),
+            "method": report.get('method', 'automatic'),
             "metadata_fingerprint":metadata_fingerprint(cursor,schema),"coverage":"installed_design_catalog_and_physical_schema",
             "publish_result_file":report.get("result_file",""),"recorded_utc":datetime.now(timezone.utc).isoformat()}
     path=root_dir()/"published_baseline.json"
     temporary=path.with_suffix(".tmp"); temporary.write_text(json.dumps(record,ensure_ascii=False,indent=2),encoding="utf-8"); temporary.replace(path)
     return record
+
+
+def record_manual_baseline(manifest_file):
+    """Refresh an existing catalog checkpoint after the user's Update DB confirmation."""
+    path = source_path(manifest_file, '.json')
+    checkpoint = root_dir() / 'published_baseline.json'
+    if not checkpoint.is_file() or not config.DESIGNER_TEST_TARGET_CONFIRMED:
+        return
+    target = {'server': config.DESIGNER_DB_SERVER, 'database': config.DESIGNER_DB_NAME}
+    if json.loads(checkpoint.read_text(encoding='utf-8')).get('target') != target:
+        return
+    with target_connection() as connection:
+        cursor = connection.cursor()
+        record_published_baseline(path, {'target': target, 'method': 'manual'}, cursor, target_schema(cursor))
 
 
 def reconcile_restored_baseline(receipt: dict, fingerprint: str) -> dict:
@@ -138,6 +153,8 @@ def preflight(manifest_file: str) -> dict:
     source=source_path(manifest["source_file"],".mdb")
     if vendor.digest(source)!=manifest["source_sha256"]:
         raise ValueError("设计来源已漂移，请重新生成设计包")
+    from designer import working
+    working.check_current(manifest)
     root,_=load_xml(source_path(str(path.parent/"changes.xml"),".xml"))
     checks=[]
     for table in root.findall("Import/DBTableDefinitions/DBTableDefinition"):
@@ -326,6 +343,8 @@ def publish_database(manifest_file: str, expected_manifest_sha256: str, backup_r
     if not config.DESIGNER_TEST_TARGET_CONFIRMED:
         raise ValueError("目标未确认允许发布测试")
     path,manifest=verified_manifest(manifest_file)
+    from designer import working
+    working.check_current(manifest)
     if vendor.digest(path)!=expected_manifest_sha256:
         raise ValueError("设计包清单SHA256不匹配")
     target={"server":config.DESIGNER_DB_SERVER,"database":config.DESIGNER_DB_NAME}
@@ -409,6 +428,8 @@ def publish_database(manifest_file: str, expected_manifest_sha256: str, backup_r
                     checks.append({"cdo":op["name"],"present":True})
             report.update(status="database_published",metadata_checks=checks,services_deployed=False)
             report["published_baseline"]=record_published_baseline(path,{**report,"result_file":str(report_file)},cur,schema)
+            from designer import working
+            working.mark_published(path, siteinfo_file=str(siteinfo))
     except Exception as exc:
         error=redact(str(exc))
         report.update(status="publish_failed",error=error)
