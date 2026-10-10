@@ -43,16 +43,18 @@ def publication_state(receipts, package):
         file, _ = publication.verified_manifest(checked['manifest_file'])
         if vendor.digest(file) != checked['manifest_sha256']:
             raise ValueError('发布设计已变化，请重新检查')
-        if not backup:
-            raise ValueError('请先备份数据库')
-        _, saved = load_receipt(backup['receipt_file'], backup['receipt_sha256'])
-        if saved.get('status') != 'backup_verified' or saved.get('target') != target() or not recent(saved.get('created_utc')):
-            raise ValueError('备份已过期或目标不匹配，请重新备份')
+        if config.DESIGNER_REQUIRE_DATABASE_BACKUP:
+            if not backup:
+                raise ValueError('请先备份数据库')
+            _, saved = load_receipt(backup['receipt_file'], backup['receipt_sha256'])
+            if saved.get('status') != 'backup_verified' or saved.get('target') != target() or not recent(saved.get('created_utc')):
+                raise ValueError('备份已过期或目标不匹配，请重新备份')
         if not (package.get('review') or {}).get('server_siteinfo'):
             raise ValueError('请先准备 Designer 文件及 SiteInfo')
     except (KeyError, ValueError, OSError) as exc:
         reasons.append(str(exc))
-    return {'target': target(), 'plan': plan, 'backup': backup, 'ready': not reasons,
+    return {'target': target(), 'plan': plan, 'backup': backup,
+            'backup_required': config.DESIGNER_REQUIRE_DATABASE_BACKUP, 'ready': not reasons,
             'reason': reasons[0] if reasons else ''}
 
 
@@ -103,7 +105,8 @@ def validate_publish(state, options):
     if not info['ready']:
         raise ValueError(info['reason'])
     if (options.get('expected_plan_sha256') != info['plan']['plan_sha256'] or
-            options.get('expected_backup_sha256') != info['backup']['receipt_sha256']):
+            (config.DESIGNER_REQUIRE_DATABASE_BACKUP and
+             options.get('expected_backup_sha256') != info['backup']['receipt_sha256'])):
         raise ValueError('发布确认内容已更新，请重新查看后确认')
     if not config.DESIGNER_TEST_TARGET_CONFIRMED:
         raise ValueError('目标尚未配置为已确认测试库')
@@ -115,7 +118,7 @@ def publish(state, options):
     plan = info['plan']
     siteinfo = copy_siteinfo(state['package'])
     return publication.publish_database(plan['manifest_file'], plan['manifest_sha256'],
-                                        info['backup']['receipt_file'], str(siteinfo),
+                                        info['backup']['receipt_file'] if config.DESIGNER_REQUIRE_DATABASE_BACKUP else '', str(siteinfo),
                                         expected_target_fingerprint=plan['target_fingerprint'])
 
 

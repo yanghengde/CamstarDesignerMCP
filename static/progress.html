@@ -285,7 +285,7 @@
         let currentSession = null, selectedStage = null, state = null, taskList = [], pollTimer, loading = false, submitting = false, noticeTimer, confirmationResolve;
         const statusNames = {pending:'未开始',done:'已完成',confirmed:'用户确认',skipped:'不需要',waiting:'待你操作',running:'执行中',failed:'未完成',blocked:'待核对'};
         const labels = {check:'核对结果',prepare:'准备 Designer 文件',sync:'同步文件',compile:'Compile',verify:'核验数据库',preflight:'检查发布',backup:'备份数据库',publish:'Update Database',wcf:'编译并生成 WCF'};
-        const explanations = ['需求已记录','对象与字段已识别','检查来源与已有定义','保存对象与字段','核对文件与设计来源','在 Designer 中检查对象与字段','编译当前设计副本','检查、备份后更新数据库','全量生成 WCF，核对设计对象与字段','在运行环境部署 WCF，完成后确认','核验数据库并完成业务验收'];
+        const explanations = ['需求已记录','对象与字段已识别','检查来源与已有定义','保存对象与字段','核对文件与设计来源','在 Designer 中检查对象与字段','编译当前设计副本','检查通过后更新测试数据库','全量生成 WCF，核对设计对象与字段','在运行环境部署 WCF，完成后确认','核验数据库并完成业务验收'];
         function notice(message) { const node=document.getElementById('notice'); node.textContent=message; node.hidden=false; clearTimeout(noticeTimer); noticeTimer=setTimeout(()=>node.hidden=true,6000); }
         async function api(url,options) { const response=await fetch(url,options); const data=await response.json(); if(!response.ok) throw Error(typeof data.detail==='string'?data.detail:`HTTP ${response.status}`); return data; }
         function duration(start) { const seconds=Math.max(0,Math.floor(Date.now()/1000-start)); return `${Math.floor(seconds/60).toString().padStart(2,'0')}:${(seconds%60).toString().padStart(2,'0')}`; }
@@ -356,8 +356,10 @@
             const fresh=created=>created&&Date.now()-Date.parse(created)>=0&&Date.now()-Date.parse(created)<=3600000;
             summaryRow(container,'服务器',info.target.server||'未配置');summaryRow(container,'数据库',info.target.database||'未配置');
             summaryRow(container,'发布检查',!info.plan?'未执行':!fresh(info.plan.created_utc)?'已过期':info.plan.ready_for_publish?'通过':'未通过');
-            summaryRow(container,'数据库备份',info.backup?.status==='backup_verified'?(fresh(info.backup.created_utc)?'已校验 · 1 小时内有效':'已过期'):'未完成');
-            if(info.backup?.created_utc)summaryRow(container,'备份时间',new Date(info.backup.created_utc).toLocaleString('zh-CN',{hour12:false}));
+            if(info.backup_required) {
+                summaryRow(container,'数据库备份',info.backup?.status==='backup_verified'?(fresh(info.backup.created_utc)?'已校验 · 1 小时内有效':'已过期'):'未完成');
+                if(info.backup?.created_utc)summaryRow(container,'备份时间',new Date(info.backup.created_utc).toLocaleString('zh-CN',{hour12:false}));
+            } else summaryRow(container,'数据库备份','测试环境，无需备份');
             if(info.reason||info.plan?.blockers?.length){const note=document.createElement('p');note.textContent=info.plan?.blockers?.join('；')||info.reason;container.appendChild(note);}
         }
         function askConfirmation(action) {
@@ -374,7 +376,8 @@
         async function perform(action) {
             if(submitting||state?.active||!state?.package)return;
             const session=currentSession,packageId=state.package.id;
-            const options=action==='publish'?{expected_plan_sha256:state.publication.plan.plan_sha256,expected_backup_sha256:state.publication.backup.receipt_sha256}:{};
+            const options=action==='publish'?{expected_plan_sha256:state.publication.plan.plan_sha256}:{};
+            if(action==='publish'&&state.publication.backup_required)options.expected_backup_sha256=state.publication.backup.receipt_sha256;
             if((action.startsWith('confirm_')||['skip_services','backup','publish','wcf'].includes(action))&&!await askConfirmation(action))return;
             if(currentSession!==session||state?.package?.id!==packageId){notice('设计已更新，请刷新后重试');return;}
             if(action==='wcf')options.verify_types=document.getElementById('wcfTypes').value.split(/[,，]/).map(value=>value.trim()).filter(Boolean);

@@ -156,10 +156,10 @@ def preflight(manifest_file: str) -> dict:
         blockers.append("尚未确认该目标允许发布测试。")
     if any(c["conflict"] for c in checks): blockers.append("拟新增列已存在于目标数据库。")
     plan={"status":"preflight_only", "ready_for_publish":not blockers,"database_modified":False,
-          "services_verified":False,"verified_backup_required":True,
+          "services_verified":False,"verified_backup_required":config.DESIGNER_REQUIRE_DATABASE_BACKUP,
           "manifest_file":str(path),"manifest_sha256":vendor.digest(path),
           "target":{"server":target["server"],"database":target["database"]},"column_checks":checks,
-          "blockers":blockers,"required_steps":["备份目标数据库并确认恢复路径。","核对服务器当前MDB与包基线。",
+          "blockers":blockers,"required_steps":(["备份目标数据库并确认恢复路径。"] if config.DESIGNER_REQUIRE_DATABASE_BACKUP else []) + ["核对服务器当前MDB与包基线。",
           "通过厂商Update DB应用元数据和存储差异。","按确认的测试目录生成服务并核对接口。","验证200字符接受、201字符拒绝及旧业务回归。"]}
     folder=artifact_dir()
     (folder/"publish_plan.json").write_text(json.dumps(plan,ensure_ascii=False,indent=2),encoding="utf-8")
@@ -320,7 +320,7 @@ def verify_published_design(manifest_file: str, test_string_boundaries: bool = F
     return {**result,"result_file":str(file)}
 
 
-def publish_database(manifest_file: str, expected_manifest_sha256: str, backup_receipt: str, siteinfo_mdb: str,
+def publish_database(manifest_file: str, expected_manifest_sha256: str, backup_receipt: str = '', siteinfo_mdb: str = '',
                      expected_target_fingerprint: str = '') -> dict:
     """Execute installed Update DB against the configured, confirmed test target."""
     if not config.DESIGNER_TEST_TARGET_CONFIRMED:
@@ -328,16 +328,22 @@ def publish_database(manifest_file: str, expected_manifest_sha256: str, backup_r
     path,manifest=verified_manifest(manifest_file)
     if vendor.digest(path)!=expected_manifest_sha256:
         raise ValueError("设计包清单SHA256不匹配")
-    receipt_path=source_path(backup_receipt,".json")
-    receipt=json.loads(receipt_path.read_text(encoding="utf-8"))
     target={"server":config.DESIGNER_DB_SERVER,"database":config.DESIGNER_DB_NAME}
-    age=(datetime.now(timezone.utc)-datetime.fromisoformat(receipt["created_utc"])).total_seconds()
-    if receipt.get("status")!="backup_verified" or receipt.get("target")!=target or not 0<=age<=3600:
-        raise ValueError("需要该测试目标一小时内完成校验的备份凭证")
+    receipt_path,receipt=None,None
+    if config.DESIGNER_REQUIRE_DATABASE_BACKUP and not backup_receipt:
+        raise ValueError("请先备份数据库")
+    if backup_receipt:
+        receipt_path=source_path(backup_receipt,".json")
+        receipt=json.loads(receipt_path.read_text(encoding="utf-8"))
+        age=(datetime.now(timezone.utc)-datetime.fromisoformat(receipt["created_utc"])).total_seconds()
+        if receipt.get("status")!="backup_verified" or receipt.get("target")!=target or not 0<=age<=3600:
+            raise ValueError("需要该测试目标一小时内完成校验的备份凭证")
     siteinfo=source_path(siteinfo_mdb,".mdb")
     folder=artifact_dir()
     report={"status":"preparing","target":target,"manifest_file":str(path),"manifest_sha256":expected_manifest_sha256,
-            "backup_receipt":str(receipt_path),"configuration_updated":False,"database_modified":False}
+            "backup_receipt":str(receipt_path) if receipt_path else None,
+            "backup_required":config.DESIGNER_REQUIRE_DATABASE_BACKUP,
+            "configuration_updated":False,"database_modified":False}
     report_file=folder/"publish_result.json"
     try:
         compiled_folder=folder/"compile"
@@ -367,7 +373,7 @@ def publish_database(manifest_file: str, expected_manifest_sha256: str, backup_r
             lock=cur.execute("DECLARE @r int; EXEC @r=sys.sp_getapplock @Resource='CamstarDesignerMCP.Publish',@LockMode='Exclusive',@LockOwner='Session',@LockTimeout=0; SELECT @r").fetchone()[0]
             if lock<0: raise ValueError("同一数据库已有Designer发布操作")
             if expected_target_fingerprint and metadata_fingerprint(cur,schema) != expected_target_fingerprint:
-                raise ValueError('发布检查后目标设计已变化，请重新检查并备份')
+                raise ValueError('发布检查后目标设计已变化，请重新检查')
             baseline_file=root_dir()/"published_baseline.json"
             if baseline_file.is_file():
                 baseline=json.loads(baseline_file.read_text(encoding="utf-8"))
@@ -378,8 +384,9 @@ def publish_database(manifest_file: str, expected_manifest_sha256: str, backup_r
                         raise ValueError("设计包未基于最近发布的MDB生成；请使用published_baseline.json中的mdb_file重新设计")
                     if metadata_fingerprint(cur,schema)!=baseline["metadata_fingerprint"]:
                         raise ValueError("目标设计或物理结构在上次发布后变化，请重新核对设计基线")
-            cur.execute("RESTORE VERIFYONLY FROM DISK=? WITH CHECKSUM",receipt["server_backup_file"])
-            while cur.nextset(): pass
+            if receipt:
+                cur.execute("RESTORE VERIFYONLY FROM DISK=? WITH CHECKSUM",receipt["server_backup_file"])
+                while cur.nextset(): pass
             report.update(status="executing_update",database_modified="unknown",schema=schema,compiled_mdb=compiled["compiled_mdb"],compiled_sha256=vendor.digest(Path(compiled["compiled_mdb"])))
             report_file.write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding="utf-8")
             shell=Path(os.environ.get("SystemRoot","C:/Windows"))/"System32/WindowsPowerShell/v1.0/powershell.exe"

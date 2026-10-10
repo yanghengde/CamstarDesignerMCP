@@ -152,7 +152,7 @@ data/designer/artifacts/<id>/
 |---|---|
 | 检查设计 | 核对设计包、准备 Designer 文件、同步服务器文件状态、记录人工审核 |
 | Compile | 编译设计副本，或记录在 Designer 中已完成的编译 |
-| Update Database | 检查发布目标和变更、备份数据库、确认执行官方 Update DB；也可记录手动更新 |
+| Update Database | 检查发布目标和变更、确认执行官方 Update DB，测试环境默认无需备份；也可记录手动更新 |
 | 生成 WCF | 编译当前副本并生成程序集，核对目标类型和新字段，下载已核验 DLL |
 | 部署 WCF | 人员在运行环境部署后，点击手动部署确认；无需 WCF 时可按页面条件跳过 |
 | 验证结果 | 执行已支持的发布后核验并记录完成状态 |
@@ -170,6 +170,7 @@ data/designer/artifacts/<id>/
 | `DESIGNER_DB_SERVER/NAME/USER/PASSWORD` | 数据库连接；备份与恢复需要对应权限 |
 | `DESIGNER_UPDATE_DB_USER/PASSWORD` | 官方 Update DB 账号，默认 schema 必须与应用 schema 一致 |
 | `DESIGNER_TEST_TARGET_CONFIRMED=true` | 明确允许对已确认的测试目标发布 |
+| `DESIGNER_REQUIRE_DATABASE_BACKUP` | 默认 `false`，测试发布无需备份；设为 `true` 时要求校验数据库备份 |
 | `DESIGNER_SERVER_IMPORT_EXE` | 服务器官方 ImportMetaData 程序路径 |
 | `DESIGNER_WCF_DIRECTORY` | WCF 组件目录 |
 | `DESIGNER_SERVER_WCF_GENERATOR` | 服务器 WCF 生成程序路径 |
@@ -179,7 +180,7 @@ data/designer/artifacts/<id>/
 
 服务器 WCF 生成还需要已认证的共享和执行临时 SQL Agent 作业所需权限。
 
-发布顺序为：**检查设计包 → 发布预检 → 校验数据库备份 → 确认 Update Database → 发布后核验**。发布确认绑定检查结果、设计清单及备份哈希，有效备份凭证为一小时；执行前再次核对目标设计指纹，变化时停止更新。
+测试环境发布顺序为：**检查设计包 → 发布预检 → 确认 Update Database → 发布后核验**，默认不要求数据库备份，也不显示备份按钮。发布确认绑定检查结果和设计清单；执行前再次核对目标设计指纹，变化时停止更新。需要强制备份时设置 `DESIGNER_REQUIRE_DATABASE_BACKUP=true`，此时增加备份步骤并核对备份哈希，校验凭证有效期为一小时。
 
 Update DB 更新设计与存储结构，不等同于部署运行服务。失败可能留下部分更新；`restore_designer_test_database` 使用校验后的备份凭证与哈希恢复明确授权的测试目标，会覆盖备份之后的变更。
 

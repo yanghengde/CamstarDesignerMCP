@@ -83,8 +83,8 @@ async def restore_designer_test_database(backup_receipt: str, expected_receipt_s
 
 
 @mcp.tool
-async def publish_designer_test_database(manifest_file: str, expected_manifest_sha256: str, backup_receipt: str, siteinfo_mdb: str) -> dict:
-    """将已核对的官方设计包编译并通过厂商Update DB发布到本机已确认测试库；需要清单SHA256与一小时内校验备份凭证。更新设计元数据及存储结构，不更新服务器/用户配置，不部署服务。失败可能有部分数据库更改，返回审计和恢复材料。"""
+async def publish_designer_test_database(manifest_file: str, expected_manifest_sha256: str, backup_receipt: str = '', siteinfo_mdb: str = '') -> dict:
+    """将已核对的官方设计包编译并通过厂商Update DB发布到本机已确认测试库；必须提供清单SHA256和siteinfo_mdb路径。测试环境默认无需数据库备份，backup_receipt可省略；仅配置DESIGNER_REQUIRE_DATABASE_BACKUP=true时要求一小时内校验备份凭证。更新设计元数据及存储结构，不更新服务器/用户配置，不部署服务。失败可能有部分数据库更改，返回真实审计记录。"""
     from designer.publication import publish_database
     return await asyncio.to_thread(publish_database,manifest_file,expected_manifest_sha256,backup_receipt,siteinfo_mdb)
 

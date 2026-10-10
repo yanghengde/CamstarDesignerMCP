@@ -159,7 +159,9 @@ def snapshot(username, session_id):
         stage_actions = {
             5: [('check', '核对结果')], 6: [('prepare', '准备 Designer 文件'), ('confirm_review', '手动检查确认')],
             7: [('compile', '执行 Compile'), ('confirm_compile', '手动编译确认')],
-            8: [('preflight', '检查发布'), ('backup', '备份数据库'), ('publish', '执行 Update Database'), ('confirm_publish', '手动更新确认')],
+            8: [('preflight', '检查发布')] +
+               ([('backup', '备份数据库')] if publication_info['backup_required'] else []) +
+               [('publish', '执行 Update Database'), ('confirm_publish', '手动更新确认')],
             9: [('wcf', '生成 WCF'), ('confirm_wcf', '手动生成确认'), ('skip_services', '无需 WCF')],
             10: [('confirm_services', '手动部署确认')],
             11: [('verify', '核验数据库'), ('confirm_complete', '确认验收完成')]}

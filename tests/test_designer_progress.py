@@ -189,9 +189,10 @@ def test_server_file_drift_blocks_downstream(workflow):
         progress.start_action('user', sid, folder.name, 'compile')
 
 
-def ready_for_publish(sid, folder, monkeypatch):
+def ready_for_publish(sid, folder, monkeypatch, require_backup=True):
     from datetime import datetime, timezone
     monkeypatch.setattr(config, 'DESIGNER_TEST_TARGET_CONFIRMED', True)
+    monkeypatch.setattr(config, 'DESIGNER_REQUIRE_DATABASE_BACKUP', require_backup)
     monkeypatch.setattr(config, 'DESIGNER_DB_SERVER', 'test-server')
     monkeypatch.setattr(config, 'DESIGNER_DB_NAME', 'test-db')
     check_receipt(sid, folder)
@@ -209,10 +210,50 @@ def ready_for_publish(sid, folder, monkeypatch):
     backup = {'status':'backup_verified','target':progress_actions.target(),'created_utc':created,'server_backup_file':r'C:\Backup\test.bak'}
     backup_file=folder/'backup_receipt.json';backup_file.write_text(json.dumps(backup))
     backup.update(receipt_file=str(backup_file),receipt_sha256=vendor.digest(backup_file))
-    for tool, result in [('prepare_designer_publish_plan',plan),('backup_designer_test_database',backup)]:
+    receipts = [('prepare_designer_publish_plan',plan)]
+    if require_backup:
+        receipts.append(('backup_designer_test_database',backup))
+    for tool, result in receipts:
         identity, _=store.begin('user',sid,tool,{'manifest_file':str(folder/'manifest.json')},package_id=folder.name)
         store.finish(identity,result)
     return plan,backup
+
+
+def test_test_environment_publish_is_ready_without_backup(workflow, monkeypatch):
+    sid, folder = workflow
+    plan, _ = ready_for_publish(sid, folder, monkeypatch, require_backup=False)
+    state = progress.snapshot('user', sid)
+    assert state['publication']['ready']
+    assert state['publication']['backup'] is None
+    assert state['publication']['backup_required'] is False
+    actions = {item['id']: item['enabled'] for item in state['stages'][7]['actions']}
+    assert actions['publish']
+    assert 'backup' not in actions
+    progress_actions.validate_publish(state, {'expected_plan_sha256': plan['plan_sha256']})
+    with pytest.raises(ValueError, match='确认内容'):
+        progress_actions.validate_publish(state, {'expected_plan_sha256': 'changed'})
+    (folder/'publish_plan.json').write_text('{}')
+    assert not progress.snapshot('user', sid)['publication']['ready']
+
+
+def test_optional_backup_receipt_cannot_block_test_publish(workflow, monkeypatch):
+    sid, folder = workflow
+    plan, _ = ready_for_publish(sid, folder, monkeypatch)
+    monkeypatch.setattr(config, 'DESIGNER_REQUIRE_DATABASE_BACKUP', False)
+    (folder/'backup_receipt.json').write_text('{}')
+    state = progress.snapshot('user', sid)
+    assert state['publication']['ready']
+    progress_actions.validate_publish(state, {'expected_plan_sha256': plan['plan_sha256']})
+
+
+def test_required_backup_still_blocks_publish_without_receipt(workflow, monkeypatch):
+    sid, folder = workflow
+    ready_for_publish(sid, folder, monkeypatch, require_backup=False)
+    monkeypatch.setattr(config, 'DESIGNER_REQUIRE_DATABASE_BACKUP', True)
+    state = progress.snapshot('user', sid)
+    assert not state['publication']['ready']
+    assert state['publication']['reason'] == '请先备份数据库'
+    assert any(item['id'] == 'backup' for item in state['stages'][7]['actions'])
 
 
 def test_publish_requires_exact_reviewed_plan_backup_and_target(workflow,monkeypatch):
@@ -232,10 +273,11 @@ def test_publish_requires_exact_reviewed_plan_backup_and_target(workflow,monkeyp
         progress.start_action('user',sid,folder.name,'publish',options)
 
 
-def test_database_update_runs_in_background_and_does_not_complete_wcf(workflow,monkeypatch):
+@pytest.mark.parametrize('require_backup', [False, True])
+def test_database_update_runs_in_background_and_does_not_complete_wcf(workflow,monkeypatch,require_backup):
     from tools import designer
     sid,folder=workflow
-    plan,backup=ready_for_publish(sid,folder,monkeypatch)
+    plan,backup=ready_for_publish(sid,folder,monkeypatch,require_backup=require_backup)
     async def check(path):return {'intact':True}
     monkeypatch.setattr(designer,'check_designer_package',check)
     monkeypatch.setattr(progress.review,'sync_file',lambda path:{'unchanged':True})
@@ -255,7 +297,7 @@ def test_database_update_runs_in_background_and_does_not_complete_wcf(workflow,m
         assert state['stages'][9]['status']=='pending'
         assert state['current']==9
     asyncio.run(scenario())
-    assert calls[0][0][:3]==(str(folder/'manifest.json'),plan['manifest_sha256'],backup['receipt_file'])
+    assert calls[0][0][:3]==(str(folder/'manifest.json'),plan['manifest_sha256'],backup['receipt_file'] if require_backup else '')
     assert calls[0][1]['expected_target_fingerprint']=='catalog-digest'
 
 
@@ -377,10 +419,60 @@ def test_catalog_drift_stops_update_before_official_processor(workflow,monkeypat
         publication.publish_database(str(folder/'manifest.json'),plan['manifest_sha256'],backup['receipt_file'],str(folder/'baseline.mdb'),expected_target_fingerprint='catalog-digest')
 
 
-def test_batch_publish_plan_compares_latest_mdb_to_original_owned_baseline(workflow,monkeypatch):
+def test_official_update_without_backup_never_executes_backup_sql(workflow, monkeypatch):
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+    sid, folder = workflow
+    plan, _ = ready_for_publish(sid, folder, monkeypatch, require_backup=False)
+    (folder/'backup_receipt.json').unlink()
+    statements = []
+    class Cursor:
+        def execute(self, sql, *args):
+            statements.append(sql)
+            if 'IS_MEMBER' in sql: self.row = ('test-db', 1, 1)
+            elif 'SCHEMA_NAME' in sql: self.row = ('dbo', 1)
+            elif 'sp_getapplock' in sql: self.row = (0,)
+            elif 'SELECT CDOName' in sql: self.row = ('ExSample',)
+            else: raise AssertionError(f'Unexpected database statement: {sql}')
+            return self
+        def fetchone(self): return self.row
+    class Connection:
+        def cursor(self): return Cursor()
+    @contextmanager
+    def connection(*args, **kwargs): yield Connection()
+    monkeypatch.setattr(publication, 'target_connection', connection)
+    monkeypatch.setattr(publication, 'target_schema', lambda cursor: 'dbo')
+    monkeypatch.setattr(publication, 'metadata_fingerprint', lambda *args: 'catalog-digest')
+    monkeypatch.setattr(publication, 'record_published_baseline', lambda *args: {'status': 'verified'})
+    dlls = folder/'dlls'; dlls.mkdir()
+    for name in ('Camstar.Metadata.dll', 'Camstar.Data.dll', 'OECAdmin.dll', 'CIMS.DBUpdate.dll'):
+        (dlls/name).write_bytes(b'test')
+    monkeypatch.setattr(vendor, 'assembly', lambda: dlls/'Camstar.Metadata.dll')
+    def compile(output, request):
+        file = output/'compiled.mdb'; file.write_bytes(b'compiled')
+        return {'compiled_mdb': str(file)}
+    monkeypatch.setattr(vendor, 'run', compile)
+    def processor(args, **kwargs):
+        (Path(kwargs['cwd'])/'result.json').write_text(json.dumps({'ok': True, 'result': {}}))
+        return SimpleNamespace(returncode=0)
+    monkeypatch.setattr(publication.subprocess, 'run', processor)
+    result = publication.publish_database(str(folder/'manifest.json'), plan['manifest_sha256'],
+        siteinfo_mdb=str(folder/'baseline.mdb'), expected_target_fingerprint='catalog-digest')
+    assert result['status'] == 'database_published'
+    assert result['backup_receipt'] is None
+    assert result['backup_required'] is False
+    assert all('BACKUP' not in sql and 'RESTORE' not in sql for sql in statements)
+    monkeypatch.setattr(config, 'DESIGNER_REQUIRE_DATABASE_BACKUP', True)
+    with pytest.raises(ValueError, match='请先备份数据库'):
+        publication.publish_database(str(folder/'manifest.json'), plan['manifest_sha256'], siteinfo_mdb=str(folder/'baseline.mdb'))
+
+
+@pytest.mark.parametrize('require_backup', [False, True])
+def test_batch_publish_plan_compares_latest_mdb_to_original_owned_baseline(workflow,monkeypatch,require_backup):
     from contextlib import contextmanager
     sid,original=workflow
     monkeypatch.setattr(config,'DESIGNER_TEST_TARGET_CONFIRMED',True)
+    monkeypatch.setattr(config,'DESIGNER_REQUIRE_DATABASE_BACKUP',require_backup)
     latest=original.parent/('b'*32);latest.mkdir()
     manifest=json.loads((original/'manifest.json').read_text())
     manifest.update(source_file=str(original/'modified.mdb'),source_sha256=vendor.digest(original/'modified.mdb'),
@@ -409,3 +501,5 @@ def test_batch_publish_plan_compares_latest_mdb_to_original_owned_baseline(workf
     assert merged['source_file']==str(original.parent.parent/'source.mdb')
     assert {op['name'] for op in merged['operations']}=={'ExSample','Code','NextField'}
     assert result['ready_for_publish']
+    assert result['verified_backup_required'] is require_backup
+    assert any('备份' in step for step in result['required_steps']) is require_backup
