@@ -165,13 +165,13 @@
         .excel-preview-source summary { cursor:pointer; }
         .excel-preview-source code { display:block; padding:7px 0; overflow-wrap:anywhere; white-space:pre-wrap; }
         .upload-status { color: var(--teal); font-size: 11px; margin-bottom: 10px; }
-        .send-button { background: #000; color: white; display: flex; align-items: center; gap: 8px; border-radius: 6px; padding: 8px 12px; font-size: 12px; font-weight: 550; }
+        .send-button { background: #000; color: white; display: flex; align-items: center; justify-content: center; width: 36px; height: 36px; border-radius: 50%; padding: 0; flex-shrink: 0; }
         .send-button:hover { background: #262626; }
-        .send-button .icon { width: 14px; height: 14px; }
-        .send-button:not(.stop-button) { width: 36px; height: 36px; border-radius: 50%; padding: 0; justify-content: center; flex-shrink: 0; }
-        .send-button:not(.stop-button) .icon { width: 20px; height: 20px; stroke-width: 2; }
-        .stop-button { background: #f4eeeb; color: #a65138; }
-        .stop-button:hover { background: #eaded8; }
+        .send-button .icon { width: 20px; height: 20px; stroke-width: 2; }
+        .stop-button { background: #dc2626; }
+        .stop-button:hover { background: #b91c1c; }
+        .stop-button:focus-visible { outline-color: #dc2626; }
+        .stop-button .icon { width: 24px; height: 24px; fill: currentColor; stroke: none; }
         .composer-hint { display: flex; justify-content: space-between; color: var(--muted); font-size: 10px; line-height: 1.6; padding: 10px 2px 0; }
         .guide { width: 272px; flex-shrink: 0; border-left: 1px solid var(--border); background: #fcfcfd; padding: 26px 23px; overflow-y: auto; }
         .guide-title { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; }
@@ -305,7 +305,7 @@
                             <div class="attachment-list" id="attachmentList" aria-label="待发送的 Excel 附件"></div>
                             <p class="upload-status" id="uploadStatus" role="status" hidden>正在读取 Excel…</p>
                             <textarea id="inputBox" rows="2" aria-label="设计需求" placeholder="描述你的对象或字段设计需求…" autocomplete="off"></textarea>
-                            <div class="composer-bottom"><div class="composer-tools"><button class="attach-button" id="attachBtn" type="button"><svg class="icon"><use href="#i-attach"/></svg>添加 Excel</button><span class="composer-label"><svg class="icon"><use href="#i-design"/></svg>Opcenter Designer</span></div><button class="send-button" id="sendBtn" type="submit" aria-label="发送" title="发送"><svg class="icon" aria-hidden="true"><use href="#i-send"/></svg></button><button class="send-button stop-button" id="stopBtn" type="button" hidden>停止回答<svg class="icon"><use href="#i-stop"/></svg></button></div>
+                            <div class="composer-bottom"><div class="composer-tools"><button class="attach-button" id="attachBtn" type="button"><svg class="icon"><use href="#i-attach"/></svg>添加 Excel</button><span class="composer-label"><svg class="icon"><use href="#i-design"/></svg>Opcenter Designer</span></div><button class="send-button" id="sendBtn" type="submit" aria-label="发送" title="发送"><svg class="icon" aria-hidden="true"><use href="#i-send"/></svg></button><button class="send-button stop-button" id="stopBtn" type="button" aria-label="停止回答" title="停止回答" hidden><svg class="icon" aria-hidden="true"><use href="#i-stop"/></svg></button></div>
                         </form>
                         <div class="composer-hint"><span>设计完成后，在 Designer 中审核并发布</span><span>Enter 发送 · Shift + Enter 换行</span></div>
                     </div>
