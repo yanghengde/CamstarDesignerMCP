@@ -9,6 +9,14 @@ Siemens Opcenter（Camstar）Designer 元数据设计助手。通过自然语言
 在项目根目录执行：
 
 ```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\start.ps1
+```
+
+脚本自动创建或复用 `.venv`，根据 `requirements.txt` 安装缺少或版本不匹配的依赖，再启动服务；已有符合要求的依赖不会重复下载安装。仅首次创建 `.env`，保留已有配置。需要 Python 3.10 或以上版本；首次创建配置后，请填写模型接口与 Designer 环境配置。只准备依赖、不启动服务时，在命令末尾添加 `-InstallOnly`。
+
+也可以手动准备环境：
+
+```powershell
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 # 仅首次创建配置，保留已有 .env
