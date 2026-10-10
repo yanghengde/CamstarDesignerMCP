@@ -1,9 +1,10 @@
 import os
 import asyncio
 from typing import Literal
+from urllib.parse import urlencode
 
-from fastapi import APIRouter, Query, File, Form, HTTPException, UploadFile
-from fastapi.responses import HTMLResponse, StreamingResponse, FileResponse
+from fastapi import APIRouter, Query, File, Form, HTTPException, UploadFile, Request
+from fastapi.responses import HTMLResponse, StreamingResponse, FileResponse, RedirectResponse
 from pydantic import BaseModel, Field
 
 from config import CHAT_USERNAME, ENABLE_PERFORMANCE_LOG
@@ -170,8 +171,12 @@ async def upload_excel(
 
 
 @router.get("/")
-def index():
-    """返回主页 HTML。"""
+@router.get("/records")
+def index(request: Request):
+    """Serve the assistant or records page, retaining legacy record links."""
+    if request.url.path == '/' and request.query_params.get('view') == 'records':
+        query = urlencode([(key, value) for key, value in request.query_params.multi_items() if key != 'view'])
+        return RedirectResponse('/records' + ('?' + query if query else ''), status_code=307)
     html_path = os.path.join("static", "index.html")
     with open(html_path, "r", encoding="utf-8") as f:
         return HTMLResponse(f.read())
