@@ -54,12 +54,6 @@ async def progress_detail(session_id: str, username: str):
     from designer.progress import snapshot
     require_progress_owner(username, session_id)
     result = await asyncio.to_thread(snapshot, username, session_id)
-    from agent import langgraph_runtime as runtime
-    if runtime._graph is not None and result['active'] is None:
-        graph_state = await runtime._graph.aget_state(runtime._graph_config(username, session_id))
-        if runtime._has_interrupt(graph_state):
-            stage = result['stages'][result['current']-1]
-            stage.update(status='waiting', detail='等待在设计对话中确认')
     result.pop('_manifests', None)
     return result
 

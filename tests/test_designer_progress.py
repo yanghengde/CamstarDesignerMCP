@@ -97,7 +97,99 @@ def test_model_followup_does_not_regress_completed_design_steps(workflow):
     assert state['stages'][3]['status'] == 'done'
     assert state['completed'] == 5
     assert state['active']['status'] == 'running'
+    assert state['workflow_active'] is None
     store.finish(identity, {})
+
+
+def test_reading_current_design_file_does_not_change_workflow_steps(workflow):
+    sid, folder = workflow
+    before = progress.snapshot('user', sid)
+    identity, _ = store.begin('user', sid, 'inspect_designer_mdb', {'mdb_file': str(folder/'modified.mdb')})
+    state = progress.snapshot('user', sid)
+    assert [(item['status'], item['detail']) for item in state['stages']] == [(item['status'], item['detail']) for item in before['stages']]
+    assert state['current'] == before['current']
+    assert state['active']['status'] == 'running'
+    assert state['workflow_active'] is None
+    store.finish(identity, {})
+
+
+def test_read_only_conversation_never_creates_design_progress(workflow):
+    sid, _ = workflow
+    messages = memory.get_user_messages('user', sid)
+    messages[:] = messages[:1] + [{'role': 'user', 'content': '查询 Product 字段'}]
+    add_tool(sid, 'get_designer_entity', {'name': 'Product'}, {'name': 'Product'})
+    identity, _ = store.begin('user', sid, '__llm_inference', {})
+    assert progress.tasks('user') == []
+    state = progress.snapshot('user', sid)
+    assert not state['has_design']
+    assert state['completed'] == 0
+    assert state['requirements'] == []
+    assert state['workflow_active'] is None
+    store.finish(identity, {})
+
+
+def test_design_requirements_exclude_previous_and_followup_chat(workflow):
+    sid, _ = workflow
+    messages = memory.get_user_messages('user', sid)
+    messages[1:1] = [{'role': 'user', 'content': '前面查询 Product'}]
+    messages.append({'role': 'user', 'content': '后面继续查询 ExStatus'})
+    add_tool(sid, 'get_designer_entity', {'name': 'ExStatus'}, {'name': 'ExStatus'})
+    state = progress.snapshot('user', sid)
+    assert state['has_design']
+    assert state['requirements'] == ['创建 ExSample 对象及字段']
+    assert state['current'] == 5
+    assert progress.tasks('user')[0]['title'] == 'ExSample 设计'
+
+
+def test_unrelated_historical_reads_do_not_complete_design_check(workflow):
+    sid, _ = workflow
+    messages = memory.get_user_messages('user', sid)
+    # The only object read belongs to an earlier, independent query.
+    request = messages.pop(1)
+    messages.insert(1, {'role': 'user', 'content': '只查询 Product'})
+    messages.insert(4, request)
+    state = progress.snapshot('user', sid)
+    assert state['stages'][2]['status'] == 'skipped'
+    assert state['requirements'] == ['创建 ExSample 对象及字段']
+    assert state['current'] == 5
+
+
+def test_new_generation_is_visible_but_does_not_reuse_previous_package(workflow):
+    sid, _ = workflow
+    memory.get_user_messages('user', sid).append({'role': 'user', 'content': '本次新增另一个对象'})
+    identity, _ = store.begin('user', sid, 'generate_designer_cdo_package', {'cdo_name': 'ExNext'})
+    state = progress.snapshot('user', sid)
+    assert progress.tasks('user')[0]['id'] == sid
+    assert state['package'] is None
+    assert state['current'] == 4
+    assert state['stages'][3]['status'] == 'running'
+    assert state['workflow_active']['id'] == identity
+    assert state['requirements'] == ['本次新增另一个对象']
+    store.finish(identity, error='生成失败', status='failed')
+    state = progress.snapshot('user', sid)
+    assert state['package'] is None
+    assert state['stages'][3]['status'] == 'failed'
+
+
+def test_cancelled_preview_without_execution_does_not_create_progress(workflow):
+    sid, _ = workflow
+    messages = memory.get_user_messages('user', sid)
+    messages[:] = messages[:1] + [{'role': 'user', 'content': '预览新对象'}]
+    add_tool(sid, 'generate_designer_cdo_package', {}, 'Action cancelled by the user before execution.')
+    assert progress.tasks('user') == []
+    assert not progress.snapshot('user', sid)['has_design']
+
+
+def test_earlier_failed_execution_cannot_replace_a_later_saved_design(workflow):
+    sid, folder = workflow
+    identity, _ = store.begin('user', sid, 'generate_designer_cdo_package', {}, call_id='old-failure')
+    store.finish(identity, error='先前失败', status='failed')
+    call_id = memory.get_user_messages('user', sid)[-1]['tool_call_id']
+    identity, _ = store.begin('user', sid, 'generate_designer_design_package', {}, call_id=call_id)
+    store.finish(identity, {'files': {'manifest.json': str(folder/'manifest.json')}})
+    state = progress.snapshot('user', sid)
+    assert state['package']['id'] == folder.name
+    assert state['stages'][3]['status'] == 'done'
 
 
 def test_manual_confirmations_are_scoped_ordered_and_labelled(workflow):

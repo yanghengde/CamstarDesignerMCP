@@ -13,6 +13,7 @@ from designer import progress_actions
 
 TITLES = ['提交需求', '识别设计', '检查现有定义', '生成设计', '核对结果', '检查设计', 'Compile', 'Update Database', '生成 WCF', '部署 WCF', '验证结果']
 DONE = {'done', 'confirmed', 'skipped'}
+DESIGN_TOOLS = {'generate_designer_cdo_package', 'generate_designer_design_package'}
 STAGES = {'generate_designer_cdo_package': 4, 'generate_designer_design_package': 4,
           'check_designer_package': 5, 'prepare_designer_review': 6, 'compile_designer_mdb': 7,
           'publish_designer_test_database': 8, 'verify_designer_published_design': 11,
@@ -34,55 +35,115 @@ def parse(value):
 
 def tool_receipts(messages):
     calls, receipts = {}, []
-    for message in messages:
+    turn_start = None
+    for index, message in enumerate(messages):
+        if message.get('role') == 'user':
+            turn_start = index
         for call in message.get('tool_calls', []):
             try:
-                calls[call['id']] = json.loads(call['function']['arguments'])
+                calls[call['id']] = (json.loads(call['function']['arguments']), turn_start)
             except (KeyError, ValueError):
                 pass
         if message.get('role') == 'tool':
             content = message.get('content', '')
-            receipts.append({'tool': message.get('name', ''), 'arguments': calls.get(message.get('tool_call_id'), {}),
+            arguments, call_turn = calls.get(message.get('tool_call_id'), ({}, turn_start))
+            receipts.append({'tool': message.get('name', ''), 'arguments': arguments,
+                             'turn_start': call_turn,
                              'call_id': message.get('tool_call_id', ''), 'result': parse(content),
                              'status': 'failed' if isinstance(content, str) and content.startswith('Error') else 'done',
                              'error': content[:500] if isinstance(content, str) and content.startswith('Error') else ''})
     return receipts
 
 
+def workflow_receipts(messages, events):
+    receipts = tool_receipts(messages)
+    seen = {item['call_id'] for item in receipts if item['call_id']}
+    event_times = {event['call_id']: event['started'] for event in events if event['call_id']}
+    for item in receipts:
+        item['started'] = event_times.get(item['call_id'])
+    call_turns, turn_start = {}, None
+    for index, message in enumerate(messages):
+        if message.get('role') == 'user':
+            turn_start = index
+        for call in message.get('tool_calls', []):
+            call_turns[call.get('id')] = turn_start
+    latest_user = next((index for index in range(len(messages)-1, -1, -1)
+                        if messages[index].get('role') == 'user'), None)
+    for event in events:
+        if event['call_id'] and event['call_id'] in seen:
+            continue
+        fallback = latest_user if event['status'] == 'running' and event['tool'] in DESIGN_TOOLS else None
+        item = {**event, 'turn_start': call_turns.get(event['call_id'], fallback)}
+        position = next((index for index, receipt in enumerate(receipts)
+                         if receipt.get('started') is not None and receipt['started'] > event['started']), len(receipts))
+        receipts.insert(position, item)
+    return receipts
+
+
+def is_design_attempt(item):
+    # Policy-cancelled tool calls have no execution receipt or design result.
+    return item['tool'] in DESIGN_TOOLS and ((isinstance(item.get('result'), dict) and bool(item['result']))
+                                           or item['status'] in ('running', 'failed', 'interrupted'))
+
+
 def same_file(a, b):
     return bool(a and b and Path(a).resolve() == Path(b).resolve())
+
+
+def design_task_summary(session, attempt):
+    args = attempt.get('arguments') or {}
+    operations = args.get('operations', [])
+    updated = attempt.get('started') or 0
+    manifest_file = (attempt.get('result') or {}).get('files', {}).get('manifest.json')
+    if manifest_file:
+        try:
+            file = source_path(manifest_file, '.json')
+            operations = json.loads(file.read_text(encoding='utf-8')).get('operations', operations)
+            updated = updated or file.stat().st_mtime
+        except (ValueError, OSError):
+            pass
+    if not isinstance(operations, list):
+        operations = []
+    names = list(dict.fromkeys(op.get('owner') or op.get('name') for op in operations
+                              if isinstance(op, dict) and isinstance(op.get('owner') or op.get('name'), str)))
+    if isinstance(args.get('cdo_name'), str) and args['cdo_name']:
+        names = [args['cdo_name']]
+    title = '、'.join(names[:3]) + ' 设计' if names else '元数据设计'
+    return {**session, 'title': title, 'design_updated_at': updated}
 
 
 def tasks(username):
     result = []
     for session in get_sessions(username):
         messages = get_user_messages(username, session['id'])
-        if any(item.get('role') == 'user' for item in messages):
-            result.append(session)
-    return result
+        receipts = workflow_receipts(messages, store.operations(username, session['id']))
+        designs = [item for item in receipts if is_design_attempt(item)]
+        if designs:
+            result.append(design_task_summary(session, designs[-1]))
+    return sorted(result, key=lambda item: item['design_updated_at'], reverse=True)
 
 
 def snapshot(username, session_id):
     messages = get_user_messages(username, session_id)
-    receipts = tool_receipts(messages)
-    seen = {item['call_id'] for item in receipts if item['call_id']}
     events = store.operations(username, session_id)
-    receipts += [event for event in events if not event['call_id'] or event['call_id'] not in seen]
+    receipts = workflow_receipts(messages, events)
     stages = [{'number': i+1, 'title': title, 'status': 'pending', 'detail': '', 'actions': []} for i, title in enumerate(TITLES)]
     def mark(number, status='done', detail=''):
         stages[number-1].update(status=status, detail=detail)
-    users = [item for item in messages if item.get('role') == 'user']
-    if users:
+    designs = [item for item in receipts if is_design_attempt(item)]
+    design_turns = {designs[-1]['turn_start']} - {None} if designs else set()
+    if designs:
         mark(1)
-    designs = [item for item in receipts if item['tool'] in ('generate_designer_cdo_package', 'generate_designer_design_package')]
-    saved = [item for item in designs if (item.get('result') or {}).get('files', {}).get('manifest.json')] if designs else []
+        mark(2, detail='本次设计参数已提交')
+    all_saved = [item for item in designs if (item.get('result') or {}).get('files', {}).get('manifest.json')]
+    saved = all_saved if designs and designs[-1] in all_saved else []
     package, manifests, error = None, [], ''
     publication_info = None
     if saved:
         path = saved[-1]['result']['files']['manifest.json']
         try:
             package = review.summary(path)
-            owned = {str(Path(item['result']['files']['manifest.json']).resolve()): item for item in saved}
+            owned = {str(Path(item['result']['files']['manifest.json']).resolve()): item for item in all_saved}
             cursor = path
             while cursor and len(manifests) < 100:
                 manifest_path, manifest = review.package(cursor)
@@ -91,6 +152,8 @@ def snapshot(username, session_id):
                 if any(str(manifest_path) == item[0] for item in manifests):
                     raise ValueError('设计来源存在循环')
                 manifests.append((str(manifest_path), manifest))
+                if owned[str(manifest_path)].get('turn_start') is not None:
+                    design_turns.add(owned[str(manifest_path)]['turn_start'])
                 source = Path(manifest.get('source_file', ''))
                 parent = str((source.parent / 'manifest.json').resolve())
                 cursor = parent if source.name == 'modified.mdb' and parent in owned else ''
@@ -102,9 +165,12 @@ def snapshot(username, session_id):
         except (ValueError, KeyError, OSError) as exc:
             error = str(exc)
             mark(4, 'blocked', '设计文件已变化')
-    reads = [item for item in receipts if item['tool'].startswith(('get_designer_', 'list_designer_', 'inspect_designer_', 'analyze_designer_')) and item['status'] == 'done' and item.get('result')]
+    users = [item for index, item in enumerate(messages) if index in design_turns and item.get('role') == 'user']
+    reads = [item for item in receipts if item.get('turn_start') in design_turns and item['tool'].startswith(('get_designer_', 'list_designer_', 'inspect_designer_', 'analyze_designer_')) and item['status'] == 'done' and item.get('result')]
     if reads:
         mark(3)
+    elif designs:
+        mark(3, 'skipped', '由生成设计一并核对')
     if designs and designs[-1]['status'] in ('failed', 'interrupted'):
         mark(4, 'failed', designs[-1].get('error', '设计未完成'))
     if designs:
@@ -179,26 +245,27 @@ def snapshot(username, session_id):
                     item['enabled'] &= bool(publication_info['plan'] and publication_info['plan'].get('ready_for_publish'))
         stages[9]['detail'] = stages[9]['detail'] or '在运行环境部署 WCF，完成后确认'
     active = next((item for item in reversed(events) if item['status'] == 'running'), None)
+    workflow_active = active if active and active['tool'] in STAGES and (active['tool'] in DESIGN_TOOLS or any(item.get('id') == active['id'] for item in relevant)
+                      or (package and active.get('package_id') == package['id'] and active['tool'] in STAGES)) else None
     if active:
-        if active['tool'] == '__llm_inference':
-            if stages[1]['status'] == 'pending':
-                mark(2, 'running', '正在识别需求')
-        else:
-            stage = STAGES.get(active['tool'], 3)
+        if workflow_active:
+            stage = STAGES[active['tool']]
             mark(stage, 'running', '正在处理')
         for item in stages:
             for action in item['actions']:
                 action['enabled'] = False
     current = next((item['number'] for item in stages if item['status'] not in DONE), len(TITLES))
-    if active and active['tool'] != '__llm_inference':
-        current = STAGES.get(active['tool'], 3)
-    recent_job = next((item for item in reversed(events) if item.get('action')), None)
+    if workflow_active:
+        current = STAGES[workflow_active['tool']]
+    recent_job = next((item for item in reversed(events) if item.get('action') and package
+                       and (item.get('package_id') == package['id'] or any(receipt.get('id') == item['id'] for receipt in relevant))), None)
     wcf = next((item['result'] for item in reversed(relevant) if item['tool'] == 'generate_designer_wcf_package'
                 and item.get('result') and item['result'].get('fields_verified') and item['result'].get('status') == 'services_generated'), None)
     return {'session_id': session_id, 'stages': stages, 'current': current,
             'completed': sum(item['status'] in DONE for item in stages), 'package': package,
             'requirements': [item.get('display_content', item.get('content', ''))[:10000] for item in users],
             'active': public_job(active), 'last_job': public_job(recent_job), 'error': error,
+            'has_design': bool(designs), 'workflow_active': public_job(workflow_active),
             'publication': publication_info,
             'wcf': wcf,
             'design_rows': [{'owner': op['owner'], 'name': op['name'], 'field_type': op.get('field_type', '')}

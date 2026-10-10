@@ -149,6 +149,7 @@
         .notice { position:fixed; bottom:24px; left:50%; transform:translateX(-50%); background:#263730; color:white; padding:11px 18px; border-radius:9px; max-width:80vw; font-size:12px; z-index:40; }
         .empty { text-align:center; padding:90px 20px; color:var(--secondary); }
         .empty h3 { font-size:20px; color:var(--text); margin-bottom:20px; font-weight:550; }
+        .empty p { margin-bottom:24px; line-height:1.8; }
         dialog { margin:auto; padding:24px; border:1px solid var(--border); border-radius:12px; width:min(720px,calc(100% - 32px)); max-height:80vh; color:var(--text); }
         dialog::backdrop { background:#1c28373b; }
         dialog h3 { font-size:16px; font-weight:550; margin-bottom:18px; }
@@ -216,7 +217,7 @@
 
 <section class="progress-page"><div class="progress-inner">
     <div class="page-heading"><div><div class="eyebrow">MY DESIGN WORKFLOW</div><h2>我的设计进度</h2></div><div class="heading-actions"><select id="taskSelect" class="task-select" aria-label="选择设计任务" disabled><option>正在加载…</option></select><button class="button" id="refreshBtn"><svg class="icon"><use href="#i-history"/></svg>刷新</button></div></div>
-    <div id="emptyView" class="empty" hidden><h3>暂无设计任务</h3><a class="button primary" href="/">开始设计</a></div>
+    <div id="emptyView" class="empty" hidden><h3>暂无设计任务</h3><p>新建对象或修改字段后，设计进度会自动显示。</p><a class="button primary" href="/">开始设计</a></div>
     <div id="taskContent" hidden>
         <section class="overview"><div class="overview-top"><div><h3 id="taskTitle"></h3><div class="metadata" id="taskMeta"></div></div><span class="counter"><b id="completedCount">0</b> / <span id="totalCount">11</span> 完成</span></div><div class="segments" id="segments" aria-label="步骤完成情况"></div></section>
         <div class="workflow-grid"><section class="panel"><div class="panel-heading">完整流程<small>点击查看步骤</small></div><ol class="step-list" id="stepList"></ol></section>
@@ -290,15 +291,17 @@
         async function api(url,options) { const response=await fetch(url,options); const data=await response.json(); if(!response.ok) throw Error(typeof data.detail==='string'?data.detail:`HTTP ${response.status}`); return data; }
         function duration(start) { const seconds=Math.max(0,Math.floor(Date.now()/1000-start)); return `${Math.floor(seconds/60).toString().padStart(2,'0')}:${(seconds%60).toString().padStart(2,'0')}`; }
         function renderRuntime() {
-            const node=document.getElementById('runtime'); node.replaceChildren(); node.hidden=!state?.active;
-            if(!state?.active) return;
-            const title=document.createElement('b'); title.textContent=`${labels[state.active.action]||'助手正在处理'} · `; node.appendChild(title);
-            const time=document.createElement('time'); time.textContent=duration(state.active.started); node.appendChild(time);
-            const line=document.createElement('div'); line.textContent=`最近更新 ${new Date(state.active.updated*1000).toLocaleTimeString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false})}`; node.appendChild(line);
-            if(state.active.action) {const note=document.createElement('div'); note.textContent='可离开页面，操作会继续。'; node.appendChild(note);}
+            const active=state?.workflow_active;
+            const node=document.getElementById('runtime'); node.replaceChildren(); node.hidden=!active;
+            if(!active) return;
+            const title=document.createElement('b'); title.textContent=`${labels[active.action]||'正在处理设计'} · `; node.appendChild(title);
+            const time=document.createElement('time'); time.textContent=duration(active.started); node.appendChild(time);
+            const line=document.createElement('div'); line.textContent=`最近更新 ${new Date(active.updated*1000).toLocaleTimeString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false})}`; node.appendChild(line);
+            if(active.action) {const note=document.createElement('div'); note.textContent='可离开页面，操作会继续。'; node.appendChild(note);}
         }
         function button(label, handler, enabled=true, primary=false) {const node=document.createElement('button'); node.type='button'; node.className='button'+(primary?' primary':''); node.textContent=label; node.disabled=!enabled; node.onclick=handler; return node;}
         function render() {
+            if(!state?.has_design){document.getElementById('taskContent').hidden=true;document.getElementById('emptyView').hidden=false;return;}
             document.getElementById('taskSelect').disabled=submitting;document.getElementById('taskContent').hidden=false; document.getElementById('emptyView').hidden=true;
             document.getElementById('taskTitle').textContent=taskList.find(item=>item.id===currentSession)?.title||'设计任务';
             const meta=document.getElementById('taskMeta'); meta.replaceChildren();
@@ -387,17 +390,24 @@
             finally{submitting=false;if(state)render();}
         }
         async function refresh() {
-            clearTimeout(pollTimer);if(loading||!currentSession)return;loading=true;
-            try {const requested=currentSession;const next=await api(`/api/progress/${encodeURIComponent(requested)}?username=${encodeURIComponent(navigationUsername)}`);if(requested!==currentSession)return;if(state?.package?.id!==next.package?.id)selectedStage=null;state=next;render();document.getElementById('syncState').lastChild.textContent='自动更新';}
+            clearTimeout(pollTimer);if(loading)return;loading=true;
+            try {
+                const data=await api(`/api/progress/tasks?username=${encodeURIComponent(navigationUsername)}`);taskList=data.tasks;
+                const select=document.getElementById('taskSelect');select.replaceChildren();
+                if(!taskList.length){currentSession=null;selectedStage=null;state=null;select.add(new Option('暂无设计任务',''));select.disabled=true;render();document.getElementById('syncState').lastChild.textContent='自动更新';return;}
+                for(const item of taskList)select.add(new Option(item.title,item.id));
+                if(!taskList.some(item=>item.id===currentSession)) {
+                    const wanted=new URLSearchParams(location.search).get('session_id');currentSession=taskList.some(item=>item.id===wanted)?wanted:taskList[0].id;selectedStage=null;state=null;
+                }
+                select.value=currentSession;select.disabled=submitting;
+                const requested=currentSession;const next=await api(`/api/progress/${encodeURIComponent(requested)}?username=${encodeURIComponent(navigationUsername)}`);if(requested!==currentSession)return;if(state?.package?.id!==next.package?.id)selectedStage=null;state=next;render();document.getElementById('syncState').lastChild.textContent='自动更新';
+            }
             catch(error){document.getElementById('syncState').lastChild.textContent='连接异常';notice(error.message);}
-            finally{loading=false;pollTimer=setTimeout(refresh,state?.session_id!==currentSession?0:(document.hidden?15000:4000));}
+            finally{loading=false;pollTimer=setTimeout(refresh,currentSession&&state?.session_id!==currentSession?0:(document.hidden?15000:4000));}
         }
         async function initialize() {
             await loadNavigation();
-            try {const data=await api(`/api/progress/tasks?username=${encodeURIComponent(navigationUsername)}`);taskList=data.tasks;const select=document.getElementById('taskSelect');select.replaceChildren();
-                if(!taskList.length){select.add(new Option('暂无设计任务',''));document.getElementById('emptyView').hidden=false;document.getElementById('syncState').lastChild.textContent='已同步';return;}
-                for(const item of taskList)select.add(new Option(item.title,item.id));const wanted=new URLSearchParams(location.search).get('session_id');currentSession=taskList.some(item=>item.id===wanted)?wanted:taskList[0].id;select.value=currentSession;select.disabled=false;await refresh();
-            }catch(error){notice(error.message);document.getElementById('syncState').lastChild.textContent='连接异常';}
+            await refresh();
         }
         document.getElementById('taskSelect').onchange=event=>{currentSession=event.target.value;selectedStage=null;state=null;history.replaceState(null,'',`/progress?session_id=${encodeURIComponent(currentSession)}`);refresh();};
         document.getElementById('refreshBtn').onclick=()=>refresh();document.getElementById('syncBtn').onclick=()=>perform('sync');
