@@ -84,7 +84,7 @@ def test_latest_design_counts_owned_ancestors_without_sibling_designs(workflow):
     state = progress.snapshot('user', sid)
     assert state['package']['id'] == latest.name
     assert state['package']['field_count'] == 2
-    assert {row['name'] for row in state['design_rows']} == {'Code', 'LatestField'}
+    assert {row['name'] for row in state['design_rows'] if row['kind']=='field'} == {'Code', 'LatestField'}
     assert len(state['_manifests']) == 2
 
 

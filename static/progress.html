@@ -305,7 +305,7 @@
             document.getElementById('taskSelect').disabled=submitting;document.getElementById('taskContent').hidden=false; document.getElementById('emptyView').hidden=true;
             document.getElementById('taskTitle').textContent=taskList.find(item=>item.id===currentSession)?.title||'设计任务';
             const meta=document.getElementById('taskMeta'); meta.replaceChildren();
-            for(const text of state.package?[state.package.objects.join('、')||'元数据设计',`${state.package.field_count} 个字段`,`工作区 ${state.package.workspace}`]:['等待设计结果']) {const span=document.createElement('span'); span.textContent=text; meta.appendChild(span);}
+            for(const text of state.package?[state.package.objects.join('、')||'元数据设计',`${state.package.change_count||state.package.field_count} 项改动`,`工作区 ${state.package.workspace}`]:['等待设计结果']) {const span=document.createElement('span'); span.textContent=text; meta.appendChild(span);}
             document.getElementById('completedCount').textContent=state.completed;
             document.getElementById('totalCount').textContent=state.stages.length;
             document.getElementById('conversationLink').href=`/?session_id=${encodeURIComponent(currentSession)}`;
@@ -348,11 +348,22 @@
                 const code=document.createElement('code');code.className='file-path';code.textContent=path;area.appendChild(code);
             }
             const link=document.createElement('a');link.className='file-note';link.textContent='下载设计 MDB ↗';link.href=`/designer/results/${pkg.id}/mdb?username=${encodeURIComponent(navigationUsername)}&session_id=${encodeURIComponent(currentSession)}`;area.appendChild(link);
-            if(pkg.working){const versions=document.createElement('details');versions.open=!!versionsOpen;versions.style.marginTop='20px';const heading=document.createElement('summary');heading.className='file-label';heading.textContent=`MDB 备份 · ${pkg.working.backups.length} / ${pkg.working.backup_limit}`;versions.appendChild(heading);if(!pkg.working.backups.length){const note=document.createElement('p');note.className='file-note';note.textContent='发布成功后，下次设计首次修改前自动备份。';versions.appendChild(note);}for(const version of pkg.working.backups){const row=document.createElement('div');row.style.marginTop='12px';const time=document.createElement('p');time.className='file-note';time.textContent=`${new Date(version.created_utc).toLocaleString('zh-CN',{hour12:false})} · ${(version.objects||[]).filter(Boolean).slice(0,3).join('、')||'设计版本'} · ${version.method==='manual'?'手动确认发布':'已发布版本'}`;row.appendChild(time);for(const [kind,label] of version.siteinfo_sha256?[['mdb','下载 MDB'],['siteinfo','下载 SiteInfo']]:[['mdb','下载 MDB']]){const link=document.createElement('a');link.className='file-note';link.style.marginRight='12px';link.textContent=label;link.href=`/designer/results/${pkg.id}/backups/${version.id}/${kind}?username=${encodeURIComponent(navigationUsername)}&session_id=${encodeURIComponent(currentSession)}`;row.appendChild(link);}versions.appendChild(row);}area.appendChild(versions);}
+            if(pkg.working){
+                const versions=document.createElement('details');versions.open=!!versionsOpen;versions.style.marginTop='20px';
+                const heading=document.createElement('summary');heading.className='file-label';heading.textContent=`MDB 备份 · ${pkg.working.backups.length} / ${pkg.working.backup_limit}`;versions.appendChild(heading);
+                if(!pkg.working.backups.length){const note=document.createElement('p');note.className='file-note';note.textContent='发布成功后，下次设计首次修改前自动备份。';versions.appendChild(note);}
+                for(const version of pkg.working.backups){
+                    const row=document.createElement('div');row.style.marginTop='12px';
+                    const time=document.createElement('p');time.className='file-note';time.textContent=`${new Date(version.created_utc).toLocaleString('zh-CN',{hour12:false})} · ${(version.objects||[]).filter(Boolean).slice(0,3).join('、')||'设计版本'} · ${version.method==='restore_checkpoint'?'恢复前快照':version.method==='manual'?'手动确认发布':'已发布版本'}`;row.appendChild(time);
+                    for(const [kind,label] of version.siteinfo_sha256?[['mdb','下载 MDB'],['siteinfo','下载 SiteInfo']]:[['mdb','下载 MDB']]){const link=document.createElement('a');link.className='file-note';link.style.marginRight='12px';link.textContent=label;link.href=`/designer/results/${pkg.id}/backups/${version.id}/${kind}?username=${encodeURIComponent(navigationUsername)}&session_id=${encodeURIComponent(currentSession)}`;row.appendChild(link);}
+                    row.appendChild(button('恢复此版本',()=>perform('restore_mdb',{backup_id:version.id}),!submitting&&!state.active));versions.appendChild(row);
+                }
+                area.appendChild(versions);
+            }
         }
         function details(number) {
             const content=document.getElementById('detailsContent');content.replaceChildren();content.className='';document.getElementById('detailsTitle').textContent=number===4?'设计结果':'设计需求';
-            if(number===4&&state.design_rows?.length) {const table=document.createElement('table');table.className='detail-table';const head=table.createTHead().insertRow();for(const text of ['对象','字段','类型']){const th=document.createElement('th');th.textContent=text;head.appendChild(th);}const body=table.createTBody();for(const item of state.design_rows){const row=body.insertRow();for(const text of [item.owner,item.name,item.field_type])row.insertCell().textContent=text;}content.appendChild(table);}
+            if(number===4&&state.design_rows?.length) {const table=document.createElement('table');table.className='detail-table';const head=table.createTHead().insertRow();for(const text of ['改动','所属对象','名称','定义类型']){const th=document.createElement('th');th.textContent=text;head.appendChild(th);}const kinds={cdo:'对象',field:'字段',field_type:'字段类型',clf:'CLF',clf_function:'函数调用',clf_parameter:'调用参数',event_binding:'事件绑定',query:'查询',query_text:'查询文本',map:'对象映射',field_map:'字段映射',column:'存储列',index:'索引',label:'标签'};const body=table.createTBody();for(const item of state.design_rows){const row=body.insertRow();for(const text of [item.label||item.action||'修改',item.owner,item.name,item.field_type||kinds[item.kind]||'元数据'])row.insertCell().textContent=text||'—';}content.appendChild(table);}
             else {content.className='requirements';for(const text of state.requirements){const p=document.createElement('p');p.textContent=text;content.appendChild(p);}}
             document.getElementById('detailsDialog').showModal();
         }
@@ -367,23 +378,24 @@
             } else summaryRow(container,'数据库备份','测试环境，无需备份');
             if(info.reason||info.plan?.blockers?.length){const note=document.createElement('p');note.textContent=info.plan?.blockers?.join('；')||info.reason;container.appendChild(note);}
         }
-        function askConfirmation(action) {
-            const titles={confirm_review:'确认已在 Designer 检查设计？',confirm_compile:'确认已在 Designer 编译？',confirm_publish:'确认已执行 Update Database？',confirm_wcf:'确认已生成并核对 WCF？',confirm_services:'确认 WCF 已部署并检查服务？',skip_services:'本次设计无需 WCF？',confirm_complete:'确认业务验收已完成？',backup:'备份目标数据库',publish:'执行 Update Database',wcf:'生成 WCF'};
+        function askConfirmation(action,options={}) {
+            const titles={confirm_review:'确认已在 Designer 检查设计？',confirm_compile:'确认已在 Designer 编译？',confirm_publish:'确认已执行 Update Database？',confirm_wcf:'确认已生成并核对 WCF？',confirm_services:'确认 WCF 已部署并检查服务？',skip_services:'本次设计无需 WCF？',confirm_complete:'确认业务验收已完成？',backup:'备份目标数据库',publish:'执行 Update Database',wcf:'生成 WCF',restore_mdb:'恢复工作 MDB'};
             const content=document.getElementById('confirmContent');content.replaceChildren();document.getElementById('confirmTitle').textContent=titles[action];
             const note=document.createElement('p');note.className='confirm-note';note.textContent=action==='publish'?'更新以下数据库的设计元数据与存储结构。':action==='backup'?'创建独立备份并校验可读性。':action==='wcf'?'编译当前设计副本，全量生成 WCF，并核对所选对象的新字段。':'记录手动完成状态。';content.appendChild(note);
+            if(action==='restore_mdb') {const version=state.package.working.backups.find(item=>item.id===options.backup_id);note.textContent=`将工作 MDB 恢复为 ${new Date(version.created_utc).toLocaleString('zh-CN',{hour12:false})} 的版本。恢复前自动保存当前 MDB；数据库与 SiteInfo 保持当前版本。恢复后请重新检查、编译并发布。`;const path=document.createElement('code');path.className='file-path';path.textContent=state.package.working.server_mdb||state.package.mdb_file;content.appendChild(path);}
             if(action==='publish'||action==='backup') {const summary=document.createElement('div');summary.className='execution-summary';publicationSummary(summary,state.publication);content.appendChild(summary);}
             if(action==='publish') {const changes=state.publication.plan.changes||[];const names={create_cdo:'新增对象',add_field:'新增字段',create_field_type:'新增字段类型',patch:'修改属性',delete:'删除',change_field_type:'修改字段类型'};const table=document.createElement('table');table.className='detail-table';const head=table.createTHead().insertRow();for(const title of ['动作','对象','名称','内容']){const th=document.createElement('th');th.textContent=title;head.appendChild(th);}const body=table.createTBody();for(const change of changes){const row=body.insertRow();const description=[change.field_type,change.parent,...Object.entries(change.changes||change.properties||{}).map(([key,value])=>`${key}: ${typeof value==='object'?JSON.stringify(value):value}`)].filter(Boolean).join(' · ');for(const value of [names[change.action]||change.action,change.owner||change.kind||'',change.name||'',description])row.insertCell().textContent=value;}content.appendChild(table);}
-            if(action==='wcf') {const label=document.createElement('label');label.className='confirm-note';label.textContent='验收对象（英文逗号分隔，最多 20 个）';label.htmlFor='wcfTypes';const input=document.createElement('input');input.id='wcfTypes';input.className='wcf-input';input.value=state.package.objects.join(', ');content.append(label,input);}
+            if(action==='wcf') {const label=document.createElement('label');label.className='confirm-note';label.textContent='验收对象（英文逗号分隔，最多 20 个）';label.htmlFor='wcfTypes';const input=document.createElement('input');input.id='wcfTypes';input.className='wcf-input';input.value=(state.package.service_objects||state.package.objects).join(', ');content.append(label,input);}
             document.getElementById('acceptConfirm').textContent=action==='publish'?'执行 Update Database':action==='backup'?'开始备份':action==='wcf'?'生成 WCF':'确认';
             document.getElementById('confirmDialog').showModal();return new Promise(resolve=>confirmationResolve=resolve);
         }
         function answerConfirmation(value) {document.getElementById('confirmDialog').close();confirmationResolve?.(value);confirmationResolve=null;}
-        async function perform(action) {
+        async function perform(action,extraOptions={}) {
             if(submitting||state?.active||!state?.package)return;
             const session=currentSession,packageId=state.package.id;
-            const options=action==='publish'?{expected_plan_sha256:state.publication.plan.plan_sha256}:{};
+            const options=action==='publish'?{expected_plan_sha256:state.publication.plan.plan_sha256}:{...extraOptions};
             if(action==='publish'&&state.publication.backup_required)options.expected_backup_sha256=state.publication.backup.receipt_sha256;
-            if((action.startsWith('confirm_')||['skip_services','backup','publish','wcf'].includes(action))&&!await askConfirmation(action))return;
+            if((action.startsWith('confirm_')||['skip_services','backup','publish','wcf','restore_mdb'].includes(action))&&!await askConfirmation(action,options))return;
             if(currentSession!==session||state?.package?.id!==packageId){notice('设计已更新，请刷新后重试');return;}
             if(action==='wcf')options.verify_types=document.getElementById('wcfTypes').value.split(/[,，]/).map(value=>value.trim()).filter(Boolean);
             submitting=true;render();

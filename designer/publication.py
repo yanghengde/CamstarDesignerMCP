@@ -39,14 +39,17 @@ def redact(value: str) -> str:
     return value
 
 
-def metadata_fingerprint(cursor, schema: str) -> str:
+def metadata_fingerprint(cursor, schema: str, version=2) -> str:
     """Fingerprint the runtime design catalog, excluding business instances."""
     from hashlib import sha256
     result=sha256()
     available={r[0] for r in cursor.execute("SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA=? AND TABLE_TYPE='BASE TABLE'",schema).fetchall()}
-    tables=("CDODefinition","CDOFields","FieldDefinitions","CLFDefinitions","CLFFunctions","CLFParameters",
-            "QueryDefs","QueryTexts","QueryParameters","DBTables","DBColumns","DBIndexDefinition","DBIndexEntries",
-            "CDOMapDefinition","CDOFieldMapDefinition","CLFEventMaps","Labels","FunctionDefinitions","FunctionParameters","Workspace","FeatureDefinitions")
+    from designer.acceptance import TABLE_KEYS
+    tables=tuple(TABLE_KEYS) + ('Workspace', 'FeatureDefinitions')
+    if version == 1:
+        tables=("CDODefinition","CDOFields","FieldDefinitions","CLFDefinitions","CLFFunctions","CLFParameters",
+                "QueryDefs","QueryTexts","QueryParameters","DBTables","DBColumns","DBIndexDefinition","DBIndexEntries",
+                "CDOMapDefinition","CDOFieldMapDefinition","CLFEventMaps","Labels","FunctionDefinitions","FunctionParameters","Workspace","FeatureDefinitions")
     for table in tables:
         if table not in available: continue
         cursor.execute(f"SELECT * FROM {sql_identifier(schema)}.{sql_identifier(table)}")
@@ -63,11 +66,17 @@ def metadata_fingerprint(cursor, schema: str) -> str:
     return result.hexdigest()
 
 
+def baseline_matches(cursor, schema, baseline):
+    """Old checkpoints retain their original hash algorithm until the next publish."""
+    actual = metadata_fingerprint(cursor, schema) if baseline.get('fingerprint_version') == 2 else metadata_fingerprint(cursor, schema, 1)
+    return actual == baseline.get('metadata_fingerprint')
+
+
 def record_published_baseline(manifest_path: Path, report: dict, cursor, schema: str) -> dict:
     modified=source_path(str(manifest_path.parent/"modified.mdb"),".mdb")
     record={"status":"verified","target":report["target"],"mdb_file":str(modified),"sha256":vendor.digest(modified),
             "method": report.get('method', 'automatic'),
-            "metadata_fingerprint":metadata_fingerprint(cursor,schema),"coverage":"installed_design_catalog_and_physical_schema",
+            "metadata_fingerprint":metadata_fingerprint(cursor,schema),"fingerprint_version":2,"coverage":"installed_design_catalog_and_physical_schema",
             "publish_result_file":report.get("result_file",""),"recorded_utc":datetime.now(timezone.utc).isoformat()}
     path=root_dir()/"published_baseline.json"
     temporary=path.with_suffix(".tmp"); temporary.write_text(json.dumps(record,ensure_ascii=False,indent=2),encoding="utf-8"); temporary.replace(path)
@@ -202,7 +211,7 @@ def backup_target() -> dict:
             if baseline_path.is_file():
                 baseline=json.loads(baseline_path.read_text(encoding="utf-8"))
                 schema=target_schema(cur)
-                if baseline.get("target")==result["target"] and baseline.get("metadata_fingerprint")==metadata_fingerprint(cur,schema):
+                if baseline.get("target")==result["target"] and baseline_matches(cur,schema,baseline):
                     try:
                         if vendor.digest(source_path(baseline["mdb_file"],".mdb"))==baseline.get("sha256"):
                             result["published_baseline"]=baseline
@@ -254,7 +263,8 @@ def restore_test_backup(backup_receipt: str, expected_receipt_sha256: str) -> di
             result.update(status="restored",database_state=state,database_restored=True)
         with target_connection() as restored_conn:
             restored_cursor=restored_conn.cursor()
-            fingerprint=metadata_fingerprint(restored_cursor,target_schema(restored_cursor))
+            saved_baseline = receipt.get('published_baseline') or {}
+            fingerprint=metadata_fingerprint(restored_cursor,target_schema(restored_cursor),saved_baseline.get('fingerprint_version', 1))
             result["published_baseline"]=reconcile_restored_baseline(receipt,fingerprint)
     except Exception as exc:
         error=redact(str(exc))
@@ -280,20 +290,27 @@ def verified_manifest(manifest_file: str) -> tuple[Path,dict]:
 
 def verify_published_design(manifest_file: str, test_string_boundaries: bool = False) -> dict:
     """Check changed definitions and physical string columns, without business writes."""
-    path,_=verified_manifest(manifest_file)
+    path,manifest=verified_manifest(manifest_file)
     root,_=load_xml(path.parent/"changes.xml")
     checks=[]
     with target_connection() as conn:
         cur=conn.cursor(); schema=target_schema(cur); prefix=sql_identifier(schema)+"."
+        from designer.acceptance import verify_manifest
+        checks.extend(verify_manifest({**manifest, '_modified_file': str(path.parent/'modified.mdb')}, cur, schema))
         for cdo in root.findall("Import/CDODefinitions/CDODefinition"):
             name=cdo.get("Name",""); parent=cdo.findtext("Attributes/ParentCDO/Name")
             if cdo.get("Action")=="Delete":
-                continue  # Deletion and other design domains have separate acceptance requirements.
+                row=cur.execute(f"SELECT CDOName FROM {prefix}CDODefinition WHERE CDOName=?",name).fetchone()
+                checks.append({'kind':'cdo','name':name,'deleted':True,'passed':row is None})
+                continue
             row=cur.execute(f"SELECT p.CDOName FROM {prefix}CDODefinition c LEFT JOIN {prefix}CDODefinition p ON c.ParentCDOID=p.CDODefID WHERE c.CDOName=?",name).fetchone()
             checks.append({"kind":"cdo","name":name,"expected_parent":parent,"actual_parent":row[0] if row else None,
                            "passed":bool(row) and (parent is None or parent==row[0])})
             for field in cdo.findall("CDOFieldDefinitions/CDOFieldDefinition"):
-                if field.get("Action")=="Delete": continue
+                if field.get("Action")=="Delete":
+                    row=cur.execute(f"SELECT f.FieldID FROM {prefix}CDOFields f JOIN {prefix}CDODefinition c ON c.CDODefID=f.CDODefID WHERE c.CDOName=? AND f.FieldName=?",name,field.get('Name','')).fetchone()
+                    checks.append({'kind':'field','owner':name,'name':field.get('Name',''),'deleted':True,'passed':row is None})
+                    continue
                 field_name=field.get("Name",""); expected_type=field.findtext("Attributes/FieldDef")
                 if not expected_type: expected_type=field.findtext("Attributes/FieldDef/Name")
                 nonpersistent=field.findtext("Attributes/IsNonPersistent")
@@ -305,7 +322,10 @@ def verify_published_design(manifest_file: str, test_string_boundaries: bool = F
         for table in root.findall("Import/DBTableDefinitions/DBTableDefinition"):
             table_name=table.get("Name","")
             for column in table.findall("Columns/DBColumnDefinition"):
-                if column.get("Action")=="Delete": continue
+                if column.get("Action")=="Delete":
+                    row=cur.execute('SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=? AND TABLE_NAME=? AND COLUMN_NAME=?',schema,table_name,column.get('Name','')).fetchone()
+                    checks.append({'kind':'column','table':table_name,'name':column.get('Name',''),'deleted':True,'passed':row is None})
+                    continue
                 column_name=column.get("Name","")
                 precision=column.findtext("Attributes/Precision")
                 string_type="String" in (column.findtext("Attributes/SQLType/Name") or "")
@@ -329,10 +349,11 @@ def verify_published_design(manifest_file: str, test_string_boundaries: bool = F
                         check.update(boundary_accepted=accepted,overflow_rejected=rejected,passed=accepted and rejected)
                     finally: cur.execute("DROP TABLE #DesignerLengthProbe")
                 checks.append(check)
-    folder=artifact_dir(); result={"status":"verified" if checks and all(c["passed"] for c in checks) else "verification_failed",
+    folder=artifact_dir(); result={"status":"verified" if all(c["passed"] for c in checks) else "verification_failed",
         "target":{"server":config.DESIGNER_DB_SERVER,"database":config.DESIGNER_DB_NAME},"schema":schema,
         "manifest_file":str(path),"checks":checks,"business_rows_modified":False,"runtime_service_verified":False,
-        "coverage":"changed_cdos_fields_and_columns; other design domains require separate acceptance"}
+        "coverage":"changed_compiled_metadata_rows_and_physical_columns; runtime_service_requires_separate_acceptance",
+        "no_metadata_changes":not checks}
     file=folder/"verification_result.json"; file.write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding="utf-8")
     return {**result,"result_file":str(file)}
 
@@ -401,7 +422,7 @@ def publish_database(manifest_file: str, expected_manifest_sha256: str, backup_r
                         raise ValueError("恢复后的MDB基线尚未核对，拒绝使用旧设计包继续发布")
                     if manifest["source_sha256"]!=baseline["sha256"]:
                         raise ValueError("设计包未基于最近发布的MDB生成；请使用published_baseline.json中的mdb_file重新设计")
-                    if metadata_fingerprint(cur,schema)!=baseline["metadata_fingerprint"]:
+                    if not baseline_matches(cur,schema,baseline):
                         raise ValueError("目标设计或物理结构在上次发布后变化，请重新核对设计基线")
             if receipt:
                 cur.execute("RESTORE VERIFYONLY FROM DISK=? WITH CHECKSUM",receipt["server_backup_file"])

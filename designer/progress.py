@@ -13,13 +13,14 @@ from designer import progress_actions
 
 TITLES = ['提交需求', '识别设计', '检查现有定义', '生成设计', '核对结果', '检查设计', 'Compile', 'Update Database', '生成 WCF', '部署 WCF', '验证结果']
 DONE = {'done', 'confirmed', 'skipped'}
-DESIGN_TOOLS = {'generate_designer_cdo_package', 'generate_designer_design_package'}
+DESIGN_TOOLS = {'generate_designer_cdo_package', 'generate_designer_design_package', 'sync_designer_working_file',
+                'restore_designer_mdb_backup', 'sync_designer_file', 'restore_designer_mdb'}
 STAGES = {'generate_designer_cdo_package': 4, 'generate_designer_design_package': 4,
           'check_designer_package': 5, 'prepare_designer_review': 6, 'compile_designer_mdb': 7,
           'publish_designer_test_database': 8, 'verify_designer_published_design': 11,
           'prepare_designer_publish_plan': 8, 'backup_designer_test_database': 8,
           'generate_designer_wcf_package': 9}
-STAGES['sync_designer_file'] = 6
+STAGES.update({name: 4 for name in DESIGN_TOOLS})
 _tasks = set()
 
 
@@ -82,6 +83,8 @@ def workflow_receipts(messages, events):
 
 def is_design_attempt(item):
     # Policy-cancelled tool calls have no execution receipt or design result.
+    if item['tool'] in {'sync_designer_working_file', 'restore_designer_mdb_backup', 'sync_designer_file', 'restore_designer_mdb'}:
+        return bool((item.get('result') or {}).get('files', {}).get('manifest.json'))
     return item['tool'] in DESIGN_TOOLS and ((isinstance(item.get('result'), dict) and bool(item['result']))
                                            or item['status'] in ('running', 'failed', 'interrupted'))
 
@@ -138,6 +141,7 @@ def snapshot(username, session_id):
     all_saved = [item for item in designs if (item.get('result') or {}).get('files', {}).get('manifest.json')]
     saved = all_saved if designs and designs[-1] in all_saved else []
     package, manifests, error = None, [], ''
+    change_summary = {'rows': []}
     publication_info = None
     if saved:
         path = saved[-1]['result']['files']['manifest.json']
@@ -164,8 +168,10 @@ def snapshot(username, session_id):
                     parent = str(Path(explicit_parent).resolve())
                 cursor = parent if (explicit_parent or source.name == 'modified.mdb') and parent in owned else ''
             operations = [op for _, manifest in reversed(manifests) for op in manifest.get('operations', [])]
-            package['objects'] = list(dict.fromkeys(op.get('owner') or op.get('name') for op in operations if op.get('action') in ('create_cdo', 'add_field')))
-            package['field_count'] = len({(op['owner'], op['name']) for op in operations if op.get('action') == 'add_field'})
+            from designer.operations import summary as summarize
+            affected = [name for _, manifest in manifests for name in manifest.get('execution', {}).get('affected_cdos', [])]
+            change_summary = summarize(operations, affected)
+            package.update({key: change_summary[key] for key in ('objects', 'service_objects', 'field_count', 'change_count')})
             mark(2, detail=f"{len(package['objects'])} 个对象 · {package['field_count']} 个字段")
             mark(4)
         except (ValueError, KeyError, OSError) as exc:
@@ -249,6 +255,8 @@ def snapshot(username, session_id):
                     item['enabled'] = False
                 if item['id'] == 'backup':
                     item['enabled'] &= bool(publication_info['plan'] and publication_info['plan'].get('ready_for_publish'))
+                if item['id'] == 'wcf':
+                    item['enabled'] &= bool(package.get('service_objects', package['objects']))
         stages[9]['detail'] = stages[9]['detail'] or '在运行环境部署 WCF，完成后确认'
     active = next((item for item in reversed(events) if item['status'] == 'running'), None)
     workflow_active = active if active and active['tool'] in STAGES and (active['tool'] in DESIGN_TOOLS or any(item.get('id') == active['id'] for item in relevant)
@@ -274,8 +282,7 @@ def snapshot(username, session_id):
             'has_design': bool(designs), 'workflow_active': public_job(workflow_active),
             'publication': publication_info,
             'wcf': wcf,
-            'design_rows': [{'owner': op['owner'], 'name': op['name'], 'field_type': op.get('field_type', '')}
-                            for _, manifest in reversed(manifests) for op in manifest.get('operations', []) if op.get('action') == 'add_field'],
+            'design_rows': change_summary['rows'] if package else [],
             'updated': time.time(), '_manifests': [path for path, _ in manifests]}
 
 
@@ -300,7 +307,9 @@ async def execute(identity, username, session_id, package, manifests, action, op
         elif action == 'prepare':
             result = await asyncio.to_thread(review.prepare, package['manifest_file'], True)
         elif action == 'sync':
-            result = await asyncio.to_thread(sync_file, package['manifest_file'])
+            result = await asyncio.to_thread(review.synchronize, package['mdb_file'], package['sha256'])
+        elif action == 'restore_mdb':
+            result = await asyncio.to_thread(review.restore_backup, package['mdb_file'], (options or {}).get('backup_id', ''), package['sha256'])
         else:
             if package.get('review'):
                 synced = await asyncio.to_thread(sync_file, package['manifest_file'])
@@ -336,10 +345,9 @@ async def execute(identity, username, session_id, package, manifests, action, op
                     progress_actions.verify_wcf_fields(result, fresh, names)
                     result['fields_verified'] = True
             elif action == 'verify':
-                checked = [await asyncio.to_thread(verify_published_design, manifest, False) for manifest in manifests]
-                supported = all(op.get('action') in {'create_cdo', 'add_field', 'create_field_type'}
-                                for manifest in manifests for op in json.loads(Path(manifest).read_text(encoding='utf-8')).get('operations', []))
-                status = ('verified' if supported else 'partial_verification') if checked and all(item['status'] == 'verified' for item in checked) else 'verification_failed'
+                final = await asyncio.to_thread(progress_actions.combined_manifest, package, manifests)
+                checked = [await asyncio.to_thread(verify_published_design, final, False)]
+                status = 'verified' if checked and all(item['status'] == 'verified' for item in checked) else ('partial_verification' if checked and all(item['status'] in {'verified', 'partial_verification'} for item in checked) else 'verification_failed')
                 result = {'status': status,
                           'checks': [check for item in checked for check in item.get('checks', [])]}
             else:
@@ -365,6 +373,10 @@ def start_action(username, session_id, package_id, action, options=None):
     if action == 'sync':
         if not package.get('review'):
             raise ValueError('请先准备 Designer 文件')
+    elif action == 'restore_mdb':
+        from designer import working
+        if not package.get('working'): raise ValueError('没有可恢复的工作 MDB')
+        working.backup_file(package['working']['id'], (options or {}).get('backup_id', ''), 'mdb')
     else:
         allowed = next((item for stage in state['stages'] for item in stage['actions'] if item['id'] == action), None)
         if not allowed or not allowed['enabled']:
@@ -388,7 +400,7 @@ def start_action(username, session_id, package_id, action, options=None):
         progress_actions.validate_publish(state, options or {})
     if action == 'wcf':
         progress_actions.wcf_types(package, (options or {}).get('verify_types'))
-    tool = {'check': 'check_designer_package', 'prepare': 'prepare_designer_review', 'sync': 'sync_designer_file',
+    tool = {'check': 'check_designer_package', 'prepare': 'prepare_designer_review', 'sync': 'sync_designer_file', 'restore_mdb': 'restore_designer_mdb',
             'compile': 'compile_designer_mdb', 'verify': 'verify_designer_published_design',
             'preflight': 'prepare_designer_publish_plan', 'backup': 'backup_designer_test_database',
             'publish': 'publish_designer_test_database', 'wcf': 'generate_designer_wcf_package'}[action]

@@ -58,7 +58,7 @@ def publication_state(receipts, package):
             'reason': reasons[0] if reasons else ''}
 
 
-def prepare_plan(package, manifests):
+def combined_manifest(package, manifests):
     """Export the final owned MDB against its earliest owned baseline for a batch."""
     if package.get('working'):
         from designer import working
@@ -89,18 +89,27 @@ def prepare_plan(package, manifests):
                     'validation': exported['validation'], 'owned_source_manifests': manifests}
         path = folder / 'manifest.json'
         path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding='utf-8')
+    return str(path)
+
+
+def prepare_plan(package, manifests):
+    path = Path(combined_manifest(package, manifests))
     result = publication.preflight(str(path))
     # The exact catalog inspected here must still match under the publication lock.
     with publication.target_connection() as conn:
         cur = conn.cursor()
-        fingerprint = publication.metadata_fingerprint(cur, publication.target_schema(cur))
+        schema = publication.target_schema(cur)
+        fingerprint = publication.metadata_fingerprint(cur, schema)
+        baseline_file = root_dir() / 'published_baseline.json'
+        baseline = json.loads(baseline_file.read_text(encoding='utf-8')) if baseline_file.is_file() else None
+        baseline_current = publication.baseline_matches(cur, schema, baseline) if baseline else True
     baseline_file = root_dir() / 'published_baseline.json'
     if baseline_file.is_file():
         baseline = json.loads(baseline_file.read_text(encoding='utf-8'))
         manifest = json.loads(path.read_text(encoding='utf-8'))
         if baseline.get('target') == result['target'] and (
                 baseline.get('status', 'verified') != 'verified' or baseline.get('sha256') != manifest['source_sha256']
-                or baseline.get('metadata_fingerprint') != fingerprint):
+                or not baseline_current):
             result['blockers'].append('当前设计与已发布基线不一致，请先在设计对话中重新核对')
     result.update(ready_for_publish=not result['blockers'], target_fingerprint=fingerprint,
                   design_sha256=package['sha256'], created_utc=datetime.now(timezone.utc).isoformat(),
@@ -160,12 +169,13 @@ def copy_siteinfo(package):
 
 def wcf_types(package, requested):
     from designer.metadata import identifier
-    names = package['objects'] if requested is None else requested
+    eligible = package.get('service_objects', package['objects'])
+    names = eligible if requested is None else requested
     if not 1 <= len(names) <= 20 or len(names) != len(set(names)):
         raise ValueError('请选择 1～20 个不重复的验收对象')
     for name in names:
         identifier(name)
-        if name not in package['objects']:
+        if name not in eligible:
             raise ValueError('WCF 验收对象必须来自当前设计')
     return names
 
@@ -175,7 +185,9 @@ def verify_wcf_fields(result, state, names):
         raise ValueError('WCF 全量生成未通过核对')
     checks = {item['name'].split('.')[-1].removesuffix('Changes'): item.get('properties', []) for item in result.get('type_checks', [])}
     for row in state['design_rows']:
-        if row['owner'] in names and row['name'] not in checks.get(row['owner'], []):
+        if row.get('kind', 'field') != 'field': continue
+        present = row['name'] in checks.get(row['owner'], [])
+        if row['owner'] in names and (present if row.get('deleted') else not present):
             raise ValueError(f"WCF 未包含当前字段：{row['owner']}.{row['name']}")
     if any(name not in checks for name in names):
         raise ValueError('WCF 缺少验收对象')

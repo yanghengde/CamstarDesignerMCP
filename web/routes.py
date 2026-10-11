@@ -23,7 +23,8 @@ class ProgressActionRequest(BaseModel):
     package_id: str
     action: Literal['check', 'prepare', 'sync', 'compile', 'verify', 'confirm_review', 'confirm_compile',
                     'confirm_publish', 'skip_services', 'confirm_services', 'confirm_complete', 'confirm_wcf',
-                    'preflight', 'backup', 'publish', 'wcf']
+                    'preflight', 'backup', 'publish', 'wcf', 'restore_mdb']
+    backup_id: str = ''
     expected_plan_sha256: str = ''
     expected_backup_sha256: str = ''
     verify_types: list[str] | None = Field(default=None, max_length=20)
@@ -65,7 +66,7 @@ async def progress_action(req: ProgressActionRequest):
     try:
         return start_action(
             req.username, req.session_id, req.package_id, req.action,
-            {'expected_plan_sha256': req.expected_plan_sha256, 'expected_backup_sha256': req.expected_backup_sha256, 'verify_types': req.verify_types})
+            {'expected_plan_sha256': req.expected_plan_sha256, 'expected_backup_sha256': req.expected_backup_sha256, 'verify_types': req.verify_types, 'backup_id': req.backup_id})
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from exc
 
@@ -102,7 +103,11 @@ class DesignerReviewRequest(BaseModel):
 def review_for_session(username: str, session_id: str, package_id: str) -> dict:
     from designer.review import session_packages
     require_session(username, session_id)
-    for item in session_packages(get_user_messages(username, session_id)):
+    from designer import progress_store
+    messages = list(get_user_messages(username, session_id))
+    messages.extend({'role': 'tool', 'name': event['tool'], 'content': event['result']}
+                    for event in progress_store.operations(username, session_id) if event.get('result'))
+    for item in session_packages(messages):
         if item['id'] == package_id:
             return item
     raise HTTPException(404, '当前对话没有这份可用设计结果。')

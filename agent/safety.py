@@ -82,7 +82,31 @@ def count_tool_calls(tool_calls: Iterable[dict]) -> MutationCounts:
     creates = updates = deletes = 0
     for tool_call in tool_calls:
         function = tool_call.get("function") or {}
-        category = classify_tool(str(function.get("name") or ""))
+        name = str(function.get('name') or '')
+        if name in {'generate_designer_design_package', 'generate_designer_cdo_package'}:
+            from designer.operations import CREATE_ACTIONS, UPDATE_ACTIONS, DELETE_ACTIONS
+            try:
+                payload = json.loads(function.get('arguments') or '{}')
+            except (TypeError, json.JSONDecodeError):
+                payload = {}
+            if not isinstance(payload, dict): payload = {}
+            if name == 'generate_designer_cdo_package':
+                fields = payload.get('fields') or []
+                if not isinstance(fields, list): fields = []
+                creates += 1 + len(fields) + sum(isinstance(field, dict) and not field.get('field_type') for field in fields)
+            else:
+                operations = payload.get('operations') or []
+                if not isinstance(operations, list): operations = []
+                for op in operations:
+                    action = op.get('action') if isinstance(op, dict) else ''
+                    creates += action in CREATE_ACTIONS
+                    updates += action in UPDATE_ACTIONS
+                    deletes += action in DELETE_ACTIONS
+            continue
+        if name in {'sync_designer_working_file', 'restore_designer_mdb_backup'}:
+            updates += 1
+            continue
+        category = classify_tool(name)
         amount = _argument_item_count(str(function.get("arguments") or "{}"))
         if category == "create":
             creates += amount

@@ -1,5 +1,5 @@
 param([string]$LocalMdb,[string]$ExpectedSha256,[string]$ResultFile,[ValidateSet('true','false')][string]$Activate,
-      [string]$ProjectId='', [string]$BackupsDirectory='')
+      [string]$ProjectId='', [string]$BackupsDirectory='', [string]$ExpectedServerSha256='')
 $ErrorActionPreference='Stop'
 $taskCredential=[pscredential]::new($env:DESIGNER_WINDOWS_USER,(ConvertTo-SecureString $env:DESIGNER_WINDOWS_PASSWORD -AsPlainText -Force))
 try {
@@ -21,10 +21,22 @@ try {
  $taskRemote='DesignerReview:\'+$taskRelative
  New-Item -ItemType Directory -Path $taskRemote -Force | Out-Null
  $taskStaging=$taskRemote+'\InSite.'+$taskId+'.tmp'
+ $taskDestination=$taskRemote+'\InSite.mdb'
+ function Assert-DesignerUnchanged {
+  if(Test-Path -LiteralPath $taskDestination) {
+   $taskExistingHash=(Get-FileHash -LiteralPath $taskDestination -Algorithm SHA256).Hash.ToLowerInvariant()
+   if($taskExistingHash -ne $ExpectedSha256.ToLowerInvariant() -and
+      (-not $ExpectedServerSha256 -or $taskExistingHash -ne $ExpectedServerSha256.ToLowerInvariant())) {
+    throw 'Designer saved new changes; synchronize the Designer file before replacing it'
+   }
+  } elseif($ExpectedServerSha256) {throw 'Previously prepared Designer file is missing; restore the file before continuing'}
+ }
+ Assert-DesignerUnchanged
  try {
   Copy-Item -LiteralPath $LocalMdb -Destination $taskStaging
   if((Get-FileHash -LiteralPath $taskStaging -Algorithm SHA256).Hash -ne $ExpectedSha256) {throw 'Copied MDB checksum mismatch'}
-  Move-Item -LiteralPath $taskStaging -Destination ($taskRemote+'\InSite.mdb') -Force
+  Assert-DesignerUnchanged
+  Move-Item -LiteralPath $taskStaging -Destination $taskDestination -Force
  } finally {if(Test-Path -LiteralPath $taskStaging) {Remove-Item -LiteralPath $taskStaging}}
  if(-not(Test-Path -LiteralPath ($taskRemote+'\SiteInfo.mdb'))) {
   Copy-Item -LiteralPath ('DesignerReview:\'+$taskSitePath.Substring(3)) -Destination ($taskRemote+'\SiteInfo.mdb')

@@ -70,6 +70,145 @@ def test_continuous_design_reuses_one_file_and_retains_all_changes(project):
     assert not asyncio.run(check_designer_package(str(manifest(first))))['intact']
 
 
+def prepare_fake_server(result, monkeypatch, saved):
+    pid = result['working_project_id']
+    state = working.load(pid)
+    state.update(server_mdb='C:\\DesignerWorkspace\\'+pid+'\\InSite.mdb', server_sha256=state['sha256'])
+    working.write_json(working.project_dir(pid)/'state.json', state)
+    def read(state, *, copy_to=None):
+        if copy_to: copy_to.write_bytes(saved)
+        checksum = __import__('hashlib').sha256(saved).hexdigest()
+        return {'unchanged': checksum==state['server_sha256'], 'copied_sha256':checksum,
+                'server_mdb':state['server_mdb']}
+    monkeypatch.setattr(review, 'server_check', read)
+    return state
+
+
+def test_server_edits_prevent_local_design_before_apply(project, monkeypatch):
+    result = generate(project, 'ExFirst')
+    prepare_fake_server(result, monkeypatch, b'Designer changes')
+    before = Path(result['working_mdb']).read_bytes()
+    with pytest.raises(ValueError, match='先同步'):
+        generate(project, 'ExSecond')
+    assert Path(result['working_mdb']).read_bytes() == before
+
+
+def test_sync_adopts_server_file_with_owned_manifest_at_fixed_path(project, monkeypatch):
+    result = generate(project, 'ExFirst')
+    prepare_fake_server(result, monkeypatch, b'new saved Designer MDB')
+    synced = review.synchronize(result['working_mdb'], vendor.digest(Path(result['working_mdb'])))
+    assert synced['working_mdb'] == result['working_mdb']
+    assert Path(result['working_mdb']).read_bytes() == b'new saved Designer MDB'
+    assert working.load(result['working_project_id'])['latest_manifest'] == synced['files']['manifest.json']
+    assert review.summary(synced['files']['manifest.json'])['review']['server_mdb']
+    record('synced', result)
+    memory.get_user_messages('user','synced').append({'role':'tool','name':'sync_designer_working_file','content':str(synced)})
+    assert progress.snapshot('user','synced')['package']['id'] == manifest(synced).parent.name
+    assert project.read_bytes() == b'published seed'
+
+
+def test_sync_unchanged_preserves_manifest(project, monkeypatch):
+    result = generate(project, 'ExFirst')
+    prepare_fake_server(result, monkeypatch, Path(result['working_mdb']).read_bytes())
+    synced = review.synchronize(result['working_mdb'], vendor.digest(Path(result['working_mdb'])))
+    assert synced['files']['manifest.json'] == result['files']['manifest.json']
+    assert len(working.load(result['working_project_id'])['cycle_manifests']) == 1
+
+
+@pytest.mark.parametrize('remote', [b'old server', b'independent server change'])
+def test_sync_never_replaces_unsent_local_changes(project, monkeypatch, remote):
+    result = generate(project, 'ExFirst')
+    state = prepare_fake_server(result, monkeypatch, remote)
+    state['server_sha256'] = __import__('hashlib').sha256(b'old server').hexdigest()
+    working.write_json(working.project_dir(state['id'])/'state.json', state)
+    before = Path(result['working_mdb']).read_bytes()
+    with pytest.raises(ValueError, match='本地'):
+        review.synchronize(result['working_mdb'], vendor.digest(Path(result['working_mdb'])))
+    assert Path(result['working_mdb']).read_bytes() == before
+
+
+def test_confirmed_opcenter_merge_accepts_only_exact_saved_hash(project, monkeypatch):
+    result = generate(project, 'ExFirst')
+    state = prepare_fake_server(result, monkeypatch, b'Opcenter merged')
+    state['server_sha256'] = '0'*64
+    working.write_json(working.project_dir(state['id'])/'state.json', state)
+    with pytest.raises(ValueError, match='合并'):
+        review.synchronize(result['working_mdb'], vendor.digest(Path(result['working_mdb'])), '1'*64)
+    merged = __import__('hashlib').sha256(b'Opcenter merged').hexdigest()
+    review.synchronize(result['working_mdb'], vendor.digest(Path(result['working_mdb'])), merged)
+    assert Path(result['working_mdb']).read_bytes() == b'Opcenter merged'
+
+
+def test_restore_backup_preserves_current_checkpoint_and_fixed_path(project):
+    first = generate(project, 'ExFirst')
+    working.mark_published(manifest(first))
+    second = generate(project, 'ExSecond')
+    selected = working.backups(second['working_project_id'])[0]['id']
+    before = Path(second['working_mdb']).read_bytes()
+    restored = review.restore_backup(second['working_mdb'], selected, vendor.digest(Path(second['working_mdb'])))
+    assert restored['working_mdb'] == second['working_mdb']
+    assert Path(restored['working_mdb']).read_bytes() == b'published seed|ExFirst'
+    checkpoint = working.backup_file(second['working_project_id'], restored['recovery_backup_id'], 'mdb')
+    assert checkpoint.read_bytes() == before
+    assert not restored['database_restored']
+    assert json.loads(manifest(restored).read_text())['parent_manifest_file'] == second['files']['manifest.json']
+
+
+def test_restore_tampered_or_foreign_backup_leaves_work_unchanged(project):
+    result = generate(project, 'ExFirst')
+    working.mark_published(manifest(result))
+    result = generate(project, 'ExSecond')
+    selected = working.backups(result['working_project_id'])[0]['id']
+    saved = working.backup_file(result['working_project_id'], selected, 'mdb')
+    saved.write_bytes(b'tampered')
+    checksum = vendor.digest(Path(result['working_mdb']))
+    with pytest.raises(ValueError, match='SHA256'):
+        review.restore_backup(result['working_mdb'], selected, checksum)
+    with pytest.raises(ValueError):
+        review.restore_backup(result['working_mdb'], 'f'*32, checksum)
+    assert vendor.digest(Path(result['working_mdb'])) == checksum
+
+
+def test_failed_sync_vendor_validation_preserves_work(project, monkeypatch):
+    result = generate(project, 'ExFirst')
+    prepare_fake_server(result, monkeypatch, b'corrupted MDB')
+    checksum = vendor.digest(Path(result['working_mdb']))
+    def fail(*args): raise ValueError('invalid MDB')
+    monkeypatch.setattr(vendor, 'run', fail)
+    with pytest.raises(ValueError, match='invalid MDB'):
+        review.synchronize(result['working_mdb'], checksum)
+    assert vendor.digest(Path(result['working_mdb'])) == checksum
+
+
+def test_restore_keeps_ten_backups_even_when_candidate_validation_fails(project, monkeypatch):
+    result = generate(project, 'Ex0')
+    for index in range(11):
+        working.mark_published(manifest(result))
+        result = generate(project, 'Ex'+str(index+1))
+    pid = result['working_project_id']
+    selected = working.backups(pid)[0]['id']
+    checksum = vendor.digest(Path(result['working_mdb']))
+    def fail(*args): raise ValueError('vendor rejected candidate')
+    monkeypatch.setattr(vendor, 'run', fail)
+    with pytest.raises(ValueError, match='vendor rejected'):
+        review.restore_backup(result['working_mdb'], selected, checksum)
+    assert len(working.backups(pid)) == 10
+    assert working.backups(pid)[0]['method'] == 'restore_checkpoint'
+    assert vendor.digest(Path(result['working_mdb'])) == checksum
+
+
+def test_restore_route_passes_selected_backup_to_worker(project, monkeypatch):
+    result = generate(project, 'ExFirst')
+    sid = memory.create_session('user'); record(sid, result)
+    captured = []
+    monkeypatch.setattr(progress, 'start_action', lambda *args: captured.append(args) or {'status':'running'})
+    app = FastAPI(); app.include_router(routes.router)
+    with TestClient(app) as client:
+        response = client.post('/api/progress/action', json={'username':'user','session_id':sid,'package_id':manifest(result).parent.name,'action':'restore_mdb','backup_id':'a'*32})
+    assert response.status_code == 200
+    assert captured[0][-1]['backup_id'] == 'a'*32
+
+
 def test_release_backup_is_delayed_exact_and_once_per_cycle(project):
     first = generate(project, 'ExFirst')
     siteinfo = project.parent/'SiteInfo.mdb'; siteinfo.write_bytes(b'site configuration')
@@ -188,7 +327,12 @@ def test_designer_prepares_fixed_path_then_refreshes_it_on_next_generation(proje
         monkeypatch.setattr(config,key,value)
     paths = []; remote = {}
     def transfer(args, **kwargs):
-        if '-ResultFile' in args:
+        if '-ServerMdb' in args:
+            from hashlib import sha256
+            server_mdb = args[args.index('-ServerMdb')+1]
+            checksum = sha256(remote[server_mdb]).hexdigest()
+            Path(args[args.index('-ResultFile')+1]).write_text(json.dumps({'unchanged':checksum==args[args.index('-ExpectedSha256')+1], 'copied_sha256':checksum, 'server_mdb':server_mdb}))
+        elif '-ResultFile' in args:
             project_id = args[args.index('-ProjectId')+1]
             server_mdb = rf'C:\DesignerWorkspace\{project_id}\InSite.mdb'
             paths.append(server_mdb)
@@ -219,6 +363,7 @@ def test_server_sync_failure_keeps_local_success_and_reports_retry(project, monk
     def fail(*args):
         raise ValueError('server locked')
     monkeypatch.setattr(review,'prepare',fail)
+    monkeypatch.setattr(review,'assert_server_unchanged',lambda state: {'unchanged':True})
     second = generate(project,'ExSecond')
     assert second['designer_sync_error'] == 'server locked'
     assert Path(second['working_mdb']).read_bytes().endswith(b'|ExSecond')

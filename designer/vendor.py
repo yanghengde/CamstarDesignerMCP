@@ -18,10 +18,9 @@ KINDS = (
     "column", "index", "map", "label", "label_category", "workspace", "data_type",
     "query_type", "clf_type", "sql_type", "db_type", "storage_category",
     "clf_function", "clf_parameter", "query_text", "query_parameter", "index_entry", "function_parameter",
-    "event_binding", "feature",
+    "event_binding", "feature", "field_map",
 )
-CREATE_ACTIONS = {"create_cdo", "create_field_type", "add_field", "copy_clf", "create_query", "create_map",
-                  "create_clf", "add_clf_function", "create_label", "add_column", "add_query_text", "create_index", "add_field_map", "bind_event"}
+from designer.operations import CREATE_ACTIONS, DESIGN_ACTIONS
 
 
 def digest(path: Path) -> str:
@@ -101,7 +100,7 @@ def validate_operations(operations: list[dict]) -> None:
     if not isinstance(operations, list) or not 1 <= len(operations) <= 50:
         raise ValueError("operations 必须包含 1～50 条设计操作")
     for op in operations:
-        if not isinstance(op, dict) or op.get("action") not in CREATE_ACTIONS | {"patch", "delete", "change_field_type", "reorder_clf_functions", "set_clf_parameter"}:
+        if not isinstance(op, dict) or op.get("action") not in DESIGN_ACTIONS:
             raise ValueError("未知设计操作；请查询 get_designer_capabilities")
         action = op["action"]
         if action in CREATE_ACTIONS - {"create_map", "add_clf_function", "add_query_text", "add_field_map", "bind_event"}:
@@ -131,6 +130,16 @@ def validate_operations(operations: list[dict]) -> None:
             "reorder_clf_functions": ("owner", "function_ids", "expected_function_ids"),
             "set_clf_parameter": ("owner", "call_id", "parameter", "value", "expected_value"),
             "bind_event": ("owner", "event", "clf", "feature"),
+            "change_parent": ("name", "parent", "expected_parent"),
+            "change_storage_category": ("name", "category", "expected_category"),
+            "replace_event_binding": ("owner", "event", "clf", "feature", "expected_clf"),
+            "unbind_event": ("owner", "event", "expected_clf"),
+            "replace_clf_function": ("owner", "call_id", "function", "expected_function"),
+            "remove_clf_function": ("owner", "call_id", "expected_function"),
+            "update_field_map": ("owner", "name", "source_cdo", "source_field", "target_cdo", "target_field", "expected_source_field", "expected_target_field"),
+            "remove_field_map": ("owner", "name", "expected_source_field", "expected_target_field"),
+            "remove_field_override": ("owner", "name", "expected_field_type"),
+            "sync_query_parameters": ("owner",),
         }
         allow_empty={"value","expected_value"} if action=="set_clf_parameter" else set()
         if any(key not in op or op[key] is None or (key not in allow_empty and op[key]=="") for key in required.get(action, ())):
@@ -145,6 +154,11 @@ def validate_operations(operations: list[dict]) -> None:
             for key in ("Name", "FieldName", "FieldDefName"):
                 if key in op["changes"]:
                     identifier(op["changes"][key])
+                    if len(op['changes'][key]) > 30:
+                        raise ValueError('定义名不能超过 30 字符')
+        if action in {'replace_clf_function', 'remove_clf_function', 'set_clf_parameter'}:
+            if isinstance(op['call_id'], bool) or not isinstance(op['call_id'], int) or op['call_id'] < 1:
+                raise ValueError('call_id 必须为实际读取的正整数')
 
 
 def export(folder: Path, baseline: Path, modified: Path) -> dict:
@@ -163,6 +177,14 @@ def export(folder: Path, baseline: Path, modified: Path) -> dict:
 
 
 def design(mdb_file: str, expected_sha256: str, workspace: str, operations: list[dict]) -> dict:
+    from designer import working
+    source = working.resolve(mdb_file)
+    project_id, _ = working.context(source)
+    with working.project_lock(project_id):
+        return _design(mdb_file, expected_sha256, workspace, operations)
+
+
+def _design(mdb_file: str, expected_sha256: str, workspace: str, operations: list[dict]) -> dict:
     validate_operations(operations)
     from designer import working
     source = working.resolve(mdb_file)
@@ -170,6 +192,9 @@ def design(mdb_file: str, expected_sha256: str, workspace: str, operations: list
     before = digest(source)
     if before != expected_sha256:
         raise ValueError("来源 MDB SHA256 不匹配，请重新读取设计定义")
+    if work_state.get('server_mdb'):
+        from designer import review
+        review.assert_server_unchanged(work_state)
     assembly()
     workspace = select_workspace(source, workspace)
     folder = artifact_dir()
@@ -204,6 +229,8 @@ def design(mdb_file: str, expected_sha256: str, workspace: str, operations: list
     }
     manifest_file = folder / "manifest.json"
     manifest_file.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    if work_state.get('server_mdb'):
+        review.assert_server_unchanged(work_state)
     working_mdb = working.commit(project_id, work_state, manifest_file, before)
     (folder / "report.md").write_text(
         "# Designer 设计结果\n\n已通过官方元数据对象模型更新固定工作 MDB，并导出官方差异 XML。\n\n"
@@ -224,3 +251,61 @@ def design(mdb_file: str, expected_sha256: str, workspace: str, operations: list
         except ValueError as exc:
             result['designer_sync_error'] = str(exc)
     return result
+
+
+def adopt_candidate(mdb_file, expected_sha256, candidate, *, method, state_update=None):
+    """Accept one verified saved MDB, preserving snapshots and the fixed path."""
+    from designer import working
+    from designer.metadata import effective
+    source = working.resolve(mdb_file)
+    project_id, state = working.context(source)
+    if not state.get('latest_manifest'):
+        raise ValueError('请先建立工作 MDB，再同步或恢复')
+    if digest(source) != expected_sha256:
+        raise ValueError('工作 MDB 已变化，请刷新后重试')
+    previous = json.loads(Path(state['latest_manifest']).read_text(encoding='utf-8'))
+    folder = artifact_dir()
+    baseline, modified = folder / 'baseline.mdb', folder / 'modified.mdb'
+    shutil.copyfile(source, baseline)
+    candidate_hash = digest(candidate)
+    shutil.copyfile(candidate, modified)
+    if digest(baseline) != expected_sha256 or digest(modified) != candidate_hash or digest(candidate) != candidate_hash:
+        raise ValueError('文件在同步期间发生变化，请保存后重试')
+    run(folder, {'mode': 'catalog', 'mdb': str(modified), 'workspace': previous['workspace']})
+    exported = export(folder, baseline, modified)
+    shutil.copyfile(exported['xml_file'], folder / 'changes.xml')
+    root, _ = load_xml(folder / 'changes.xml')
+    operations = []
+    tags = {'CDODefinition': 'cdo', 'CDOFieldDefinition': 'field', 'FieldDefinition': 'field_type',
+            'CLFDefinition': 'clf', 'QueryDefinition': 'query', 'DBColumnDefinition': 'column',
+            'DBIndexDefinition': 'index', 'CDOMapDefinition': 'map', 'LabelDefinition': 'label'}
+    def visit(node, owner=''):
+        target_kind = tags.get(node.tag)
+        name = node.get('Name')
+        if target_kind and name:
+            changed = effective(node)
+            op = {'action': 'delete' if node.get('Action') == 'Delete' else 'external_edit',
+                  'kind': target_kind, 'name': name, 'owner': owner,
+                  'origin': method, 'changes': {item.tag: item.text or '' for item in changed.findall('Attributes/*') if len(item) == 0}}
+            operations.append(op)
+            if target_kind == 'cdo': owner = name
+        for child in node:
+            if child.tag != 'Attributes': visit(child, owner)
+    visit(root.find('Import'))
+    if not operations: operations = [{'action': method, 'name': '当前工作 MDB'}]
+    manifest = {**previous, 'format_version': 2, 'status': 'saved_to_test_copy_and_exported',
+                'source_file': str(baseline), 'source_sha256': expected_sha256,
+                'input_file': str(source), 'parent_manifest_file': state['latest_manifest'] if not state.get('backup_pending') else '',
+                'operations': operations, 'origin': method, 'database_published': False, 'ready_for_publish': False,
+                'artifacts': {name: digest(folder / name) for name in ('baseline.mdb', 'modified.mdb', 'changes.xml')},
+                'validation': exported['validation'], 'execution': {'status': 'verified_saved_mdb', 'method': method}}
+    manifest.pop('owned_source_manifests', None)
+    path = folder / 'manifest.json'
+    path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding='utf-8')
+    if state.get('server_mdb'):
+        from designer import review
+        review.assert_server_unchanged({**state, **(state_update or {})})
+    fixed = working.commit(project_id, {**state, **(state_update or {})}, path, expected_sha256)
+    return {'status': manifest['status'], 'working_project_id': project_id, 'working_mdb': fixed,
+            'files': {'manifest.json': str(path), 'modified.mdb': fixed, 'changes.xml': str(folder / 'changes.xml')},
+            'source': method, 'database_published': False}

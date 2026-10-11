@@ -15,6 +15,105 @@ from designer.publication import redact
 _lock = threading.Lock()
 
 
+def server_check(state, *, copy_to=None):
+    remote = state.get('server_mdb', '')
+    if not valid_server_file(remote, 'InSite.mdb'):
+        raise ValueError('请先准备 Designer 工作文件')
+    if config.DESIGNER_SERVER_SHARE.rstrip('\\').casefold() != ('\\\\' + config.DESIGNER_DB_SERVER + '\\C').casefold():
+        raise ValueError('服务器共享配置不匹配')
+    env = {k: v for k, v in os.environ.items() if k.casefold() != 'psmodulepath'}
+    for name in ('DESIGNER_SERVER_SHARE', 'DESIGNER_WINDOWS_USER', 'DESIGNER_WINDOWS_PASSWORD'):
+        env[name] = getattr(config, name)
+        if not env[name]: raise ValueError('Designer 服务器共享或凭据未配置')
+    from designer.files import artifact_dir
+    folder = artifact_dir() if copy_to is None else copy_to.parent
+    output = folder / 'designer_sync.json'
+    shell = Path(os.environ.get('SystemRoot', 'C:/Windows')) / 'System32/WindowsPowerShell/v1.0/powershell.exe'
+    args = [str(shell), '-NoProfile', '-NonInteractive', '-File', str(Path(__file__).with_name('review_sync.ps1')),
+            '-ServerMdb', remote, '-ExpectedSha256', state.get('server_sha256') or '', '-ResultFile', str(output)]
+    if copy_to: args += ['-LocalMdb', str(copy_to)]
+    process = subprocess.run(args, env=env, capture_output=True, timeout=60,
+                             creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+    if process.returncode:
+        raise ValueError('Designer 文件读取失败：' + redact(process.stderr.decode('utf-8', errors='replace'))[:1200])
+    return json.loads(output.read_text(encoding='utf-8-sig'))
+
+
+def assert_server_unchanged(state):
+    result = server_check(state)
+    if not result.get('unchanged'):
+        raise ValueError('Designer 已保存新的改动，请先同步 Designer 文件，再继续设计；服务器文件未覆盖')
+    return result
+
+
+def synchronize(mdb_file, expected_sha256, accept_merged_sha256=''):
+    from designer import working, vendor
+    from designer.files import artifact_dir
+    source = working.resolve(mdb_file)
+    project_id, _ = working.context(source)
+    with working.project_lock(project_id):
+        state = working.load(project_id)
+        if not state or not state.get('server_mdb'):
+            raise ValueError('请先准备 Designer 文件，再同步已保存的改动')
+        if digest(source) != expected_sha256:
+            raise ValueError('工作 MDB 已更新，请刷新后同步')
+        folder = artifact_dir()
+        candidate = folder / 'saved_designer.mdb'
+        receipt = server_check(state, copy_to=candidate)
+        copied = digest(candidate)
+        if copied != receipt.get('copied_sha256'):
+            raise ValueError('Designer 文件读取校验失败')
+        if copied == expected_sha256:
+            return {'status': 'file_synchronized', 'unchanged': True,
+                    'working_mdb': str(source), 'files': {'manifest.json': state['latest_manifest'], 'modified.mdb': str(source)}}
+        # Both files changed: keep both versions; Opcenter handles the merge.
+        if state.get('server_sha256') != expected_sha256:
+            if copied == state.get('server_sha256'):
+                raise ValueError('Designer 文件尚未包含本地的新改动，请先准备最新 Designer 文件；本地工作 MDB 未覆盖')
+            if accept_merged_sha256 != copied:
+                raise ValueError(f'本地与 Designer 文件均有新改动，请在 Opcenter 合并，并明确确认接收合并版本后重试；两个文件均已保留。合并文件 SHA256：{copied}')
+        result = vendor.adopt_candidate(str(source), expected_sha256, candidate, method='external_edit',
+                                        state_update={'server_sha256': copied})
+        path = Path(result['files']['manifest.json'])
+        working.write_json(path.parent / 'designer_review.json', {**receipt, 'status': 'saved_designer_file_received',
+                            'server_siteinfo': state.get('server_siteinfo'), 'activated': False})
+        working.write_json(path.parent / 'designer_sync.json', {**receipt, 'unchanged': True, 'status': 'file_synchronized'})
+        return {**result, 'status': 'file_synchronized', 'unchanged': True, 'received_changes': True}
+
+
+def restore_backup(mdb_file, backup_id, expected_sha256):
+    from designer import working, vendor
+    from designer.files import artifact_dir
+    from datetime import datetime, timezone
+    from uuid import uuid4
+    source = working.resolve(mdb_file)
+    project_id, _ = working.context(source)
+    with working.project_lock(project_id):
+        state = working.load(project_id)
+        if not state: raise ValueError('没有工作 MDB 项目')
+        if digest(source) != expected_sha256: raise ValueError('工作 MDB 已变化，请刷新后恢复')
+        if state.get('server_mdb'): assert_server_unchanged(state)
+        selected = working.backup_file(project_id, backup_id, 'mdb')
+        # Preserve the pre-restore version even when it has not been published.
+        snapshot = artifact_dir() / 'before_restore.mdb'
+        import shutil
+        shutil.copyfile(source, snapshot)
+        if digest(snapshot) != expected_sha256: raise ValueError('恢复前快照校验失败')
+        checkpoint = {'id': uuid4().hex, 'sha256': expected_sha256, 'mdb_file': str(snapshot),
+                      'published_utc': None, 'method': 'restore_checkpoint', 'objects': [],
+                      'manifest_file': state['latest_manifest'], 'siteinfo_file': '', 'siteinfo_sha256': None}
+        working.backup_release(project_id, checkpoint)
+        try:
+            result = vendor.adopt_candidate(str(source), expected_sha256, selected, method='restore_mdb')
+        finally:
+            working.prune_backups(project_id)
+        result.update(restored_backup_id=backup_id, recovery_backup_id=checkpoint['id'], database_restored=False)
+        if state.get('server_mdb'):
+            try: result['review'] = prepare(result['files']['manifest.json'], False)
+            except ValueError as exc: result['designer_sync_error'] = str(exc)
+        return result
+
+
 def valid_server_file(value, name):
     return bool(re.fullmatch(r'C:\\(?:Temp\\DesignerMCP\\Review_[0-9a-f]{32}|DesignerWorkspace\\[0-9a-f]{32})\\' + re.escape(name), value, re.IGNORECASE))
 
@@ -60,9 +159,10 @@ def package(manifest_file: str) -> tuple[Path, dict]:
 
 def summary(manifest_file: str) -> dict:
     from designer import working
+    from designer.operations import summary as summarize
     path, manifest = package(manifest_file)
-    objects = list(dict.fromkeys(op.get('owner') or op.get('name') for op in manifest['operations']
-                               if op.get('action') in ('create_cdo', 'add_field') or op.get('kind') == 'cdo'))
+    changes = summarize(manifest['operations'], manifest.get('execution', {}).get('affected_cdos', []))
+    objects = changes['objects']
     receipt = None
     receipt_file = path.parent / 'designer_review.json'
     if receipt_file.is_file():
@@ -81,6 +181,8 @@ def summary(manifest_file: str) -> dict:
             'working': work, 'is_current': current,
             'sha256': manifest['artifacts']['modified.mdb'], 'workspace': manifest['workspace'],
             'objects': [name for name in objects if name],
+            'service_objects': changes['service_objects'], 'field_count': changes['field_count'],
+            'change_count': changes['change_count'],
             'field_changes': sum(op.get('action') == 'add_field' for op in manifest['operations']),
             'status': 'ready_for_designer', 'database_published': False, 'review': receipt}
 
@@ -89,7 +191,7 @@ def session_packages(messages: list[dict]) -> list[dict]:
     """Only offer packages actually returned by this session's design tools."""
     found = {}
     for message in messages:
-        if message.get('role') != 'tool' or message.get('name') not in ('generate_designer_design_package', 'generate_designer_cdo_package'):
+        if message.get('role') != 'tool' or message.get('name') not in ('generate_designer_design_package', 'generate_designer_cdo_package', 'sync_designer_working_file', 'restore_designer_mdb_backup', 'sync_designer_file', 'restore_designer_mdb'):
             continue
         try:
             content = message.get('content', '')
@@ -102,6 +204,16 @@ def session_packages(messages: list[dict]) -> list[dict]:
 
 
 def prepare(manifest_file: str, activate: bool = False) -> dict:
+    from designer import working
+    _, manifest = package(manifest_file)
+    project_id = manifest.get('working_project_id')
+    if project_id:
+        with working.project_lock(project_id):
+            return _prepare(manifest_file, activate)
+    return _prepare(manifest_file, activate)
+
+
+def _prepare(manifest_file: str, activate: bool = False) -> dict:
     """Update the fixed project MDB; optionally select it for next launch."""
     item = summary(manifest_file)
     from designer import working
@@ -116,6 +228,7 @@ def prepare(manifest_file: str, activate: bool = False) -> dict:
     if not exe.is_absolute() or exe.drive.lower() != 'c:' or '..' in exe.parts or exe.suffix.lower() != '.exe' or any(c in str(exe) for c in '\r\n\x00"'):
         raise ValueError('Designer 界面程序必须是 C 盘上的明确 exe 路径')
     with _lock:
+        working.check_current(manifest)
         env = {k: v for k, v in os.environ.items() if k.casefold() != 'psmodulepath'}
         for name in ('DESIGNER_SERVER_SHARE', 'DESIGNER_WINDOWS_USER', 'DESIGNER_WINDOWS_PASSWORD', 'DESIGNER_UI_EXE'):
             env[name] = getattr(config, name)
@@ -127,6 +240,8 @@ def prepare(manifest_file: str, activate: bool = False) -> dict:
                 '-Activate', str(bool(activate)).lower()]
         if item.get('working'):
             args += ['-ProjectId', item['working']['id'], '-BackupsDirectory', str(working.project_dir(item['working']['id']) / 'backups')]
+            state = working.load(item['working']['id'])
+            args += ['-ExpectedServerSha256', state.get('server_sha256') or '']
         try:
             process = subprocess.run(args, env=env, capture_output=True, timeout=90,
                                      creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))

@@ -210,6 +210,7 @@ def test_registry_contains_only_designer_tools_in_clean_process():
         "generate_designer_wcf_package",
         "inspect_designer_installation",
         "prepare_designer_review",
+        "sync_designer_working_file", "restore_designer_mdb_backup",
     }
 
 

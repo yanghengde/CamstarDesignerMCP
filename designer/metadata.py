@@ -113,7 +113,7 @@ def definition_index(root: ET.Element) -> dict[str, tuple]:
 def validate(root: ET.Element) -> dict:
     index = definition_index(root)
     for node in root.iter():
-        if "Action" in node.attrib and node.attrib["Action"] not in {"Create", "Import", "Rename"}:
+        if "Action" in node.attrib and node.attrib["Action"] not in {"Create", "Import", "Rename", "Delete"}:
             raise ValueError(f"未知的 Action：{node.attrib['Action']}")
         if node.find("ExpectedValue") is not None and node.find("NewValue") is None:
             raise ValueError(f"{node.tag} 有 ExpectedValue，但没有 NewValue")

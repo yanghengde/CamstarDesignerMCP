@@ -38,6 +38,7 @@ public static class DesignerVendorBridge {
  };
  static List<object> Objects(MDBMetadataSet set,string kind,string owner) {
   if(kind=="field") return Values(((CDODefinition)Find(set,"cdo",owner,"")).AllFields);
+  if(kind=="field_map") return Values(((CDOMapDefinition)Find(set,"map",owner,"")).FieldMaps);
   if(kind=="event_binding" && owner!="") return Values(((CDODefinition)Find(set,"cdo",owner,"")).Events);
   if(kind=="clf_function") return Values(((CLFDefinition)Find(set,"clf",owner,"")).CLFFunctions);
   if(kind=="clf_parameter") return Values(((CLFDefinition)Find(set,"clf",owner,"")).Parameters);
@@ -52,12 +53,66 @@ public static class DesignerVendorBridge {
   return Values(typeof(MetadataSetBase).GetProperty(Collections[kind],BindingFlags.Public|BindingFlags.NonPublic|BindingFlags.Instance).GetValue(set,null));
  }
  static object Find(MDBMetadataSet set,string kind,string name,string owner) {
-  var candidates=Objects(set,kind,owner); int identity;
-  var found=kind=="clf_function" && name.StartsWith("id:") && Int32.TryParse(name.Substring(3),out identity)
-   ? candidates.Where(x=>((CLFFunction)x).CLFFunctionID==Int32.Parse(name.Substring(3))).ToList()
+  var candidates=Objects(set,kind,owner).Where(x=>!(x is BaseMetadataObject) || ((BaseMetadataObject)x).ModifiedStatus!=ModifiedStatusEnum.Deleted).ToList(); int identity;
+  var found=(kind=="clf_function" || kind=="field_map") && name.StartsWith("id:") && Int32.TryParse(name.Substring(3),out identity)
+   ? candidates.Where(x=>(kind=="clf_function" ? ((CLFFunction)x).CLFFunctionID : ((CDOFieldMapDefinition)x).CDOFieldMapID)==Int32.Parse(name.Substring(3))).ToList()
    : candidates.Where(x=>String.Equals(Name(x),name,StringComparison.OrdinalIgnoreCase)).ToList();
-  if(found.Count!=1) throw new ArgumentException("Definition missing or ambiguous (matches="+found.Count+"): "+kind+":"+owner+":"+name);
+   if(found.Count==0) {
+    object renamed;
+    if(Aliases.TryGetValue(kind+":"+owner+":"+name,out renamed) && ((BaseMetadataObject)renamed).ModifiedStatus!=ModifiedStatusEnum.Deleted)
+     return renamed;
+   }
+   if(found.Count!=1) throw new ArgumentException("Definition missing or ambiguous (matches="+found.Count+"): "+kind+":"+owner+":"+name);
   return found[0];
+ }
+ static Dictionary<string,object> Aliases=new Dictionary<string,object>(StringComparer.OrdinalIgnoreCase);
+ static Dictionary<string,object> RemovedIdentities=new Dictionary<string,object>();
+ static void RememberRemoval(BaseMetadataObject obj) {RemovedIdentities[Identity(obj)]=Record(obj);}
+ static void Changed(BaseMetadataObject obj) {if(obj.ModifiedStatus!=ModifiedStatusEnum.New) obj.SetModifiedStatus(ModifiedStatusEnum.Modified);}
+ static readonly Dictionary<string,string> IdentityProperties=new Dictionary<string,string> {
+  {"CDODefinition","CDODefId"},{"CDOField","FieldID"},{"FieldDefinition","FieldDefID"},
+  {"CLFDefinition","CLFID"},{"CLFFunction","CLFFunctionID"},{"CLFFunParm","CLFFunctionParmValueID"},
+  {"FunctionDefinition","FunctionID"},{"FunctionParameter","FunctionParamID"},
+  {"QueryDef","QueryDefID"},{"QueryText","QueryTextID"},{"QueryParm","QueryParmID"},
+  {"DBTableDefinition","DBTableId"},{"DBColumn","DBColumnID"},{"DBIndexDefinition","DBIndexID"},
+  {"DBIndexEntry","DBIndexEntryID"},{"CDOMapDefinition","CDOMapID"},
+  {"CDOFieldMapDefinition","CDOFieldMapID"},{"CLFEventMap","CLFEventMapID"},{"Label","LabelID"}
+ };
+ static string Identity(BaseMetadataObject obj) {
+  string property;
+  if(!IdentityProperties.TryGetValue(obj.GetType().Name,out property)) throw new ArgumentException("No stable identity for "+obj.GetType().Name);
+  var p=obj.GetType().GetProperties().First(x=>x.Name.Equals(property,StringComparison.OrdinalIgnoreCase));
+  var workspace=obj as WorkspaceControlledObject;
+  return obj.GetType().Name+":"+p.GetValue(obj,null)+":"+(workspace==null ? "" : workspace.WorkspaceCode);
+ }
+ static List<BaseMetadataObject> AllObjects(MDBMetadataSet set,HashSet<string> types) {
+  var objects=new List<object>();
+  foreach(var kind in Collections.Keys.Where(x=>!ReadOnlyKinds.Contains(x))) {
+   var values=Objects(set,kind,""); if(values.Count>0 && types.Contains(values[0].GetType().Name)) objects.AddRange(values);
+  }
+  if(types.Contains("CDOField")) foreach(var cdo in set.CDODefinitions.Values) objects.AddRange(Values(cdo.AllFields));
+  if(types.Overlaps(new[]{"FunctionParameter","CLFFunction","CLFFunParm"})) foreach(var clf in set.CLFDefinitions.Values) {
+   if(types.Contains("FunctionParameter")) objects.AddRange(Values(clf.Parameters));
+   if(types.Contains("CLFFunction")) objects.AddRange(Values(clf.CLFFunctions));
+   if(types.Contains("CLFFunParm")) foreach(var call in clf.CLFFunctions) objects.AddRange(Values(call.Parameters));
+  }
+  if(types.Overlaps(new[]{"QueryText","QueryParm"})) foreach(var query in set.QueryDefinitions.Values) {
+   if(types.Contains("QueryText")) objects.AddRange(Values(query.QueryTexts));
+   if(types.Contains("QueryParm")) objects.AddRange(Values(query.Parameters));
+  }
+  if(types.Contains("CDOFieldMapDefinition")) foreach(var map in set.CDOMapDefinitions.Values) objects.AddRange(Values(map.FieldMaps));
+  if(types.Contains("DBIndexEntry")) foreach(var index in set.DBIndexes.Values) objects.AddRange(Values(index.IndexEntries));
+  return objects.OfType<BaseMetadataObject>().Where(x=>IdentityProperties.ContainsKey(x.GetType().Name)).Distinct().ToList();
+ }
+ static string[] CoreProperties(BaseMetadataObject obj) {
+  if(obj is CDODefinition) return new[]{"Name","ParentCDOID","StorageCategoryId"};
+  if(obj is CDOField) return new[]{"Name","FieldName","FieldDefId","IsListType","IsNonPersistent"};
+  if(obj is FieldDefinition) return new[]{"FieldDefName","PrecisionValue","Scale","CPPDataTypeID"};
+  if(obj is CLFFunction) return new[]{"FunctionID","Sequence","CLFID"};
+  if(obj is CLFFunParm) return new[]{"ValueExpression"};
+  if(obj is CDOFieldMapDefinition) return new[]{"SourceCDOFieldID","TargetCDOFieldID"};
+  if(obj is CLFEventMap) return new[]{"CLFID","CLFEventID","CallerID","CDODefID"};
+  return new[]{"Name"};
  }
  static object Scalar(object v) {
   if(v==null) return null;
@@ -139,15 +194,105 @@ public static class DesignerVendorBridge {
    if(workspaceObj!=null && workspaceObj.WorkspaceCode!=set.WorkSpace) workspaceObj.CreateWorkspaceOverride(set.WorkSpace,ModifiedStatusEnum.Modified);
    bool isNew=((BaseMetadataObject)obj).ModifiedStatus==ModifiedStatusEnum.New;
    foreach(var item in changes) SetValue(set,obj,item.Key,item.Value);
+    if(obj is QueryText) {
+     var query=((QueryText)obj).ParentQueryDef;
+     query.SyncParametersWithQueryText();
+     if(query.ModifiedStatus!=ModifiedStatusEnum.New) query.SetModifiedStatus(ModifiedStatusEnum.Modified);
+    }
+    if(changes.Keys.Any(x=>new[]{"Name","FieldName","FieldDefName"}.Contains(x))) Aliases[kind+":"+owner+":"+name]=obj;
    ((BaseMetadataObject)obj).SetModifiedStatus(isNew?ModifiedStatusEnum.New:ModifiedStatusEnum.Modified);
-   return Record(obj);
+    return obj;
   }
   if(action=="create_cdo") {
    CheckName(set,"cdo",name,""); var parent=(CDODefinition)Find(set,"cdo",Text(op,"parent"),"");
    var cdo=new CDODefinition(); cdo.Metadata=set;
    cdo=cdo.CreateNewCDO(name,parent,Text(op,"description"),parent.CDOUsageMaskId,name,Flag(op,"create_table"),parent.StorageCategoryId,
     Text(op,"table_name"),Text(op,"table_description"),Flag(op,"create_revision_base"),Flag(op,"create_maintenance"));
-   return Record(cdo);
+   return (cdo);
+  }
+  if(action=="change_parent") {
+   var cdo=(CDODefinition)Find(set,"cdo",name,"");
+   var parent=(CDODefinition)Find(set,"cdo",Text(op,"parent"),"");
+   if(cdo.WorkspaceCode!=set.WorkSpace || cdo.ExistsInLowerWorkspace) throw new ArgumentException("Parent changes require a customer-owned CDO without a lower workspace definition");
+   if(cdo.ParentCDOName!=Text(op,"expected_parent")) throw new ArgumentException("Parent precondition failed");
+   for(var ancestor=parent;ancestor!=null;ancestor=ancestor.ParentCDO)
+    if(ancestor.CDODefId==cdo.CDODefId) throw new ArgumentException("CDO inheritance cycle");
+   if(cdo.CDOUsageMaskId!=parent.CDOUsageMaskId) throw new ArgumentException("Cross-category inheritance requires Designer migration; choose a parent in the same CDO usage category");
+   foreach(var field in cdo.Fields.Values) {
+    var inherited=parent.AllFields.Values.FirstOrDefault(x=>x.FieldName.Equals(field.FieldName,StringComparison.OrdinalIgnoreCase));
+    if(inherited!=null && field.InheritedID!=inherited.FieldID) throw new ArgumentException("New parent has a conflicting field: "+field.FieldName);
+    if(field.InheritedID!=0 && (inherited==null || field.InheritedID!=inherited.FieldID)) throw new ArgumentException("Field override does not exist on the new parent: "+field.FieldName);
+   }
+   var previous=cdo.ParentCDO;
+   previous.ChildCDOs.Remove(cdo.CDODefId);
+   parent.ChildCDOs[cdo.CDODefId]=cdo;
+   cdo.ParentCDO=parent; cdo.ParentCDOID=parent.CDODefId;
+   Changed(cdo);
+   return cdo;
+  }
+  if(action=="change_storage_category") {
+   var cdo=(CDODefinition)Find(set,"cdo",name,"");
+   Find(set,"storage_category",Text(op,"category"),"");
+   if(cdo.StorageCategoryName!=Text(op,"expected_category")) throw new ArgumentException("Storage category precondition failed");
+   if(cdo.WorkspaceCode!=set.WorkSpace) cdo.CreateWorkspaceOverride(set.WorkSpace,ModifiedStatusEnum.Modified);
+   bool fresh=cdo.ModifiedStatus==ModifiedStatusEnum.New;
+   cdo.StorageCategoryName=Text(op,"category"); cdo.SetModifiedStatus(fresh?ModifiedStatusEnum.New:ModifiedStatusEnum.Modified);
+   return cdo;
+  }
+  if(action=="sync_query_parameters") {
+   var query=(QueryDef)Find(set,"query",owner,"");
+   if(query.WorkspaceCode!=set.WorkSpace) query.CreateWorkspaceOverride(set.WorkSpace,ModifiedStatusEnum.Modified);
+   query.SyncParametersWithQueryText();
+   if(query.ModifiedStatus!=ModifiedStatusEnum.New) query.SetModifiedStatus(ModifiedStatusEnum.Modified);
+   return query;
+  }
+  if(action=="remove_field_override") {
+   var cdo=(CDODefinition)Find(set,"cdo",owner,""); var field=(CDOField)Find(set,"field",name,owner);
+   if(field.WorkspaceCode!=set.WorkSpace || field.CDODefinition.CDODefId!=cdo.CDODefId) throw new ArgumentException("Only a current customer field override can be removed");
+   if(field.FieldDefinition.FieldDefName!=Text(op,"expected_field_type")) throw new ArgumentException("Field override precondition failed");
+   RememberRemoval(field);
+   if(field.InheritedID!=0) cdo.RemoveCDOField(field.FieldName);
+   else if(field.ExistsInLowerWorkspace) field.RemoveWorkspaceOverride();
+   else throw new ArgumentException("This is an owned field, not an inherited override");
+   Changed(cdo); return cdo;
+  }
+  if(action=="replace_clf_function" || action=="remove_clf_function") {
+   var clf=(CLFDefinition)Find(set,"clf",owner,"");
+   if(clf.WorkspaceCode!=set.WorkSpace) throw new ArgumentException("Call changes require customer-owned CLF");
+   var call=clf.CLFFunctions.Single(x=>x.CLFFunctionID==Number(op,"call_id"));
+   if(call.FunctionName!=Text(op,"expected_function")) throw new ArgumentException("Function precondition failed");
+   var events=set.CLFEventMaps.Values.Where(x=>x.CLFID==clf.CLFID && x.ModifiedStatus!=ModifiedStatusEnum.Deleted).ToList();
+   if(events.Any(x=>x.WorkspaceCode!=set.WorkSpace)) throw new ArgumentException("A bound event belongs to another workspace; use Designer to migrate it");
+   foreach(var map in events) {map.RemoveCLFFunParmAttachedToCLFFunction(set,call); Changed(map);}
+   RememberRemoval(call);
+   foreach(var parameter in call.Parameters.Values) {RememberRemoval(parameter); parameter.SetModifiedStatus(ModifiedStatusEnum.Deleted);}
+   int sequence=call.Sequence;
+   // SaveCLFFunctions deletes only calls still present in the parent's list.
+   call.SetModifiedStatus(ModifiedStatusEnum.Deleted);
+   if(action=="replace_clf_function") {
+    var function=(FunctionDefinition)Find(set,"function",Text(op,"function"),"");
+    var replacement=new CLFFunction(function,set); replacement.AttachFunctionToCLF(clf,sequence);
+    foreach(var map in events) if(!map.AllFunctionParameters.Values.Any(x=>x.CLFFunctionID==replacement.CLFFunctionID)) map.AddCLFFunParmToAttachedCLFFunction(set,replacement);
+    Changed(clf); return replacement;
+   }
+   int index=1;
+   foreach(var remaining in clf.CLFFunctions.Where(x=>x.ModifiedStatus!=ModifiedStatusEnum.Deleted).OrderBy(x=>x.Sequence)) {remaining.Sequence=index++; Changed(remaining);}
+   Changed(clf); return clf;
+  }
+  if(action=="update_field_map" || action=="remove_field_map") {
+   var map=(CDOMapDefinition)Find(set,"map",owner,"");
+   if(map.WorkspaceCode!=set.WorkSpace) throw new ArgumentException("Field map changes require customer-owned map");
+   var existing=(CDOFieldMapDefinition)Find(set,"field_map",name,owner);
+   if(existing.SourceCDOFieldName!=Text(op,"expected_source_field") || existing.TargetCDOFieldName!=Text(op,"expected_target_field")) throw new ArgumentException("Field map precondition failed");
+   RememberRemoval(existing); map.RemoveFieldMap(existing.SourceCDOFieldName); Changed(map);
+   if(action=="remove_field_map") return map;
+   var source=(CDOField)Find(set,"field",Text(op,"source_field"),Text(op,"source_cdo"));
+   var target=(CDOField)Find(set,"field",Text(op,"target_field"),Text(op,"target_cdo"));
+   var sourceCDO=(CDODefinition)Find(set,"cdo",Text(op,"source_cdo"),"");
+   var targetCDO=(CDODefinition)Find(set,"cdo",Text(op,"target_cdo"),"");
+   if(sourceCDO.CDODefId!=map.SourceCDOID || targetCDO.CDODefId!=map.TargetCDOID) throw new ArgumentException("Field mapping must retain the map's source and target CDOs");
+   if(map.FieldMaps.Values.Any(x=>x.SourceCDOFieldID==source.FieldID && x.ModifiedStatus!=ModifiedStatusEnum.Deleted)) throw new ArgumentException("Another mapping already uses the new source field");
+   return map.AddFieldMapDef(source,target);
   }
   if(action=="create_field_type") {
    CheckName(set,"field_type",name,""); string dataType=Text(op,"data_type");
@@ -158,7 +303,7 @@ public static class DesignerVendorBridge {
    if(op.ContainsKey("max_length")) fieldType.PrecisionValue=Number(op,"max_length");
    if(op.ContainsKey("precision")) fieldType.PrecisionValue=Number(op,"precision");
    if(op.ContainsKey("scale")) fieldType.Scale=Number(op,"scale");
-   return Record(fieldType);
+   return (fieldType);
   }
   if(action=="add_field") {
    CheckName(set,"field",name,owner); var cdo=(CDODefinition)Find(set,"cdo",owner,"");
@@ -166,57 +311,57 @@ public static class DesignerVendorBridge {
    var type=(FieldDefinition)Find(set,"field_type",Text(op,"field_type"),"");
    var f=cdo.AddField(type,Flag(op,"is_list"),name,Text(op,"description"),0,0,Flag(op,"persistent"));
    f.IsNonPersistent=!Flag(op,"persistent");
-   return Record(f);
+   return (f);
   }
   if(action=="copy_clf") {
    CheckName(set,"clf",name,""); var src=(CLFDefinition)Find(set,"clf",Text(op,"template"),"");
    var dest=new CLFDefinition(set); dest.CopyAsNew(src,name); dest.CLFTypeId=src.CLFTypeId;
-   set.CLFDefinitions.Add(dest.CLFID,dest); return Record(dest);
+   set.CLFDefinitions.Add(dest.CLFID,dest); return (dest);
   }
   if(action=="create_query") {
    CheckName(set,"query",name,""); var q=new QueryDef(set);
    q.CreateNew((QueryType)Find(set,"query_type",Text(op,"query_type"),"")); q.Name=name; q.Description=Text(op,"description",name);
-   q.AddQueryText(Number(op,"db_type_id"),Text(op,"text")); q.SyncParametersWithQueryText(); return Record(q);
+   q.AddQueryText(Number(op,"db_type_id"),Text(op,"text")); q.SyncParametersWithQueryText(); return (q);
   }
   if(action=="create_map") {
    var source=(CDODefinition)Find(set,"cdo",owner,""); var target=(CDODefinition)Find(set,"cdo",Text(op,"target"),"");
    var map=new CDOMapDefinition(); map.Metadata=set; map=map.CreateNewCDOMapDefinition(source.CDODefId,target.CDODefId,0);
-   return Record(map);
+   return (map);
   }
   if(action=="create_clf") {
    CheckName(set,"clf",name,"");
    var clf=CLFDefinition.New(set,(CLFType)Find(set,"clf_type",Text(op,"clf_type"),""));
-   clf.Name=name; clf.Description=Text(op,"description",name); return Record(clf);
+   clf.Name=name; clf.Description=Text(op,"description",name); return (clf);
   }
   if(action=="add_clf_function") {
    var clf=(CLFDefinition)Find(set,"clf",owner,"");
    if(clf.WorkspaceCode!=set.WorkSpace) throw new ArgumentException("Copy CLF to customer workspace before changing its function list");
    var function=(FunctionDefinition)Find(set,"function",Text(op,"function"),"");
    var call=new CLFFunction(function,set); call.AttachFunctionToCLF(clf,Number(op,"sequence"));
-   if(clf.ModifiedStatus!=ModifiedStatusEnum.New) clf.SetModifiedStatus(ModifiedStatusEnum.Modified); return Record(call);
+   if(clf.ModifiedStatus!=ModifiedStatusEnum.New) clf.SetModifiedStatus(ModifiedStatusEnum.Modified); return (call);
   }
   if(action=="create_label") {
-   CheckName(set,"label",name,""); var label=new Label(set,name,Text(op,"text"),Number(op,"category_id")); return Record(label);
+   CheckName(set,"label",name,""); var label=new Label(set,name,Text(op,"text"),Number(op,"category_id")); return (label);
   }
   if(action=="add_column") {
    CheckName(set,"column",name,owner);
    var table=(DBTableDefinition)Find(set,"table",owner,"");
    if(table.WorkspaceCode!=set.WorkSpace) table.CreateWorkspaceOverride(set.WorkSpace,ModifiedStatusEnum.Modified);
    var column=table.AddColumn(Number(op,"sql_type_id"),0); column.Name=name; column.Description=Text(op,"description");
-   column.Precision=Number(op,"precision"); column.Scale=Number(op,"scale"); return Record(column);
+   column.Precision=Number(op,"precision"); column.Scale=Number(op,"scale"); return (column);
   }
   if(action=="add_query_text") {
    var query=(QueryDef)Find(set,"query",owner,"");
    if(query.WorkspaceCode!=set.WorkSpace) query.CreateWorkspaceOverride(set.WorkSpace,ModifiedStatusEnum.Modified);
    if(query.QueryTexts.Values.Any(t=>t.DBTypeID==Number(op,"db_type_id"))) throw new ArgumentException("Query text already exists for DB type");
-   query.AddQueryText(Number(op,"db_type_id"),Text(op,"text")); query.SyncParametersWithQueryText(); return Record(query);
+   query.AddQueryText(Number(op,"db_type_id"),Text(op,"text")); query.SyncParametersWithQueryText(); return (query);
   }
   if(action=="delete") {
    var obj=(WorkspaceControlledObject)Find(set,kind,name,owner);
    if(obj.WorkspaceCode!=set.WorkSpace || ReadOnlyKinds.Contains(kind)) throw new ArgumentException("Only customer-owned definitions can be deleted");
    var inUse=obj.GetType().GetMethod("IsInUse",Type.EmptyTypes);
    if(inUse==null || (bool)inUse.Invoke(obj,null)) throw new ArgumentException("Cannot prove definition is unused");
-   obj.SetModifiedStatus(ModifiedStatusEnum.Deleted); return Record(obj);
+   RememberRemoval(obj); obj.SetModifiedStatus(ModifiedStatusEnum.Deleted); return (obj);
   }
   if(action=="change_field_type") {
    var cdo=(CDODefinition)Find(set,"cdo",owner,"");
@@ -225,7 +370,7 @@ public static class DesignerVendorBridge {
    var type=(FieldDefinition)Find(set,"field_type",Text(op,"field_type"),"");
    if(cdo.WorkspaceCode!=set.WorkSpace) cdo.CreateWorkspaceOverride(set.WorkSpace,ModifiedStatusEnum.Modified);
    cdo.ChangeCDOFieldDefinition(name,type.FieldDefID);
-   return Record(Find(set,"field",name,owner));
+   return (Find(set,"field",name,owner));
   }
   if(action=="create_index") {
    CheckName(set,"index",name,owner); var table=(DBTableDefinition)Find(set,"table",owner,"");
@@ -236,19 +381,21 @@ public static class DesignerVendorBridge {
    index.SetModifiedStatus(ModifiedStatusEnum.New); table.AddIndex(index);
    foreach(var value in (object[])op["columns"]) {
     var col=(DBColumn)Find(set,"column",Convert.ToString(value),owner); index.CreateNewEntry(col.DBColumnID);
-   } return Record(index);
+   } return (index);
   }
   if(action=="add_field_map") {
    var map=(CDOMapDefinition)Find(set,"map",Text(op,"map"),"");
    if(map.WorkspaceCode!=set.WorkSpace) throw new ArgumentException("Field maps require a customer-owned map");
    var source=(CDOField)Find(set,"field",Text(op,"source_field"),Text(op,"source_cdo"));
    var target=(CDOField)Find(set,"field",Text(op,"target_field"),Text(op,"target_cdo"));
-   return Record(map.AddFieldMapDef(source,target));
+   if(map.SourceCDOID!=((CDODefinition)Find(set,"cdo",Text(op,"source_cdo"),"")).CDODefId || map.TargetCDOID!=((CDODefinition)Find(set,"cdo",Text(op,"target_cdo"),"")).CDODefId) throw new ArgumentException("Field mapping CDOs do not match the owner map");
+   if(map.FieldMaps.Values.Any(x=>x.SourceCDOFieldID==source.FieldID && x.ModifiedStatus!=ModifiedStatusEnum.Deleted)) throw new ArgumentException("Source field is already mapped; use update_field_map");
+   return (map.AddFieldMapDef(source,target));
   }
   if(action=="reorder_clf_functions") {
    var clf=(CLFDefinition)Find(set,"clf",owner,"");
    if(clf.WorkspaceCode!=set.WorkSpace) throw new ArgumentException("Function reorder requires customer-owned CLF");
-   var ordered=clf.CLFFunctions.OrderBy(x=>x.Sequence).ToList();
+   var ordered=clf.CLFFunctions.Where(x=>x.ModifiedStatus!=ModifiedStatusEnum.Deleted).OrderBy(x=>x.Sequence).ToList();
    var expected=((object[])op["expected_function_ids"]).Select(Convert.ToInt32).ToArray();
    var ids=((object[])op["function_ids"]).Select(Convert.ToInt32).ToArray();
    if(!ordered.Select(x=>x.CLFFunctionID).SequenceEqual(expected)) throw new ArgumentException("CLF order precondition failed");
@@ -258,7 +405,7 @@ public static class DesignerVendorBridge {
     var f=ordered.Single(x=>x.CLFFunctionID==ids[i]); bool fresh=f.ModifiedStatus==ModifiedStatusEnum.New;
     f.Sequence=i+1; f.SetModifiedStatus(fresh?ModifiedStatusEnum.New:ModifiedStatusEnum.Modified);
    }
-   clf.SetModifiedStatus(isNew?ModifiedStatusEnum.New:ModifiedStatusEnum.Modified); return Record(clf);
+   clf.SetModifiedStatus(isNew?ModifiedStatusEnum.New:ModifiedStatusEnum.Modified); return (clf);
   }
   if(action=="set_clf_parameter") {
    var clf=(CLFDefinition)Find(set,"clf",owner,"");
@@ -268,25 +415,42 @@ public static class DesignerVendorBridge {
    if(parameter.ValueExpression!=Text(op,"expected_value")) throw new ArgumentException("Parameter value precondition failed");
    bool fresh=parameter.ModifiedStatus==ModifiedStatusEnum.New;
    parameter.ValueExpression=Text(op,"value"); parameter.SetModifiedStatus(fresh?ModifiedStatusEnum.New:ModifiedStatusEnum.Modified);
-   return Record(parameter);
+   return (parameter);
   }
-  if(action=="bind_event") {
+  if(action=="bind_event" || action=="replace_event_binding" || action=="unbind_event") {
    var cdo=(CDODefinition)Find(set,"cdo",owner,"");
    if(cdo.WorkspaceCode!=set.WorkSpace) throw new ArgumentException("Event binding requires customer-owned CDO");
-   var clf=(CLFDefinition)Find(set,"clf",Text(op,"clf"),"");
+   var clf=action=="unbind_event" ? null : (CLFDefinition)Find(set,"clf",Text(op,"clf"),"");
    var ev=(CLFEventDefinition)Find(set,"event",Text(op,"event"),"");
-   var feature=(InSiteFeature)Find(set,"feature",Text(op,"feature"),"");
+   var feature=action=="unbind_event" ? null : (InSiteFeature)Find(set,"feature",Text(op,"feature"),"");
    string fieldName=Text(op,"field"); var field=fieldName=="" ? null : (CDOField)Find(set,"field",fieldName,owner);
    if(ev.CallerType.ToString()!=(field==null ? "CDO" : "Field")) throw new ArgumentException("Event caller type does not match CDO/field target");
    if(field!=null && field.WorkspaceCode!=set.WorkSpace) throw new ArgumentException("Field event binding requires customer-owned field");
    var events=field==null ? cdo.Events : field.Events;
-   if(events.Values.Any(x=>x.CLFEventID==ev.CLFEventID)) throw new ArgumentException("Event already bound; inspect the existing binding before changing it");
+   var existing=events.Values.SingleOrDefault(x=>x.CLFEventID==ev.CLFEventID);
+   if(action!="bind_event") {
+    if(existing==null || existing.CLFDefinition.Name!=Text(op,"expected_clf")) throw new ArgumentException("Event binding precondition failed");
+    if(existing.WorkspaceCode!=set.WorkSpace) throw new ArgumentException("Only customer-owned event bindings can be changed");
+    if(action=="unbind_event") {
+     RememberRemoval(existing);
+     foreach(var call in existing.CLFDefinition.CLFFunctions) existing.RemoveCLFFunParmAttachedToCLFFunction(set,call);
+     existing.SetModifiedStatus(ModifiedStatusEnum.Deleted); events.Remove(existing.CLFEventMapID);
+     if(field==null) {cdo.EventsModified=true; Changed(cdo); return cdo;}
+     field.EventsModified=true; Changed(field); return field;
+    }
+    foreach(var call in existing.CLFDefinition.CLFFunctions) existing.RemoveCLFFunParmAttachedToCLFFunction(set,call);
+    existing.CLFDefinition=clf; existing.CLFID=clf.CLFID; existing.FeatureId=feature.FeatureId;
+    existing.CopyAllParametersFromCLF(set); existing.ParamsModified=true; Changed(existing);
+    if(field==null) {cdo.EventsModified=true; Changed(cdo);} else {field.EventsModified=true; Changed(field);}
+    return existing;
+   }
+   if(existing!=null) throw new ArgumentException("Event already bound; use replace_event_binding with expected_clf");
    var map=new CLFEventMap(); map.Metadata=set;
    map.CreateNewEventMap(clf,ev,field==null ? cdo.CDODefId : field.FieldID,cdo.CDODefId,feature.Name);
    set.CLFEventMaps.Add(map.CLFEventMapID,map); events.Add(map.CLFEventMapID,map);
    if(field==null) { cdo.EventsModified=true; if(cdo.ModifiedStatus!=ModifiedStatusEnum.New) cdo.SetModifiedStatus(ModifiedStatusEnum.Modified); }
    else { field.EventsModified=true; if(field.ModifiedStatus!=ModifiedStatusEnum.New) field.SetModifiedStatus(ModifiedStatusEnum.Modified); }
-   return Record(map);
+   return (map);
   }
   throw new ArgumentException("Unsupported Designer operation: "+action);
  }
@@ -329,8 +493,21 @@ public static class DesignerVendorBridge {
      if(mode=="schema") result=Dict("properties",Schema(obj,kind));
      else if(mode=="impact") {
       var method=obj.GetType().GetMethod("GetWhereUsed",new[]{typeof(bool)});
-      if(method==null) throw new ArgumentException("Official where-used method unavailable for this kind");
-      result=Dict("where_used",Values(method.Invoke(obj,new object[]{false})).Take(100).Select(Record).ToArray());
+      if(method==null && obj is CDOField) {
+       var field=(CDOField)obj; var references=new List<object>();
+       foreach(var map in set.CDOMapDefinitions.Values) foreach(var entry in map.FieldMaps.Values)
+        if(entry.SourceCDOFieldID==field.FieldID || entry.TargetCDOFieldID==field.FieldID) references.Add(Dict("kind","field_map","owner",map.Name,"definition",Record(entry)));
+       foreach(var ev in set.CLFEventMaps.Values.Where(x=>x.CallerID==field.FieldID && x.CDODefID==field.CDODefinition.CDODefId)) references.Add(Dict("kind","event_binding","definition",Record(ev)));
+       foreach(var child in set.AllCDOFields.Values.Where(x=>x.InheritedID==field.FieldID)) references.Add(Dict("kind","field_override","owner",child.CDODefinition.Name,"definition",Record(child)));
+       var inUse=field.GetType().GetMethod("IsInUse",Type.EmptyTypes);
+       result=Dict("where_used",references.Take(100).ToArray(),"total",references.Count,"truncated",references.Count>100,
+                   "in_use",inUse==null ? null : inUse.Invoke(field,null),"complete",false,
+                   "coverage","field maps, direct event bindings and inherited overrides; expressions and runtime usage require Designer review");
+      } else {
+       if(method==null) throw new ArgumentException("Official where-used method unavailable for this kind");
+       var references=Values(method.Invoke(obj,new object[]{false}));
+       result=Dict("where_used",references.Take(100).Select(Record).ToArray(),"total",references.Count,"truncated",references.Count>100);
+      }
      } else {
       var record=Record(obj); if(obj is CDODefinition) {
        var fields=Values(((CDODefinition)obj).AllFields); record["fields"]=fields.Take(100).Select(Record).ToArray();
@@ -346,20 +523,58 @@ public static class DesignerVendorBridge {
       result=record;
      }
     } else if(mode=="apply") {
-     var records=new List<object>(); foreach(var op in (object[])req["operations"]) records.Add(Apply(set,Map(op)));
+     Aliases.Clear(); RemovedIdentities.Clear();
+     var targets=new List<BaseMetadataObject>(); var properties=new Dictionary<string,HashSet<string>>();
+     foreach(var item in (object[])req["operations"]) {
+      var op=Map(item); var target=(BaseMetadataObject)Apply(set,op); targets.Add(target);
+      string identity=Identity(target);
+      if(!properties.ContainsKey(identity)) properties[identity]=new HashSet<string>(CoreProperties(target));
+      if(Text(op,"action")=="patch") foreach(var key in Map(op["changes"]).Keys) properties[identity].Add(key);
+     }
+     var records=targets.Select(Record).ToList();
      set.SaveAll();
      var verify=Load(Text(req,"mdb"),folder,Text(req,"workspace"));
      var verified=new List<object>();
-     foreach(var item in (object[])req["operations"]) {
-      var op=Map(item); string action=Text(op,"action"),targetKind=Text(op,"kind");
-      if(action=="create_cdo") targetKind="cdo"; if(action=="create_field_type") targetKind="field_type";
-      if(action=="add_field") targetKind="field"; if(action=="create_query") targetKind="query";
-      if(action=="copy_clf" || action=="create_clf") targetKind="clf"; if(action=="create_label") targetKind="label";
-      if(action=="add_column") targetKind="column";
-      if(action=="create_index") targetKind="index"; if(action=="change_field_type") targetKind="field";
-      if(targetKind!="" && action!="delete") verified.Add(Record(Find(verify,targetKind,Text(op,"name"),Text(op,"owner"))));
+     var types=new HashSet<string>(targets.Select(x=>x.GetType().Name)); foreach(var removed in RemovedIdentities.Keys) types.Add(removed.Split(':')[0]);
+     var loaded=AllObjects(verify,types).Where(x=>x.ModifiedStatus!=ModifiedStatusEnum.Deleted).GroupBy(Identity).ToDictionary(x=>x.Key,x=>x.First());
+     foreach(var removed in RemovedIdentities) {
+      if(loaded.ContainsKey(removed.Key)) throw new InvalidOperationException("Removed definition still exists after reload: "+removed.Key);
+      verified.Add(Dict("identity",removed.Key,"deleted",true,"passed",true,"previous",removed.Value));
      }
-     result=Dict("status","saved_to_test_copy","operations",records,"reloaded_definitions",verified,"reloaded_cdo_count",verify.CDODefinitions.Count);
+     foreach(var target in targets.Distinct()) {
+      string identity=Identity(target); BaseMetadataObject actual;
+      bool exists=loaded.TryGetValue(identity,out actual);
+      if(RemovedIdentities.ContainsKey(identity)) {
+       if(exists) throw new InvalidOperationException("Deleted definition still exists after reload: "+identity);
+       verified.Add(Dict("identity",identity,"name",Name(target),"deleted",true,"passed",true));
+       continue;
+      }
+      if(!exists) throw new InvalidOperationException("Definition missing after reload: "+identity);
+      foreach(var key in properties[identity]) {
+       var p=target.GetType().GetProperty(key); if(p==null || !p.CanRead) continue;
+       if(Json.Serialize(Scalar(p.GetValue(target,null)))!=Json.Serialize(Scalar(p.GetValue(actual,null))))
+        throw new InvalidOperationException("Saved property mismatch: "+identity+"."+key);
+      }
+      verified.Add(Record(actual));
+     }
+     var affected=new HashSet<string>();
+     foreach(var target in targets) {
+      if(target is CDODefinition) affected.Add(((CDODefinition)target).Name);
+      if(target is CDOField) affected.Add(((CDOField)target).CDODefinition.Name);
+      if(target is FieldDefinition) foreach(var field in set.AllCDOFields.Values.Where(x=>x.FieldDefId==((FieldDefinition)target).FieldDefID)) affected.Add(field.CDODefinition.Name);
+      if(target is CDOMapDefinition || target is CDOFieldMapDefinition) {
+       int mapID=target is CDOMapDefinition ? ((CDOMapDefinition)target).CDOMapID : ((CDOFieldMapDefinition)target).CDOMapID;
+       var map=set.CDOMapDefinitions.Values.FirstOrDefault(x=>x.CDOMapID==mapID);
+       if(map!=null) {affected.Add(map.SourceCDOName); affected.Add(map.TargetCDOName);}
+      }
+      if(target is CLFDefinition || target is CLFFunction || (target is CLFFunParm && ((CLFFunParm)target).ParentCLFFunction!=null)) {
+       int clfID=target is CLFDefinition ? ((CLFDefinition)target).CLFID : (target is CLFFunction ? ((CLFFunction)target).CLFID : ((CLFFunParm)target).ParentCLFFunction.CLFID);
+       foreach(var ev in set.CLFEventMaps.Values.Where(x=>x.CLFID==clfID)) {
+        var cdo=set.CDODefinitions.Values.FirstOrDefault(x=>x.CDODefId==ev.CDODefID); if(cdo!=null) affected.Add(cdo.Name);
+       }
+      }
+     }
+     result=Dict("status","saved_to_test_copy","operations",records,"reloaded_definitions",verified,"reloaded_cdo_count",verify.CDODefinitions.Count,"reload_verified",true,"affected_cdos",affected.ToArray());
     } else throw new ArgumentException("Unknown bridge mode");
    }
    File.WriteAllText(resultFile,Json.Serialize(Dict("ok",true,"result",result)),new System.Text.UTF8Encoding(false));

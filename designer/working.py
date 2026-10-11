@@ -6,11 +6,24 @@ from pathlib import Path
 import re
 import shutil
 import time
+import threading
+from contextlib import contextmanager
 from uuid import uuid4
 
 from designer.files import root_dir, source_path
 
 BACKUP_LIMIT = 10
+_locks = {}
+_locks_guard = threading.Lock()
+
+
+@contextmanager
+def project_lock(project_id):
+    project_dir(project_id)
+    with _locks_guard:
+        lock = _locks.setdefault(project_id, threading.RLock())
+    with lock:
+        yield
 
 
 def project_dir(project_id):
@@ -170,9 +183,16 @@ def commit(project_id, state, manifest_file, before):
         (folder / 'pending.json').unlink(missing_ok=True)
     finally:
         temporary.unlink(missing_ok=True)
-    for old in backups(project_id)[BACKUP_LIMIT:]:
-        shutil.rmtree(backups_dir(project_id) / old['id'])
+    prune_backups(project_id)
     return str(destination)
+
+
+def prune_backups(project_id):
+    for old in backups(project_id)[BACKUP_LIMIT:]:
+        destination = (backups_dir(project_id) / old['id']).resolve()
+        if not destination.is_relative_to(backups_dir(project_id)):
+            raise ValueError('备份目录超出工作项目范围')
+        shutil.rmtree(destination)
 
 
 def check_current(manifest):

@@ -32,7 +32,7 @@ async def get_designer_capabilities() -> dict:
     configured = bool(config.DESIGNER_METADATA_ASSEMBLY)
     available = configured and Path(config.DESIGNER_METADATA_ASSEMBLY).is_file()
     return {"entity_kinds": vendor.KINDS, "vendor_backend_available": available,
-            "design_operations": sorted(vendor.CREATE_ACTIONS | {"patch", "delete", "change_field_type", "reorder_clf_functions", "set_clf_parameter"}),
+            "design_operations": sorted(vendor.DESIGN_ACTIONS),
             "features": {"effective_metadata_read": available, "workspace_and_inheritance": available,
                          "create_cdo": available, "create_field_type": available, "add_field": available,
                          "persistent_field_mapping": available, "property_patch_with_expected_values": available,
@@ -41,11 +41,31 @@ async def get_designer_capabilities() -> dict:
                          "database_publish": available and config.DESIGNER_TEST_TARGET_CONFIRMED and bool(config.DESIGNER_DB_SERVER),
                          "database_backup_and_restore": config.DESIGNER_TEST_TARGET_CONFIRMED and bool(config.DESIGNER_DB_SERVER),
                          "published_cdo_field_column_verification": bool(config.DESIGNER_DB_SERVER),
+                         "published_metadata_update_delete_verification": available and bool(config.DESIGNER_DB_SERVER),
+                         "designer_saved_file_receive": available, "mdb_backup_restore": available,
+                         "change_customer_cdo_parent_same_usage": available, "change_storage_category": available,
+                         "remove_inherited_field_override": available, "replace_unbind_events": available,
+                         "replace_remove_clf_calls": available, "update_remove_field_maps": available,
+                         "query_parameter_synchronization": available,
                          "metadata_compile": available,
                          "wcf_generation_adapter_implemented": True,
                          "wcf_server_configured": bool(config.DESIGNER_SERVER_SHARE and config.DESIGNER_WINDOWS_USER and config.DESIGNER_WCF_ADDRESS),
                          "runtime_service_generation": False},
             "scope": "stable_project_mdb_and_confirmed_test_database", "vendor_api_stability": "installed_assembly_version_requires_regression_tests"}
+
+
+@mcp.tool
+async def sync_designer_working_file(mdb_file: str, expected_sha256: str, accept_merged_sha256: str = '') -> dict:
+    """读取 Designer 已保存的工作 MDB，验证后接收到同一个本地工作路径，生成新清单以便继续设计。两边同时变化时保留两个文件，由 Opcenter 合并；用户明确确认已在 Opcenter 合并后，才可传入拒绝回执中的合并文件 SHA256 为 accept_merged_sha256，接收指定版本。不合并、不发布数据库。"""
+    from designer.review import synchronize
+    return await asyncio.to_thread(synchronize, mdb_file, expected_sha256, accept_merged_sha256)
+
+
+@mcp.tool
+async def restore_designer_mdb_backup(mdb_file: str, backup_id: str, expected_sha256: str) -> dict:
+    """恢复指定项目备份到同一个工作 MDB；先保留当前版本，再验证备份与当前哈希。用户明确要求恢复时使用。只恢复 MDB，不回退 SQL 数据库或 SiteInfo；返回新的设计清单。"""
+    from designer.review import restore_backup
+    return await asyncio.to_thread(restore_backup, mdb_file, backup_id, expected_sha256)
 
 
 @mcp.tool
@@ -57,7 +77,7 @@ async def generate_designer_wcf_package(compiled_mdb: str, expected_sha256: str,
 
 @mcp.tool
 async def verify_designer_published_design(manifest_file: str, test_string_boundaries: bool = False) -> dict:
-    """核对已发布设计包中CDO父对象、字段类型/持久化和实际列长度。可在已确认测试库临时表测试String长度边界，不写业务行；不代替CLF、Query或WCF运行验收。"""
+    """编译隔离副本，对照 SQL 核对本次变更的对象、字段、CLF/调用/参数、事件、查询/文本/参数、映射、列、索引及标签元数据的具体值与删除结果，并检查物理列。可在已确认测试库临时表测试String长度边界，不写业务行；不代替CLF、Query或WCF运行行为验收。连续设计须使用合并后的最终设计清单。"""
     from designer.publication import verify_published_design
     return await asyncio.to_thread(verify_published_design,manifest_file,test_string_boundaries)
 
@@ -152,6 +172,13 @@ async def generate_designer_design_package(mdb_file: str, expected_sha256: str, 
     reorder_clf_functions: owner,function_ids,expected_function_ids，必须完整且不重复。
     set_clf_parameter: owner,call_id,parameter,value,expected_value，设置函数调用参数表达式。
     bind_event: owner客户CDO,event,clf,feature；可选field为客户字段；拒绝覆盖已有事件绑定。
+    change_parent: name,parent,expected_parent；仅客户拥有且无下层覆盖的 CDO，同一 CDO 用途类别，拒绝继承环和字段冲突。
+    change_storage_category: name,category,expected_category；使用已有存储分类改变元数据归属，不搬移文件或迁移工作区。
+    remove_field_override: owner,name,expected_field_type；撤销客户字段覆盖并恢复继承，不能当作删除父级字段。
+    replace_event_binding: owner,event,clf,feature,expected_clf,field?；unbind_event: owner,event,expected_clf,field?。替换后参数取新 CLF 的默认值。
+    replace_clf_function: owner,call_id,function,expected_function；remove_clf_function: owner,call_id,expected_function。读取真实调用 ID；替换使用新函数默认参数。
+    update_field_map: owner,name,source_cdo,source_field,target_cdo,target_field,expected_source_field,expected_target_field；remove_field_map: owner,name,expected_source_field,expected_target_field。owner 为映射名，name 可用 id:真实CDOFieldMapID 消除同名歧义。
+    sync_query_parameters: owner；query_text 的 Text 属性 patch 也自动同步查询参数。
     patch: kind,name,owner,changes属性字典,expected原值字典。属性先查schema与entity。
     patch只支持schema标记可编辑的简单属性；引用必须使用专用操作，枚举须取schema给出的值。
     delete: kind,name,owner，仅允许删除当前客户工作区拥有且厂商判定未被引用的定义。
