@@ -125,8 +125,6 @@
         textarea { display: block; width: 100%; height: 52px; max-height: 160px; resize: none; border: 0; outline: none; background: transparent; color: var(--text); font-size: 13px; line-height: 1.7; }
         textarea::placeholder { color: #939ca5; }
         .composer-bottom { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 10px; }
-        .composer-label { display: flex; align-items: center; gap: 6px; color: var(--secondary); font-size: 10px; }
-        .composer-label .icon { width: 13px; height: 13px; color: #7d918a; }
         .composer-tools { display: flex; align-items: center; gap: 14px; }
         .attach-button { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--secondary); padding: 5px 0; }
         .attach-button:hover { color: var(--teal); }
@@ -173,6 +171,7 @@
         .stop-button:focus-visible { outline-color: #dc2626; }
         .stop-button .icon { width: 24px; height: 24px; fill: currentColor; stroke: none; }
         .composer-hint { display: flex; justify-content: space-between; color: var(--muted); font-size: 10px; line-height: 1.6; padding: 10px 2px 0; }
+        .composer-shortcuts { margin-left: auto; }
         .guide { width: 272px; flex-shrink: 0; border-left: 1px solid var(--border); background: #fcfcfd; padding: 26px 23px; overflow-y: auto; }
         .guide-title { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; }
         .guide-title .icon { color: var(--teal); width: 16px; }
@@ -233,7 +232,6 @@
             .composer-area { padding: 8px 14px 14px; }
             .composer-hint span:last-child { display: none; }
             .composer-tools { gap: 10px; }
-            .composer-label { display: none; }
             .attachment-card summary { flex-wrap: wrap; }
             .attachment-card small { margin-left: 24px; flex-basis: calc(100% - 24px); }
             .attachment-table th, .attachment-table td { min-width: 100px; }
@@ -305,9 +303,9 @@
                             <div class="attachment-list" id="attachmentList" aria-label="待发送的 Excel 附件"></div>
                             <p class="upload-status" id="uploadStatus" role="status" hidden>正在读取 Excel…</p>
                             <textarea id="inputBox" rows="2" aria-label="设计需求" placeholder="描述你的对象或字段设计需求…" autocomplete="off"></textarea>
-                            <div class="composer-bottom"><div class="composer-tools"><button class="attach-button" id="attachBtn" type="button"><svg class="icon"><use href="#i-attach"/></svg>添加 Excel</button><span class="composer-label"><svg class="icon"><use href="#i-design"/></svg>Opcenter Designer</span></div><button class="send-button" id="sendBtn" type="submit" aria-label="发送" title="发送"><svg class="icon" aria-hidden="true"><use href="#i-send"/></svg></button><button class="send-button stop-button" id="stopBtn" type="button" aria-label="停止回答" title="停止回答" hidden><svg class="icon" aria-hidden="true"><use href="#i-stop"/></svg></button></div>
+                            <div class="composer-bottom"><div class="composer-tools"><button class="attach-button" id="attachBtn" type="button"><svg class="icon"><use href="#i-attach"/></svg>添加 Excel</button></div><button class="send-button" id="sendBtn" type="submit" aria-label="发送" title="发送"><svg class="icon" aria-hidden="true"><use href="#i-send"/></svg></button><button class="send-button stop-button" id="stopBtn" type="button" aria-label="停止回答" title="停止回答" hidden><svg class="icon" aria-hidden="true"><use href="#i-stop"/></svg></button></div>
                         </form>
-                        <div class="composer-hint"><span>设计完成后，在 Designer 中审核并发布</span><span>Enter 发送 · Shift + Enter 换行</span></div>
+                        <div class="composer-hint"><span id="backgroundStatus" role="status" hidden></span><span class="composer-shortcuts">Enter 发送 · Shift + Enter 换行</span></div>
                     </div>
                 </section>
                 <section class="records" id="recordsView" aria-label="设计记录" hidden><h2>每一次设计，都有迹可循。</h2><p class="records-description">打开历史对话，继续查看需求、设计结果与变更说明。</p><div id="recordList"></div></section>
@@ -433,8 +431,9 @@
             const previous = backgroundRunning;
             backgroundRunning = !!data.background_running;
             clearTimeout(backgroundTimer);
-            const hint = document.querySelector('.composer-hint span');
-            hint.textContent = backgroundRunning ? '后台操作仍在完成，可到设计进度查看；完成后可继续发送' : '设计完成后，在 Designer 中审核并发布';
+            const hint = document.getElementById('backgroundStatus');
+            hint.hidden = !backgroundRunning;
+            hint.textContent = backgroundRunning ? '后台操作仍在完成，可到设计进度查看；完成后可继续发送' : '';
             updateControls();
             if (previous && !backgroundRunning) {
                 if (data.designer_results?.length) showDesignerResult(data.designer_results[data.designer_results.length - 1]);
