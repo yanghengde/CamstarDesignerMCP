@@ -46,6 +46,11 @@ async def lifespan(app: FastAPI):
         else:
             yield
     finally:
+        from designer import progress, progress_store
+        await progress_store.drain()
+        if progress._tasks:
+            import asyncio
+            await asyncio.gather(*list(progress._tasks), return_exceptions=True)
         await close_langgraph_runtime()
 
 

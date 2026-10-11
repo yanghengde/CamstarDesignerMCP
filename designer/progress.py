@@ -6,7 +6,7 @@ from pathlib import Path
 import time
 
 from agent.memory import get_user_messages, get_sessions
-from designer import review, progress_store as store
+from designer import review, publication, progress_store as store
 from designer.files import source_path
 from designer.vendor import digest
 from designer import progress_actions
@@ -21,6 +21,7 @@ STAGES = {'generate_designer_cdo_package': 4, 'generate_designer_design_package'
           'prepare_designer_publish_plan': 8, 'backup_designer_test_database': 8,
           'generate_designer_wcf_package': 9}
 STAGES.update({name: 4 for name in DESIGN_TOOLS})
+STAGES['confirm_designer_manual_publish'] = 8
 _tasks = set()
 
 
@@ -149,8 +150,14 @@ def snapshot(username, session_id):
             package = review.summary(path)
             from designer import working
             if package.get('working'):
+                path = package['working']['latest_manifest']
+                package = review.summary(path)
                 working.check_current(json.loads(Path(path).read_text(encoding='utf-8')))
             owned = {str(Path(item['result']['files']['manifest.json']).resolve()): item for item in all_saved}
+            if package.get('working'):
+                project_state = working.load(package['working']['id'])
+                for cycle_path in project_state.get('cycle_manifests', [path]):
+                    owned.setdefault(str(Path(cycle_path).resolve()), {'turn_start': None})
             cursor = path
             while cursor and len(manifests) < 100:
                 manifest_path, manifest = review.package(cursor)
@@ -192,6 +199,9 @@ def snapshot(username, session_id):
     if package:
         for item in receipts:
             args = item.get('arguments', {})
+            if (args.get('mdb_file') and same_file(args['mdb_file'], package['mdb_file'])
+                    and args.get('expected_sha256') and args['expected_sha256'] != package['sha256']):
+                continue
             if item.get('package_id') == package['id'] or same_file(args.get('manifest_file'), package['manifest_file']) or same_file(args.get('mdb_file'), package['mdb_file']):
                 relevant.append(item)
         compiled_paths = {(item.get('result') or {}).get('compiled_mdb') for item in relevant}
@@ -205,8 +215,8 @@ def snapshot(username, session_id):
                 mark(5, detail='文件与来源已核验')
             elif tool == 'compile_designer_mdb' and result.get('compiled_mdb'):
                 mark(7, detail='官方编译完成')
-            elif tool == 'publish_designer_test_database' and result.get('status') == 'database_published':
-                mark(8, detail='Update Database 完成')
+            elif tool in {'publish_designer_test_database', 'confirm_designer_manual_publish'} and result.get('status') == 'database_published':
+                mark(8, detail='手动发布已核验' if tool == 'confirm_designer_manual_publish' else 'Update Database 完成')
             elif tool == 'generate_designer_wcf_package' and result.get('status') == 'services_generated':
                 if not result.get('partial_package') and result.get('fields_verified'):
                     mark(9, detail=f"{result.get('service_count', 0)} 个服务 · {result.get('data_contract_count', 0)} 个数据契约")
@@ -239,7 +249,7 @@ def snapshot(username, session_id):
             7: [('compile', '执行 Compile'), ('confirm_compile', '手动编译确认')],
             8: [('preflight', '检查发布')] +
                ([('backup', '备份数据库')] if publication_info['backup_required'] else []) +
-               [('publish', '执行 Update Database'), ('confirm_publish', '手动更新确认')],
+               [('publish', '执行 Update Database'), ('confirm_publish', '核验手动更新' if package.get('working') else '手动更新确认')],
             9: [('wcf', '生成 WCF'), ('confirm_wcf', '手动生成确认'), ('skip_services', '无需 WCF')],
             10: [('confirm_services', '手动部署确认')],
             11: [('verify', '核验数据库'), ('confirm_complete', '确认验收完成')]}
@@ -283,6 +293,7 @@ def snapshot(username, session_id):
             'publication': publication_info,
             'wcf': wcf,
             'design_rows': change_summary['rows'] if package else [],
+            'field_expectations': change_summary.get('field_expectations', []) if package else [],
             'updated': time.time(), '_manifests': [path for path, _ in manifests]}
 
 
@@ -317,6 +328,8 @@ async def execute(identity, username, session_id, package, manifests, action, op
                     raise ValueError('Designer 文件已变化，请先同步并重新核对')
             if action == 'compile':
                 result = await compile_designer_mdb(package['mdb_file'], package['sha256'])
+            elif action == 'confirm_publish':
+                result = await asyncio.to_thread(publication.record_manual_baseline, package['manifest_file'])
             elif action in ('preflight', 'backup', 'publish', 'wcf'):
                 fresh = await asyncio.to_thread(snapshot, username, session_id)
                 if not fresh['package'] or fresh['package']['id'] != package['id'] or fresh['error']:
@@ -340,12 +353,16 @@ async def execute(identity, username, session_id, package, manifests, action, op
                     compiled = await compile_designer_mdb(package['mdb_file'], package['sha256'])
                     if compiled.get('source_unchanged') is False or digest(Path(package['mdb_file'])) != package['sha256']:
                         raise ValueError('WCF 编译期间设计发生变化，请重新核对')
+                    final_fields = await asyncio.to_thread(progress_actions.final_wcf_fields,
+                        compiled['compiled_mdb'], compiled['compiled_sha256'], fresh['field_expectations'], names)
                     from tools.designer_design import generate_designer_wcf_package
                     result = await generate_designer_wcf_package(compiled['compiled_mdb'], compiled['compiled_sha256'], names)
-                    progress_actions.verify_wcf_fields(result, fresh, names)
+                    progress_actions.verify_wcf_fields(result, {**fresh, 'field_expectations': final_fields}, names)
                     result['fields_verified'] = True
             elif action == 'verify':
-                final = await asyncio.to_thread(progress_actions.combined_manifest, package, manifests)
+                from designer.cycle import final_manifest
+                final = (await asyncio.to_thread(final_manifest, package['manifest_file']) if package.get('working')
+                         else await asyncio.to_thread(progress_actions.combined_manifest, package, manifests))
                 checked = [await asyncio.to_thread(verify_published_design, final, False)]
                 status = 'verified' if checked and all(item['status'] == 'verified' for item in checked) else ('partial_verification' if checked and all(item['status'] in {'verified', 'partial_verification'} for item in checked) else 'verification_failed')
                 result = {'status': status,
@@ -383,12 +400,9 @@ def start_action(username, session_id, package_id, action, options=None):
             raise ValueError('请先完成前面的步骤')
     confirmations = {'confirm_review': 6, 'confirm_compile': 7, 'confirm_publish': 8, 'confirm_wcf': 9, 'confirm_services': 10,
                      'skip_services': 9, 'confirm_complete': 11}
-    if action in confirmations:
+    if action in confirmations and not (action == 'confirm_publish' and package.get('working')):
         if action == 'confirm_publish':
             from designer import working
-            if package.get('working'):
-                from designer import publication
-                publication.record_manual_baseline(package['manifest_file'])
             working.mark_published(package['manifest_file'], method='manual')
         if action in ('confirm_wcf', 'skip_services', 'confirm_services'):
             store.clear_from(username, session_id, package_id, confirmations[action]+1)
@@ -401,6 +415,7 @@ def start_action(username, session_id, package_id, action, options=None):
     if action == 'wcf':
         progress_actions.wcf_types(package, (options or {}).get('verify_types'))
     tool = {'check': 'check_designer_package', 'prepare': 'prepare_designer_review', 'sync': 'sync_designer_file', 'restore_mdb': 'restore_designer_mdb',
+            'confirm_publish': 'confirm_designer_manual_publish',
             'compile': 'compile_designer_mdb', 'verify': 'verify_designer_published_design',
             'preflight': 'prepare_designer_publish_plan', 'backup': 'backup_designer_test_database',
             'publish': 'publish_designer_test_database', 'wcf': 'generate_designer_wcf_package'}[action]

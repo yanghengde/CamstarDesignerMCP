@@ -84,17 +84,38 @@ def record_published_baseline(manifest_path: Path, report: dict, cursor, schema:
 
 
 def record_manual_baseline(manifest_file):
-    """Refresh an existing catalog checkpoint after the user's Update DB confirmation."""
-    path = source_path(manifest_file, '.json')
-    checkpoint = root_dir() / 'published_baseline.json'
-    if not checkpoint.is_file() or not config.DESIGNER_TEST_TARGET_CONFIRMED:
-        return
+    """Establish a release only after SQL matches the complete current cycle."""
+    if not config.DESIGNER_TEST_TARGET_CONFIRMED:
+        raise ValueError('请先配置已确认的测试目标，再核验手动发布')
+    from designer import working
+    from designer.cycle import final_manifest
+    path, manifest = verified_manifest(final_manifest(manifest_file))
     target = {'server': config.DESIGNER_DB_SERVER, 'database': config.DESIGNER_DB_NAME}
-    if json.loads(checkpoint.read_text(encoding='utf-8')).get('target') != target:
-        return
-    with target_connection() as connection:
+    from contextlib import nullcontext
+    lock = working.project_lock(manifest['working_project_id']) if manifest.get('working_project_id') else nullcontext()
+    with lock, target_connection() as connection:
+        working.check_current(manifest)
         cursor = connection.cursor()
-        record_published_baseline(path, {'target': target, 'method': 'manual'}, cursor, target_schema(cursor))
+        acquire_publish_lock(cursor)
+        schema = target_schema(cursor)
+        before = metadata_fingerprint(cursor, schema)
+        verified = verify_published_design(str(path))
+        if verified['status'] != 'verified':
+            raise ValueError('手动发布核验未通过，请查看未匹配项：' + verified['result_file'])
+        if metadata_fingerprint(cursor, schema) != before:
+            raise ValueError('核验期间目标设计已变化，请重新核验')
+        working.check_current(manifest)
+        report = {**verified, 'status': 'database_published', 'method': 'manual',
+                  'database_modified': False, 'target': target, 'manifest_file': str(path)}
+        report['published_baseline'] = record_published_baseline(path, report, cursor, schema)
+        working.mark_published(path, method='manual')
+        return report
+
+
+def acquire_publish_lock(cursor):
+    result = cursor.execute("DECLARE @r int; EXEC @r=sys.sp_getapplock @Resource='CamstarDesignerMCP.Publish',@LockMode='Exclusive',@LockOwner='Session',@LockTimeout=0; SELECT @r").fetchone()[0]
+    if result < 0:
+        raise ValueError('同一数据库已有Designer发布操作')
 
 
 def reconcile_restored_baseline(receipt: dict, fingerprint: str) -> dict:
@@ -360,6 +381,19 @@ def verify_published_design(manifest_file: str, test_string_boundaries: bool = F
 
 def publish_database(manifest_file: str, expected_manifest_sha256: str, backup_receipt: str = '', siteinfo_mdb: str = '',
                      expected_target_fingerprint: str = '') -> dict:
+    from contextlib import nullcontext
+    from designer import working
+    if not config.DESIGNER_TEST_TARGET_CONFIRMED:
+        raise ValueError('目标未确认允许发布测试')
+    _, manifest = verified_manifest(manifest_file)
+    lock = working.project_lock(manifest['working_project_id']) if manifest.get('working_project_id') else nullcontext()
+    with lock:
+        return _publish_database(manifest_file, expected_manifest_sha256, backup_receipt, siteinfo_mdb,
+                                 expected_target_fingerprint)
+
+
+def _publish_database(manifest_file, expected_manifest_sha256, backup_receipt, siteinfo_mdb,
+                      expected_target_fingerprint):
     """Execute installed Update DB against the configured, confirmed test target."""
     if not config.DESIGNER_TEST_TARGET_CONFIRMED:
         raise ValueError("目标未确认允许发布测试")
@@ -410,8 +444,7 @@ def publish_database(manifest_file: str, expected_manifest_sha256: str, backup_r
             request={"server":target["server"],"database":target["database"],"schema":schema,
                      "compiled_mdb":compiled["compiled_mdb"],"siteinfo_mdb":str(siteinfo)}
             (folder/"request.json").write_text(json.dumps(request),encoding="utf-8")
-            lock=cur.execute("DECLARE @r int; EXEC @r=sys.sp_getapplock @Resource='CamstarDesignerMCP.Publish',@LockMode='Exclusive',@LockOwner='Session',@LockTimeout=0; SELECT @r").fetchone()[0]
-            if lock<0: raise ValueError("同一数据库已有Designer发布操作")
+            acquire_publish_lock(cur)
             if expected_target_fingerprint and metadata_fingerprint(cur,schema) != expected_target_fingerprint:
                 raise ValueError('发布检查后目标设计已变化，请重新检查')
             baseline_file=root_dir()/"published_baseline.json"
@@ -440,14 +473,15 @@ def publish_database(manifest_file: str, expected_manifest_sha256: str, backup_r
             result=json.loads((folder/"result.json").read_text(encoding="utf-8-sig"))
             if not result.get("ok"): raise ValueError(result.get("error","官方发布失败"))
             report.update(result["result"],database_modified=True)
-            # Verify every newly created CDO and its persisted field through SQL.
-            checks=[]
-            for op in manifest["operations"]:
-                if op["action"]=="create_cdo":
-                    row=cur.execute(f"SELECT CDOName FROM {sql_identifier(schema)}.CDODefinition WHERE CDOName=?",op["name"]).fetchone()
-                    if not row: raise ValueError(f"发布后缺少CDO：{op['name']}")
-                    checks.append({"cdo":op["name"],"present":True})
-            report.update(status="database_published",metadata_checks=checks,services_deployed=False)
+            before_verification = metadata_fingerprint(cur, schema)
+            verified = verify_published_design(str(path))
+            report.update(verification=verified, metadata_checks=verified.get('checks', []))
+            if verified['status'] != 'verified':
+                raise ValueError('数据库已执行更新，但最终设计核验未通过：' + verified['result_file'])
+            if metadata_fingerprint(cur, schema) != before_verification:
+                raise ValueError('发布后核验期间目标设计已变化，请重新核对')
+            working.check_current(manifest)
+            report.update(status="database_published",services_deployed=False)
             report["published_baseline"]=record_published_baseline(path,{**report,"result_file":str(report_file)},cur,schema)
             from designer import working
             working.mark_published(path, siteinfo_file=str(siteinfo))

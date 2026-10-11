@@ -92,8 +92,14 @@ def combined_manifest(package, manifests):
     return str(path)
 
 
-def prepare_plan(package, manifests):
-    path = Path(combined_manifest(package, manifests))
+def prepare_plan(package, manifests, final_file=None):
+    if final_file:
+        path = Path(final_file)
+    elif package.get('working'):
+        from designer.cycle import final_manifest
+        path = Path(final_manifest(package['manifest_file']))
+    else:
+        path = Path(combined_manifest(package, manifests))
     result = publication.preflight(str(path))
     # The exact catalog inspected here must still match under the publication lock.
     with publication.target_connection() as conn:
@@ -180,15 +186,51 @@ def wcf_types(package, requested):
     return names
 
 
+def final_wcf_fields(mdb_file, checksum, fields, names):
+    """Read actual compiled fields, including inheritance, before DLL checks."""
+    source = source_path(mdb_file, '.mdb')
+    if vendor.digest(source) != checksum:
+        raise ValueError('WCF 验收来源已变化')
+    actual = {}
+    for owner in dict.fromkeys(row['owner'] for row in fields if row['owner'] in names):
+        actual[owner] = set()
+        offset = 0
+        while True:
+            page = vendor.query(mdb_file, 'list', 'field', owner=owner, offset=offset, limit=100)
+            records, total = page['records'], page['total']
+            if total > 10000 or (not records and offset < total):
+                raise ValueError('WCF 最终字段目录未完整读取')
+            actual[owner].update(row['name'] for row in records)
+            offset += len(records)
+            if offset >= total:
+                break
+    if vendor.digest(source) != checksum:
+        raise ValueError('WCF 验收来源已变化')
+    result = []
+    for row in fields:
+        if row['owner'] not in names:
+            continue
+        present = row['name'] in actual[row['owner']]
+        if row['present'] and not present:
+            raise ValueError(f"最终 MDB 缺少预期字段：{row['owner']}.{row['name']}")
+        result.append({**row, 'present': present})
+    return result
+
+
 def verify_wcf_fields(result, state, names):
     if result.get('status') != 'services_generated' or result.get('partial_package') or not result.get('source_unchanged'):
         raise ValueError('WCF 全量生成未通过核对')
-    checks = {item['name'].split('.')[-1].removesuffix('Changes'): item.get('properties', []) for item in result.get('type_checks', [])}
-    for row in state['design_rows']:
-        if row.get('kind', 'field') != 'field': continue
+    checks = {}
+    for item in result.get('type_checks', []):
+        checks.setdefault(item['name'].split('.')[-1].removesuffix('Changes'), set()).update(item.get('properties', []))
+    from designer.operations import final_fields
+    fields = state.get('field_expectations')
+    if fields is None:
+        fields = final_fields([{**row, 'kind': row.get('kind', 'field')} for row in state['design_rows']])
+    for row in fields:
         present = row['name'] in checks.get(row['owner'], [])
-        if row['owner'] in names and (present if row.get('deleted') else not present):
-            raise ValueError(f"WCF 未包含当前字段：{row['owner']}.{row['name']}")
+        if row['owner'] in names and present != row['present']:
+            raise ValueError(f"WCF 当前字段不匹配：{row['owner']}.{row['name']}，预期{'存在' if row['present'] else '不存在'}")
     if any(name not in checks for name in names):
         raise ValueError('WCF 缺少验收对象')
     if not result.get('data_contract_count') or not result.get('service_count') or not result.get('files_sha256'):

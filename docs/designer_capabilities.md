@@ -1,5 +1,7 @@
 # Designer 对象模型工具
 
+能力状态更新于 2026-10-11。本页列出现有合同；历史现场证据保留在下方。本轮改动与验证见 [程序优化记录](designer_program_optimizations_2026-10-11.md)。
+
 ## 工具入口
 
 | 工具 | 用途 |
@@ -12,22 +14,24 @@
 | analyze_designer_where_used | 厂商引用追踪；不支持的类型明确拒绝 |
 | generate_designer_cdo_package | CDO 继承、专用类型、字段和存储映射 |
 | generate_designer_design_package | 批量设计、原值检查、保存、回读、官方导出 |
+| sync_designer_working_file | 验证并接收 Designer 保存的版本，继续使用固定工作 MDB；多人合并由 Opcenter 完成 |
+| restore_designer_mdb_backup | 先保留恢复前版本，再将指定备份恢复到固定工作路径；不恢复 SQL |
 | export_designer_vendor_diff | 官方比较引擎生成 XML；项目渲染 HTML |
 | compile_designer_mdb | 官方工作区编译及字段继承归一化 |
 | check_designer_package | 哈希、来源漂移；不代替运行验证 |
 | inspect_designer_database | 发布目标实际表列，只读 |
-| prepare_designer_publish_plan | 具体包与目标数据库的发布前检查 |
+| prepare_designer_publish_plan | 最新清单自动汇总本项目当前周期，核对发布基线和目标数据库 |
 | backup_designer_test_database | COPY_ONLY/CHECKSUM及RESTORE VERIFYONLY，生成校验凭证 |
 | publish_designer_test_database | 编译并调用官方Update DB，核对默认schema；保留审计和回退材料 |
 | restore_designer_test_database | 明确授权下，恢复精确测试目标和校验备份 |
-| verify_designer_published_design | 父对象、字段类型/持久化、物理列和可选String临时表边界测试 |
+| verify_designer_published_design | 当前周期编译元数据的具体值、关系与删除结果及物理列；可选 String 临时表边界测试 |
 | generate_designer_wcf_package | 隔离调用官方WCF生成器；检查程序集及目标类型，适配仍在验收；部分服务包不能用于整体部署 |
 
 原始 MDB、XML 和 MetadataExport CLI 工具仍可使用，其合同见 [历史 MVP](designer_mvp.md)。
 
 ## 设计操作
 
-operations 为有序 JSON 列表，最多 50 项。全部在新副本执行；错误会生成 failure.json，失败副本不能发布。
+operations 为有序 JSON 列表，最多 50 项。在隔离副本执行、保存、回读和导出通过后提交到同一个工作 MDB；错误会生成 failure.json，失败副本不能发布。发布后的下一轮首次实际修改前保存上一版，项目备份最多 10 份；审计快照与项目备份分别保留。
 
 | action | 必需参数 | 作用 |
 |---|---|---|
@@ -36,24 +40,50 @@ operations 为有序 JSON 列表，最多 50 项。全部在新副本执行；�
 | add_field | name,owner,field_type | 可 persistent/is_list；厂商生成存储列 |
 | patch | kind,name,changes,expected | schema 允许的简单属性，每个属性须提供原值 |
 | change_field_type | owner,name,field_type,expected_field_type | 厂商字段类型变更方法 |
+| change_parent | name,parent,expected_parent | 客户 CDO 更换相同 Usage 类别的父对象 |
+| change_storage_category | name,category,expected_category | 客户 CDO 更换存储分类 |
+| remove_field_override | owner,name,expected_field_type | 删除子对象覆盖并恢复父对象字段；字段仍然存在 |
 | create_clf | name,clf_type | 新建 CLF |
 | copy_clf | name,template | 复制 CLF、函数及参数 |
 | add_clf_function | owner,function,sequence | 在客户 CLF 添加调用 |
+| replace_clf_function | owner,call_id,function,expected_function | 按实际调用 ID 替换函数 |
+| remove_clf_function | owner,call_id,expected_function | 按调用 ID 删除并保存 |
 | reorder_clf_functions | owner,function_ids,expected_function_ids | 完整排列及预期调用顺序检查 |
 | set_clf_parameter | owner,call_id,parameter,value,expected_value | 函数调用表达式原值检查和更新 |
 | bind_event | owner,event,clf,feature | 客户CDO或指定客户field的事件绑定；拒绝已有绑定 |
+| replace_event_binding | owner,event,clf,feature,expected_clf | 原值检查后替换事件绑定 |
+| unbind_event | owner,event,expected_clf | 原值检查后解除事件绑定 |
 | create_query | name,query_type,db_type_id,text | 定义查询并同步参数 |
 | add_query_text | owner,db_type_id,text | 其他数据库方言；已有文本使用 query_text patch |
+| sync_query_parameters | owner | 根据查询文本同步参数；文本修改也自动同步 |
 | create_label | name,text,category_id | 标签及分类 |
 | add_column | name,owner,sql_type_id | 表列，可 precision/scale |
 | create_index | name,owner,columns | 已有列索引，可 is_unique |
 | create_map | owner,target | 源/目标 CDO 映射，厂商生成名称 |
 | add_field_map | map,source_cdo,source_field,target_cdo,target_field | 字段映射 |
+| update_field_map | owner,name,source_cdo,source_field,target_cdo,target_field,expected_source_field,expected_target_field | 修改映射及原值检查 |
+| remove_field_map | owner,name,expected_source_field,expected_target_field | 删除指定映射 |
 | delete | kind,name | 当前工作区拥有且厂商判定未使用的定义 |
 
 CDO 专用工具默认持久化；通用 add_field 默认非持久化，调用者应明确指定。工作区实际设置到 MDB，官方 XML Header 也携带 WorkspaceCode。旧模板工具仅在 manifest 记录工作区。
 
 patch 禁止内部 ID、继承掩码、集合、归属和关系引用。安装组件部分引用 setter 不同步 ID，关系必须使用专用方法。枚举只允许已定义值。继承字段的属性修改先创建目标 CDO 的覆盖，不修改父对象字段。column/index 可用 owner 表定位；嵌套定义必须提供所属对象；歧义名称拒绝执行。
+
+## 执行与发布一致性
+
+停止回答只停止聊天连接。已经开始的厂商保存会继续执行，结果独立写入进度回执；页面显示后台状态，完成后恢复清单及聊天工具结果。同一聊天在后台操作完成前不能发送新的执行请求。正常关闭服务会等待任务完成；强制结束进程仍需重新核对文件和回执。
+
+聊天、MCP 和进度页使用相同的项目周期清单，例如将 B0→B1、B1→B2 汇总为 B0→B2；相同周期的差异产物复用。自动 Update DB 和手动更新核验都要通过完整元数据验收，才建立已验证发布基线与已发布 MDB 记录。核验失败保留旧基线；自动更新可能已改变 SQL，其审计记录会如实显示。
+
+测试环境默认 `DESIGNER_REQUIRE_DATABASE_BACKUP=false`；只有显式启用时，才要求 SQL 备份凭证。MDB 的 10 份版本备份独立于 SQL 备份。WCF 字段验收先计算最终名称和存在状态，再读取当前编译 MDB 的有效字段，包含继承；覆盖重命名、恢复继承字段以及新增后删除。
+
+只读模型查询按 MDB、SDK、桥接实现和查询参数的哈希缓存，最多 128 项、16 MiB。MDB 或组件变化时不会复用旧结果；未命中时仍使用隔离副本，结束后释放临时 `read.mdb`。历史审计 MDB、发布基线、工作文件和备份不参与自动删除。
+
+Web 会话接口限定为配置的 `CHAT_USERNAME`，用户名目录必须在会话根目录内；这是现有单用户工作台的归属限制，并非完整登录系统。
+
+## 尚需增强的能力
+
+CLF 自身声明参数的创建、类型、方向与集合属性，以及 Query 参数类型的专用生命周期操作仍待实现；现有 `set_clf_parameter` 修改的是函数调用表达式。引用影响图、自动重命名迁移、数据类型缩窄预检、物理索引存在与顺序验收、WCF/CLF/Query 运行用例、REST 与原生 XML Import 往返仍需独立验证。
 
 ## 真实证据
 

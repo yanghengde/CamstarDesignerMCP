@@ -4,6 +4,7 @@ import shutil
 from pathlib import Path
 import pytest
 from designer import vendor
+import config
 
 pytestmark = pytest.mark.skipif(not os.getenv('DESIGNER_TEST_VENDOR'), reason='requires installed vendor SDK and DESIGNER_TEST_MDB')
 
@@ -41,3 +42,22 @@ def test_removed_clf_call_is_persistently_deleted_with_event_binding(bridge):
                                      {'action':'unbind_event','owner':'ExRegressionEvent','event':'BeforeInitialize','expected_clf':'ExRegressionClf'}])
     assert result['reload_verified']
     assert bridge('list',kind='clf_function',owner='ExRegressionClf',limit=20)['total']==0
+
+
+def test_cached_queries_release_private_read_copy_and_preserve_origin(tmp_path, monkeypatch):
+    original = Path(os.environ['DESIGNER_TEST_MDB']).resolve()
+    checksum = vendor.digest(original)
+    source = tmp_path / 'private.mdb'; shutil.copyfile(original, source)
+    monkeypatch.setattr(config, 'DESIGNER_ROOT', str(tmp_path))
+    calls = []
+    real_run = vendor.run
+    def run(folder, request):
+        calls.append(folder)
+        return real_run(folder, request)
+    monkeypatch.setattr(vendor, 'run', run)
+    first = vendor.query(str(source), 'get', 'cdo', 'Product')
+    assert vendor.query(str(source), 'get', 'cdo', 'Product') == first
+    assert len(calls) == 1
+    assert first['read_only']
+    assert not list((tmp_path / 'artifacts').rglob('read.mdb'))
+    assert vendor.digest(source) == vendor.digest(original) == checksum

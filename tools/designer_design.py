@@ -47,6 +47,9 @@ async def get_designer_capabilities() -> dict:
                          "remove_inherited_field_override": available, "replace_unbind_events": available,
                          "replace_remove_clf_calls": available, "update_remove_field_maps": available,
                          "query_parameter_synchronization": available,
+                         "complete_project_cycle_publication": available,
+                         "verified_manual_publish_checkpoint": available and bool(config.DESIGNER_DB_SERVER),
+                         "content_versioned_metadata_read_cache": available,
                          "metadata_compile": available,
                          "wcf_generation_adapter_implemented": True,
                          "wcf_server_configured": bool(config.DESIGNER_SERVER_SHARE and config.DESIGNER_WINDOWS_USER and config.DESIGNER_WCF_ADDRESS),
@@ -77,9 +80,12 @@ async def generate_designer_wcf_package(compiled_mdb: str, expected_sha256: str,
 
 @mcp.tool
 async def verify_designer_published_design(manifest_file: str, test_string_boundaries: bool = False) -> dict:
-    """编译隔离副本，对照 SQL 核对本次变更的对象、字段、CLF/调用/参数、事件、查询/文本/参数、映射、列、索引及标签元数据的具体值与删除结果，并检查物理列。可在已确认测试库临时表测试String长度边界，不写业务行；不代替CLF、Query或WCF运行行为验收。连续设计须使用合并后的最终设计清单。"""
+    """编译隔离副本，对照 SQL 核对对象、字段、CLF/调用/参数、事件、查询/文本/参数、映射、列、索引及标签的具体值与删除结果，并检查物理列。工作 MDB 自动汇总本轮全部设计，传入最新设计清单即可。可在已确认测试库临时表测试String长度边界，不写业务行；不代替CLF、Query或WCF运行行为验收。"""
     from designer.publication import verify_published_design
-    return await asyncio.to_thread(verify_published_design,manifest_file,test_string_boundaries)
+    from designer.cycle import final_manifest
+    def execute():
+        return verify_published_design(final_manifest(manifest_file), test_string_boundaries)
+    return await asyncio.to_thread(execute)
 
 
 @mcp.tool
@@ -106,7 +112,16 @@ async def restore_designer_test_database(backup_receipt: str, expected_receipt_s
 async def publish_designer_test_database(manifest_file: str, expected_manifest_sha256: str, backup_receipt: str = '', siteinfo_mdb: str = '') -> dict:
     """将已核对的官方设计包编译并通过厂商Update DB发布到本机已确认测试库；必须提供清单SHA256和siteinfo_mdb路径。测试环境默认无需数据库备份，backup_receipt可省略；仅配置DESIGNER_REQUIRE_DATABASE_BACKUP=true时要求一小时内校验备份凭证。更新设计元数据及存储结构，不更新服务器/用户配置，不部署服务。失败可能有部分数据库更改，返回真实审计记录。"""
     from designer.publication import publish_database
-    return await asyncio.to_thread(publish_database,manifest_file,expected_manifest_sha256,backup_receipt,siteinfo_mdb)
+    def execute():
+        if vendor.digest(source_path(manifest_file, '.json')) != expected_manifest_sha256:
+            raise ValueError('设计包清单SHA256不匹配')
+        from designer.cycle import prepare_plan
+        plan = prepare_plan(manifest_file)
+        if not plan['ready_for_publish']:
+            raise ValueError('发布预检未通过：' + '；'.join(plan['blockers']))
+        return publish_database(plan['manifest_file'], plan['manifest_sha256'], backup_receipt, siteinfo_mdb,
+                                expected_target_fingerprint=plan['target_fingerprint'])
+    return await asyncio.to_thread(execute)
 
 
 @mcp.tool
@@ -118,9 +133,9 @@ async def backup_designer_test_database() -> dict:
 
 @mcp.tool
 async def prepare_designer_publish_plan(manifest_file: str) -> dict:
-    """校验官方设计包、来源漂移和目标列冲突，生成具体发布前检查文件；不执行Update DB或服务部署。"""
-    from designer.publication import preflight
-    return await asyncio.to_thread(preflight, manifest_file)
+    """使用当前项目完整设计周期的最终清单，校验来源漂移、已发布基线和目标列冲突，并记录目标指纹；不执行Update DB或服务部署。"""
+    from designer.cycle import prepare_plan
+    return await asyncio.to_thread(prepare_plan, manifest_file)
 
 
 @mcp.tool

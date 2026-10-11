@@ -403,6 +403,7 @@ def test_wcf_generation_verifies_fields_and_provides_owned_download(workflow,mon
     monkeypatch.setattr(designer,'check_designer_package',check)
     monkeypatch.setattr(progress.review,'sync_file',lambda path:{'unchanged':True})
     monkeypatch.setattr(designer_design,'compile_designer_mdb',compile)
+    monkeypatch.setattr(vendor, 'query', lambda *args, **kwargs: {'total': 1, 'records': [{'name': 'Code'}]})
     output=folder/'client';output.mkdir();(output/'Camstar.WCFClient.dll').write_bytes(b'valid-dll')
     server=folder/'server'/'bin';server.mkdir(parents=True);(server/'Camstar.WCFService.dll').write_bytes(b'service-dll')
     (output/'App.config').write_text('private server settings')
@@ -511,7 +512,8 @@ def test_catalog_drift_stops_update_before_official_processor(workflow,monkeypat
         publication.publish_database(str(folder/'manifest.json'),plan['manifest_sha256'],backup['receipt_file'],str(folder/'baseline.mdb'),expected_target_fingerprint='catalog-digest')
 
 
-def test_official_update_without_backup_never_executes_backup_sql(workflow, monkeypatch):
+@pytest.mark.parametrize('verification_status', ['verified', 'verification_failed', 'partial_verification'])
+def test_official_update_without_backup_never_executes_backup_sql(workflow, monkeypatch, verification_status):
     from contextlib import contextmanager
     from types import SimpleNamespace
     sid, folder = workflow
@@ -535,7 +537,10 @@ def test_official_update_without_backup_never_executes_backup_sql(workflow, monk
     monkeypatch.setattr(publication, 'target_connection', connection)
     monkeypatch.setattr(publication, 'target_schema', lambda cursor: 'dbo')
     monkeypatch.setattr(publication, 'metadata_fingerprint', lambda *args: 'catalog-digest')
-    monkeypatch.setattr(publication, 'record_published_baseline', lambda *args: {'status': 'verified'})
+    baseline_calls = []
+    monkeypatch.setattr(publication, 'record_published_baseline', lambda *args: baseline_calls.append(args) or {'status': 'verified'})
+    monkeypatch.setattr(publication, 'verify_published_design', lambda *args: {
+        'status': verification_status, 'checks': [], 'result_file': 'verified.json'})
     dlls = folder/'dlls'; dlls.mkdir()
     for name in ('Camstar.Metadata.dll', 'Camstar.Data.dll', 'OECAdmin.dll', 'CIMS.DBUpdate.dll'):
         (dlls/name).write_bytes(b'test')
@@ -548,11 +553,20 @@ def test_official_update_without_backup_never_executes_backup_sql(workflow, monk
         (Path(kwargs['cwd'])/'result.json').write_text(json.dumps({'ok': True, 'result': {}}))
         return SimpleNamespace(returncode=0)
     monkeypatch.setattr(publication.subprocess, 'run', processor)
-    result = publication.publish_database(str(folder/'manifest.json'), plan['manifest_sha256'],
-        siteinfo_mdb=str(folder/'baseline.mdb'), expected_target_fingerprint='catalog-digest')
-    assert result['status'] == 'database_published'
-    assert result['backup_receipt'] is None
-    assert result['backup_required'] is False
+    if verification_status == 'verified':
+        result = publication.publish_database(str(folder/'manifest.json'), plan['manifest_sha256'],
+            siteinfo_mdb=str(folder/'baseline.mdb'), expected_target_fingerprint='catalog-digest')
+        assert result['status'] == 'database_published'
+        assert result['backup_receipt'] is None
+        assert result['backup_required'] is False
+        assert len(baseline_calls) == 1
+    else:
+        with pytest.raises(ValueError, match='最终设计核验未通过'):
+            publication.publish_database(str(folder/'manifest.json'), plan['manifest_sha256'],
+                siteinfo_mdb=str(folder/'baseline.mdb'), expected_target_fingerprint='catalog-digest')
+        assert not baseline_calls
+        reports = list(folder.parent.rglob('publish_result.json'))
+        assert json.loads(reports[-1].read_text(encoding='utf-8'))['database_modified'] is True
     assert all('BACKUP' not in sql and 'RESTORE' not in sql for sql in statements)
     monkeypatch.setattr(config, 'DESIGNER_REQUIRE_DATABASE_BACKUP', True)
     with pytest.raises(ValueError, match='请先备份数据库'):

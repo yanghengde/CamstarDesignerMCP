@@ -13,6 +13,7 @@ from web import routes
 
 @pytest.fixture
 def session_store(tmp_path, monkeypatch):
+    monkeypatch.setattr(routes, 'CHAT_USERNAME', 'user')
     monkeypatch.setattr(memory, 'SESSIONS_DIR', str(tmp_path/'sessions'))
     monkeypatch.setattr(memory, 'MEMORY_FILE', str(tmp_path/'absent.json'))
     monkeypatch.setattr(memory, 'user_memories', {})

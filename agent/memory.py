@@ -9,6 +9,9 @@ import glob
 import json
 import uuid
 import time
+import re
+from time import sleep as disk_retry_wait
+from pathlib import Path
 
 from config import MEMORY_FILE, SESSIONS_DIR
 from agent.prompts import SYSTEM_PROMPT
@@ -25,19 +28,58 @@ def _ensure_session_times(session: dict, fallback: float = 0):
 
 
 def get_user_dir(username: str) -> str:
-    return os.path.join(SESSIONS_DIR, username)
+    if (not isinstance(username, str) or not re.fullmatch(r'[\w@.-]{1,80}', username)
+            or username.endswith('.') or username.split('.')[0].casefold() in
+            {'con', 'prn', 'aux', 'nul', *(f'com{i}' for i in range(1, 10)), *(f'lpt{i}' for i in range(1, 10))}):
+        raise ValueError('无效的会话用户标识')
+    root = Path(SESSIONS_DIR).resolve()
+    directory = (root / username).resolve()
+    if not directory.is_relative_to(root) or directory == root:
+        raise ValueError('会话目录必须位于会话根目录内')
+    return str(directory)
+
+
+def _session_file(username, session_id):
+    if not isinstance(session_id, str) or not re.fullmatch(r'[\w-]{1,100}', session_id):
+        raise ValueError('无效的会话标识')
+    directory = Path(get_user_dir(username))
+    file = (directory / (session_id + '.json')).resolve()
+    if file.parent != directory or session_id.casefold() in {
+            'metadata', 'con', 'prn', 'aux', 'nul', *(f'com{i}' for i in range(1, 10)), *(f'lpt{i}' for i in range(1, 10))}:
+        raise ValueError('无效的会话文件名')
+    return file
+
+
+def _write_json(file, value):
+    temporary = file.with_name(file.name + '.' + uuid.uuid4().hex + '.tmp')
+    try:
+        temporary.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding='utf-8')
+        for attempt in range(5):
+            try:
+                temporary.replace(file)
+                break
+            except PermissionError:
+                if attempt == 4:
+                    raise
+                disk_retry_wait(0.02 * (attempt + 1))
+    finally:
+        try:
+            temporary.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 def _save_metadata(username: str):
     """保存用户的元数据（如活跃 session 配置）"""
     d = get_user_dir(username)
     os.makedirs(d, exist_ok=True)
-    metadata_path = os.path.join(d, "metadata.json")
+    metadata_path = Path(d) / 'metadata.json'
+    if metadata_path.resolve().parent != Path(d):
+        raise ValueError('会话配置文件不能指向用户目录之外')
     data_to_save = {
         "active_session": user_memories[username].get("active_session")
     }
-    with open(metadata_path, "w", encoding="utf-8") as f:
-        json.dump(data_to_save, f, ensure_ascii=False, indent=2)
+    _write_json(metadata_path, data_to_save)
 
 
 def save_session(username: str, session_id: str):
@@ -46,9 +88,7 @@ def save_session(username: str, session_id: str):
         d = get_user_dir(username)
         os.makedirs(d, exist_ok=True)
         session_data = user_memories[username]["sessions"][session_id]
-        file_path = os.path.join(d, f"{session_id}.json")
-        with open(file_path, "w", encoding="utf-8") as f:
-            json.dump(session_data, f, ensure_ascii=False, indent=2)
+        _write_json(_session_file(username, session_id), session_data)
 
 
 def save_memory():
@@ -119,6 +159,7 @@ def load_memory() -> dict:
                         s_data = json.load(fs)
                         sid = s_data.get("id")
                         if sid:
+                            _session_file(uname, sid)
                             _ensure_session_times(s_data, os.path.getmtime(s_file))
                             mem[uname]["sessions"][sid] = s_data
                 except Exception:
@@ -163,6 +204,7 @@ def get_sessions(username: str) -> list:
 
 def create_session(username: str) -> str:
     """创建一个新会话"""
+    get_user_dir(username)
     if username not in user_memories:
         user_memories[username] = {"sessions": {}, "active_session": None}
     else:

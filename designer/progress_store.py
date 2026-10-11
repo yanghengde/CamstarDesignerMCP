@@ -10,6 +10,84 @@ from uuid import uuid4
 import config
 
 LEASE_SECONDS = 30
+_tool_tasks = {}
+_tool_requests = {}
+
+
+def background_running(username, session_id):
+    return any(key[:2] == (username, session_id) and not task.done()
+               for key, task in _tool_tasks.items())
+
+
+async def drain():
+    """Let vendor saves finish during a graceful service shutdown."""
+    if _tool_tasks:
+        await asyncio.gather(*list(_tool_tasks.values()), return_exceptions=True)
+
+
+def recover_chat_results(username, session_id, messages):
+    """Restore completed tool outcomes lost when the streaming caller left."""
+    seen = {item.get('tool_call_id') for item in messages if item.get('role') == 'tool'}
+    calls = {call.get('id') for item in messages for call in item.get('tool_calls', [])}
+    changed = False
+    for event in operations(username, session_id):
+        call_id = event['call_id']
+        if not call_id or call_id in seen or event['status'] not in {'done', 'failed'}:
+            continue
+        result = event.get('result') or ('Error: ' + event['error'] if event['error'] else None)
+        if result is None:
+            continue
+        if call_id not in calls:
+            messages.append({'role': 'assistant', 'content': None, 'tool_calls': [{
+                'id': call_id, 'type': 'function', 'function': {'name': event['tool'],
+                'arguments': json.dumps(event['arguments'], ensure_ascii=False)}}]})
+        messages.append({'role': 'tool', 'tool_call_id': call_id, 'name': event['tool'], 'content': str(result)})
+        seen.add(call_id)
+        changed = True
+    if changed:
+        from agent.memory import save_session
+        save_session(username, session_id)
+
+
+async def run_tool(username, session_id, tool, arguments, call_id, function):
+    """Keep the execution and its receipt alive when a response disconnects."""
+    key = (username, session_id, call_id or uuid4().hex)
+    task = _tool_tasks.get(key)
+    if task is not None and _tool_requests[key] != (tool, arguments):
+        raise ValueError('同一个工具调用标识不能对应不同操作')
+    if task is None:
+        if call_id:
+            previous = previous_call(username, session_id, call_id)
+            if previous:
+                if previous['tool'] != tool or previous['arguments'] != arguments:
+                    raise ValueError('工具调用标识已用于另一项操作')
+                if previous['status'] == 'done' and previous.get('result'):
+                    return previous['result']
+                if previous['status'] in {'failed', 'interrupted'}:
+                    raise ValueError(previous['error'] or '上次操作未完成，请核对后使用新的调用重试')
+                if previous['status'] == 'running':
+                    raise ValueError('此调用的后台结果尚未确定，请核对设计进度')
+        async def execute():
+            async with tracking(username, session_id, tool, arguments, call_id) as identity:
+                try:
+                    result = await function(**arguments)
+                except Exception as exc:
+                    finish(identity, error=str(exc), status='failed')
+                    raise
+                finish(identity, result)
+                return result
+        task = asyncio.create_task(execute())
+        _tool_tasks[key] = task
+        _tool_requests[key] = (tool, dict(arguments))
+        def completed(saved):
+            _tool_tasks.pop(key, None)
+            _tool_requests.pop(key, None)
+            # A disconnected caller no longer observes failures. The durable
+            # receipt already holds the error; consume it to avoid task warnings.
+            if not saved.cancelled():
+                saved.exception()
+        task.add_done_callback(completed)
+    return await asyncio.shield(task)
 
 
 @contextmanager
@@ -26,6 +104,7 @@ def connection():
         conn.execute('''CREATE TABLE IF NOT EXISTS confirmations (
             username TEXT, session_id TEXT, package_id TEXT, stage INTEGER,
             status TEXT, updated REAL, PRIMARY KEY(username, session_id, package_id, stage))''')
+        conn.execute('CREATE INDEX IF NOT EXISTS operation_calls ON operations(username,session_id,call_id,started)')
         if 'workflow_version' not in {row[1] for row in conn.execute('PRAGMA table_info(confirmations)')}:
             conn.execute('ALTER TABLE confirmations ADD COLUMN workflow_version INTEGER DEFAULT 1')
         if conn.execute('SELECT 1 FROM confirmations WHERE workflow_version=1 LIMIT 1').fetchone():
@@ -58,6 +137,18 @@ def operations(username, session_id):
     return result
 
 
+def previous_call(username, session_id, call_id):
+    with connection() as conn:
+        row = conn.execute('SELECT * FROM operations WHERE username=? AND session_id=? AND call_id=? ORDER BY started DESC LIMIT 1',
+                           (username, session_id, call_id)).fetchone()
+    if row is None:
+        return None
+    event = dict(row)
+    event['arguments'] = json.loads(event['arguments'])
+    event['result'] = json.loads(event['result']) if event['result'] else None
+    return event
+
+
 def begin(username, session_id, tool, arguments, *, package_id='', action='', call_id=''):
     now = time.time()
     with connection() as conn:
@@ -83,7 +174,8 @@ def finish(identity, result=None, error='', status='done'):
                'manifest_sha256', 'plan_file', 'plan_sha256', 'target_fingerprint', 'blockers', 'changes',
                'design_sha256', 'receipt_file', 'receipt_sha256', 'created_utc', 'restore_verifyonly',
                'server_backup_file', 'data_contract_count', 'service_count', 'type_checks',
-               'files_sha256', 'client_assembly', 'service_assembly', 'service_scope', 'fields_verified'}
+               'files_sha256', 'client_assembly', 'service_assembly', 'service_scope', 'fields_verified',
+               'method', 'database_modified'}
     saved = {key: value for key, value in result.items() if key in allowed} if isinstance(result, dict) else None
     if isinstance(result, str) and result.startswith('Error'):
         error, status = result, 'failed'

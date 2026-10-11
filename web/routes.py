@@ -119,15 +119,10 @@ async def designer_review(req: DesignerReviewRequest):
     from designer import progress_store
     item = review_for_session(req.username, req.session_id, req.package_id)
     try:
-        async with progress_store.tracking(req.username, req.session_id, 'prepare_designer_review',
-                                           {'manifest_file': item['manifest_file']}, '') as identity:
-            try:
-                result = await asyncio.to_thread(prepare, item['manifest_file'], True)
-                progress_store.finish(identity, result)
-                return result
-            except Exception as exc:
-                progress_store.finish(identity, error=str(exc), status='failed')
-                raise
+        async def perform(manifest_file):
+            return await asyncio.to_thread(prepare, manifest_file, True)
+        return await progress_store.run_tool(req.username, req.session_id, 'prepare_designer_review',
+                                             {'manifest_file': item['manifest_file']}, '', perform)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
 
@@ -159,6 +154,7 @@ class ChatRequest(BaseModel):
 
 
 def require_session(username: str, session_id: str) -> None:
+    require_progress_owner(username)
     if not session_id or not any(session['id'] == session_id for session in get_sessions(username)):
         raise HTTPException(404, "对话不存在，请新建对话后添加附件。")
 
@@ -203,12 +199,14 @@ def config_endpoint():
 @router.get("/sessions/{username}")
 def sessions_endpoint(username: str):
     """获取用户所有会话"""
+    require_progress_owner(username)
     return {"sessions": get_sessions(username)}
 
 
 @router.post("/sessions/{username}/new")
 def new_session_endpoint(username: str):
     """创建新会话"""
+    require_progress_owner(username)
     session_id = create_session(username)
     return {"session_id": session_id}
 
@@ -216,6 +214,7 @@ def new_session_endpoint(username: str):
 @router.get("/history/{username}")
 async def history_endpoint(username: str, session_id: str = None):
     """获取指定用户的聊天历史。"""
+    require_progress_owner(username, session_id)
     if session_id:
         set_active_session(username, session_id)
     messages = get_user_messages(username, session_id)
@@ -227,7 +226,19 @@ async def history_endpoint(username: str, session_id: str = None):
         state = await runtime._graph.aget_state(runtime._graph_config(username, actual))
         if runtime._has_interrupt(state):
             pending_preview = (runtime._first_interrupt_value(state) or {}).get('excel_preview')
-    return {"designer_results": session_packages(messages), 'pending_excel_preview': pending_preview, "messages": [
+    from designer import progress_store
+    actual = runtime._actual_session_id(username, session_id)
+    progress_store.recover_chat_results(username, actual, messages)
+    events = progress_store.operations(username, actual)
+    recovered = list(messages)
+    known = {message.get('tool_call_id') for message in messages if message.get('role') == 'tool'}
+    recovered.extend({'role': 'tool', 'name': item['tool'], 'content': item['result']}
+                     for item in events
+                     if item.get('result') and (not item.get('call_id') or item.get('call_id') not in known))
+    return {"designer_results": session_packages(recovered),
+            'background_running': progress_store.background_running(username, actual),
+            'background_error': events[-1]['error'] if events and events[-1]['status'] == 'failed' else '',
+            'pending_excel_preview': pending_preview, "messages": [
         {**{key: value for key, value in message.items() if key != 'display_content'},
          'content': message.get('display_content', message.get('content', ''))}
         for message in messages
@@ -237,6 +248,7 @@ async def history_endpoint(username: str, session_id: str = None):
 @router.post("/chat")
 async def chat_endpoint(req: ChatRequest):
     """流式聊天接口 (SSE)。"""
+    require_progress_owner(req.username, req.session_id)
     if not req.message.strip():
         raise HTTPException(400, "请填写设计要求，或说明希望如何处理附件。")
     attachments = []

@@ -72,6 +72,7 @@ def test_permission_fallback_does_not_claim_designer_open(design_package, monkey
 
 
 def test_session_controls_download_and_handoff(design_package, monkeypatch, tmp_path):
+    monkeypatch.setattr(routes, 'CHAT_USERNAME', 'review-user')
     monkeypatch.setattr(memory, 'SESSIONS_DIR', str(tmp_path / 'sessions'))
     monkeypatch.setattr(memory, 'user_memories', {})
     session = memory.create_session('review-user')

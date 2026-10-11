@@ -29,6 +29,41 @@ def kind(op):
     return op.get('kind') or ACTION_KINDS.get(op.get('action'), '')
 
 
+def final_fields(operations):
+    """Project history onto final names and presence, preserving rename tombstones."""
+    fields, owners, aliases = {}, {}, {}
+    def owner_name(value):
+        seen = set()
+        while value in owners and value not in seen:
+            seen.add(value); value = owners[value]
+        return value
+    for op in operations:
+        target = kind(op)
+        changes = op.get('changes') or {}
+        if op.get('action') == 'create_cdo':
+            owners.pop(op.get('name', ''), None)
+        if target == 'cdo' and changes.get('Name'):
+            old, new = owner_name(op.get('name', '')), changes['Name']
+            owners[old] = new
+            fields = {(new if owner == old else owner, name): value for (owner, name), value in fields.items()}
+            aliases = {(new if owner == old else owner, name): value for (owner, name), value in aliases.items()}
+        elif target == 'field':
+            owner, name = owner_name(op.get('owner', '')), op.get('name', '')
+            if op.get('action') == 'add_field':
+                aliases.pop((owner, name), None)
+            seen = set()
+            while (owner, name) in aliases and name not in seen:
+                seen.add(name); name = aliases[(owner, name)]
+            final = changes.get('FieldName') or changes.get('Name') or (
+                op.get('final_name') if op.get('final_name') != op.get('name') else None) or name
+            if final != name:
+                fields[(owner, name)] = False
+                aliases[(owner, name)] = final
+            fields[(owner, final)] = op.get('action') != 'delete' and not (
+                op.get('deleted') and op.get('action') != 'remove_field_override')
+    return [{'owner': owner, 'name': name, 'present': present} for (owner, name), present in fields.items()]
+
+
 def summary(operations, affected=()):
     """Track final names and deletions, while retaining every change in the UI."""
     objects, removed, fields, rows, aliases = [], set(), set(), [], {}
@@ -66,11 +101,13 @@ def summary(operations, affected=()):
         rows.append({'owner': owner or op.get('owner') or op.get('map', ''), 'name': name or op.get('event') or op.get('function', ''),
                      'kind': target_kind, 'action': action,
                      'label': LABELS.get(action, '新增' if action in CREATE_ACTIONS else '修改'),
-                     'field_type': op.get('field_type', ''), 'deleted': action in DELETE_ACTIONS})
+                     'final_name': op.get('changes', {}).get('FieldName') or op.get('changes', {}).get('Name') or name,
+                     'field_type': op.get('field_type', ''), 'deleted': action in DELETE_ACTIONS and action != 'remove_field_override'})
     objects.extend(item for item in affected if item and current(item) not in objects)
     for row in rows:
         row['owner'] = current(row['owner'])
         if row['kind']=='cdo': row['name']=current(row['name'])
     return {'objects': list(dict.fromkeys(current(item) for item in objects)),
             'service_objects': list(dict.fromkeys(current(item) for item in objects if current(item) not in removed)),
-            'field_count': len(fields), 'change_count': len(operations), 'rows': rows}
+            'field_count': len(fields), 'change_count': len(operations), 'rows': rows,
+            'field_expectations': final_fields(operations)}

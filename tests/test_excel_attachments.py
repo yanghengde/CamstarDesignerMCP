@@ -42,6 +42,7 @@ def workbook_bytes(rows=None, extra_sheet=False):
 
 @pytest.fixture
 def isolated_store(tmp_path, monkeypatch):
+    monkeypatch.setattr(routes, 'CHAT_USERNAME', 'user')
     monkeypatch.setattr(config, 'EXCEL_ATTACHMENT_ROOT', str(tmp_path / 'attachments'))
     monkeypatch.setattr(memory, 'SESSIONS_DIR', str(tmp_path / 'sessions'))
     monkeypatch.setattr(memory, 'user_memories', {})

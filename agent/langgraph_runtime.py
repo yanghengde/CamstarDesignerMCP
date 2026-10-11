@@ -33,7 +33,6 @@ from agent.prompts import USER_FACING_LANGUAGE_RULE
 from agent.safety import (
     MutationCounts,
     approval_prompt,
-    classify_tool,
     count_tool_calls,
     evaluate_mutations,
     is_explicit_confirmation,
@@ -338,14 +337,9 @@ async def _execute_tool_node(state: AgentState) -> dict[str, Any]:
             if tool_func is None:
                 result = f"Error: tool '{func_name}' not found"
             else:
-                async with progress_store.tracking(state.get('username', 'unknown'), state.get('session_id', 'unknown'),
-                                                   func_name, func_args, tool_call.get('id', '')) as progress_id:
-                    try:
-                        result = await tool_func(**func_args)
-                        progress_store.finish(progress_id, result)
-                    except Exception as exc:
-                        progress_store.finish(progress_id, error=str(exc), status='failed')
-                        raise
+                result = await progress_store.run_tool(
+                    state.get('username', 'unknown'), state.get('session_id', 'unknown'),
+                    func_name, func_args, tool_call.get('id', ''), tool_func)
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # Tool errors are returned to the model for recovery.
@@ -392,14 +386,12 @@ async def _execute_tool_node(state: AgentState) -> dict[str, Any]:
     creates = int(state.get("create_count", 0))
     updates = int(state.get("update_count", 0))
     deletes = int(state.get("delete_count", 0))
-    category = classify_tool(func_name)
     call_count = count_tool_calls([tool_call])
-    if category == "create":
-        creates += call_count.creates
-    elif category == "update":
-        updates += call_count.updates
-    elif category == "delete":
-        deletes += call_count.deletes
+    # Count attempts conservatively: a failing vendor batch may have saved
+    # some changes before returning an error. Never undercount mixed batches.
+    creates += call_count.creates
+    updates += call_count.updates
+    deletes += call_count.deletes
 
     tool_message = {
         "role": "tool",
@@ -501,6 +493,10 @@ async def langgraph_chat_stream(
 
     chat_messages = get_user_messages(username, session_id)
     actual_session_id = _actual_session_id(username, session_id)
+    if progress_store.background_running(username, actual_session_id):
+        yield _sse({'type': 'done', 'reply': '上次后台操作仍在完成，请在设计进度中查看结果，完成后再继续。'})
+        return
+    progress_store.recover_chat_results(username, actual_session_id, chat_messages)
     is_first_message = not any(item.get('role') == 'user' for item in chat_messages)
     graph_config = _graph_config(username, actual_session_id)
 

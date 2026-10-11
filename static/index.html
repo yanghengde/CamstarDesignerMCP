@@ -345,6 +345,8 @@
         let currentSessionId = null;
         let abortController = null;
         let busy = false;
+        let backgroundRunning = false;
+        let backgroundTimer;
         let historyLoading = false;
         let sessions = [];
         let noticeTimer;
@@ -416,7 +418,7 @@
         function updateControls() {
             const locked = busy || historyLoading || attachmentUploading || reviewPreparing;
             input.disabled = locked;
-            sendBtn.disabled = locked;
+            sendBtn.disabled = locked || backgroundRunning;
             newChatTopBtn.disabled = locked;
             for (const id of ['designNav', 'recordsNav']) document.getElementById(id).setAttribute('aria-disabled', String(locked));
             attachBtn.disabled = locked || !!pendingExcelPreview || attachmentDrafts.length >= 3;
@@ -425,6 +427,42 @@
             sendBtn.hidden = busy;
             stopBtn.hidden = !busy;
             messagesDiv.setAttribute('aria-busy', String(locked));
+        }
+
+        function monitorBackground(data) {
+            const previous = backgroundRunning;
+            backgroundRunning = !!data.background_running;
+            clearTimeout(backgroundTimer);
+            const hint = document.querySelector('.composer-hint span');
+            hint.textContent = backgroundRunning ? '后台操作仍在完成，可到设计进度查看；完成后可继续发送' : '设计完成后，在 Designer 中审核并发布';
+            updateControls();
+            if (previous && !backgroundRunning) {
+                if (data.designer_results?.length) showDesignerResult(data.designer_results[data.designer_results.length - 1]);
+                showNotice(data.background_error ? `后台操作未完成：${data.background_error}` : '后台操作已完成，可以继续对话。');
+            }
+            if (backgroundRunning) {
+                const session = currentSessionId;
+                backgroundTimer = setTimeout(async () => {
+                    try {
+                        const result = await fetchJson(`/history/${encodeURIComponent(currentUsername)}?session_id=${encodeURIComponent(session)}`);
+                        if (currentSessionId === session) monitorBackground(result);
+                    } catch (error) {
+                        if (currentSessionId === session) monitorBackground({background_running:true});
+                    }
+                }, 4000);
+            }
+        }
+
+        async function refreshBackground() {
+            const session = currentSessionId;
+            if (!session) return;
+            try {
+                const data = await fetchJson(`/history/${encodeURIComponent(currentUsername)}?session_id=${encodeURIComponent(session)}`);
+                if (currentSessionId === session) {
+                    monitorBackground(data);
+                    if (data.designer_results?.length) showDesignerResult(data.designer_results[data.designer_results.length - 1]);
+                }
+            } catch (error) { showNotice('后台状态读取失败，请刷新页面或查看设计进度。'); }
         }
 
         function renderSessions() {
@@ -701,6 +739,7 @@
                 if(data.pending_excel_preview){showExcelPreview(data.pending_excel_preview);hasVisible=true;}
                 if (!hasVisible) showWelcome();
                 if (data.designer_results?.length) showDesignerResult(data.designer_results[data.designer_results.length - 1]);
+                monitorBackground(data);
             } catch (error) {
                 appendMessage('agent', '对话记录加载失败，请刷新页面重试。');
                 showNotice(`无法加载对话记录：${error.message}`);
@@ -751,7 +790,7 @@
 
         async function handleSend() {
             const text = input.value.trim() || (attachmentDrafts.length ? '请读取附件中的设计信息，说明对象和字段设计方案。' : '');
-            if (!text || busy || historyLoading || attachmentUploading) return;
+            if (!text || busy || backgroundRunning || historyLoading || attachmentUploading) return;
             const sentAttachments = attachmentDrafts.slice();
             let messageSaved = false;
             busy = true;
@@ -839,6 +878,7 @@
                 input.focus();
                 scrollToBottom();
                 refreshSessionsList().catch(() => showNotice('设计记录刷新失败，可稍后刷新页面。'));
+                refreshBackground();
             }
         }
 

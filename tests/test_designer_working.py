@@ -21,6 +21,8 @@ def project(tmp_path, monkeypatch):
     monkeypatch.setattr(config, 'DESIGNER_PROGRESS_DB', str(tmp_path/'progress.sqlite'))
     monkeypatch.setattr(memory, 'SESSIONS_DIR', str(tmp_path/'sessions'))
     monkeypatch.setattr(memory, 'user_memories', {})
+    from agent import langgraph_runtime
+    monkeypatch.setattr(langgraph_runtime, 'user_memories', memory.user_memories)
     monkeypatch.setattr(routes, 'CHAT_USERNAME', 'user')
     source = tmp_path/'seed.mdb'; source.write_bytes(b'published seed')
     dll = tmp_path/'metadata.dll'; dll.write_bytes(b'vendor')
@@ -289,15 +291,37 @@ def test_progress_tracks_owned_batches_and_resets_after_release(project):
     assert state['current'] == 5
 
 
-def test_manual_publish_confirmation_triggers_next_design_backup(project):
+def stub_manual_verification(monkeypatch):
+    monkeypatch.setattr(config, 'DESIGNER_TEST_TARGET_CONFIRMED', True)
+    monkeypatch.setattr(config, 'DESIGNER_DB_SERVER', 'test-host')
+    monkeypatch.setattr(config, 'DESIGNER_DB_NAME', 'test-db')
+    class Connection:
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+        def cursor(self): return None
+    monkeypatch.setattr(publication, 'target_connection', lambda: Connection())
+    monkeypatch.setattr(publication, 'acquire_publish_lock', lambda cursor: None)
+    monkeypatch.setattr(publication, 'target_schema', lambda cursor: 'schema')
+    monkeypatch.setattr(publication, 'metadata_fingerprint', lambda *args: 'current catalog')
+    monkeypatch.setattr(publication, 'verify_published_design', lambda *args: {
+        'status': 'verified', 'checks': [], 'result_file': 'verification.json'})
+
+
+def test_manual_publish_confirmation_triggers_next_design_backup(project, monkeypatch):
+    stub_manual_verification(monkeypatch)
     sid = memory.create_session('user')
     first = generate(project, 'ExFirst'); record(sid, first)
     messages = memory.get_user_messages('user', sid)
     messages.append({'role':'tool','name':'check_designer_package','content':str({'intact':True}),
                      'tool_call_id':'checked'})
     messages.insert(-1, {'role':'assistant','tool_calls':[{'id':'checked','function':{'arguments':json.dumps({'manifest_file':str(manifest(first))})}}]})
-    for action in ('confirm_review','confirm_compile','confirm_publish'):
+    for action in ('confirm_review','confirm_compile'):
         assert progress.start_action('user', sid, manifest(first).parent.name, action)['status'] == 'confirmed'
+    async def confirm():
+        assert progress.start_action('user', sid, manifest(first).parent.name, 'confirm_publish')['status'] == 'running'
+        await asyncio.gather(*list(progress._tasks))
+    asyncio.run(confirm())
+    assert progress.snapshot('user', sid)['stages'][7]['status'] == 'done'
     assert working.load(first['working_project_id'])['published']['method'] == 'manual'
     generate(project, 'ExSecond')
     assert len(working.backups(first['working_project_id'])) == 1
@@ -417,21 +441,120 @@ def test_backup_cannot_be_used_as_design_input(project):
 
 
 def test_manual_update_refreshes_existing_published_baseline_without_database_writes(project, monkeypatch):
+    stub_manual_verification(monkeypatch)
     first = generate(project,'ExFirst')
     monkeypatch.setattr(config,'DESIGNER_TEST_TARGET_CONFIRMED',True)
     monkeypatch.setattr(config,'DESIGNER_DB_SERVER','test-host')
     monkeypatch.setattr(config,'DESIGNER_DB_NAME','test-db')
     checkpoint=project.parent/'published_baseline.json'
     checkpoint.write_text(json.dumps({'target':{'server':'test-host','database':'test-db'},'sha256':'previous'}))
-    class Connection:
-        def __enter__(self): return self
-        def __exit__(self,*args): pass
-        def cursor(self): return None
-    monkeypatch.setattr(publication,'target_connection',lambda:Connection())
-    monkeypatch.setattr(publication,'target_schema',lambda cursor:'schema')
-    monkeypatch.setattr(publication,'metadata_fingerprint',lambda *args:'current catalog')
     publication.record_manual_baseline(str(manifest(first)))
     saved=json.loads(checkpoint.read_text())
     assert saved['sha256'] == vendor.digest(Path(first['working_mdb']))
     assert saved['metadata_fingerprint'] == 'current catalog'
     assert saved['method'] == 'manual'
+
+
+@pytest.mark.parametrize('status', ['verification_failed', 'partial_verification'])
+def test_failed_manual_release_preserves_baseline_and_does_not_trigger_backup(project, monkeypatch, status):
+    stub_manual_verification(monkeypatch)
+    first = generate(project, 'ExFirst')
+    checkpoint = project.parent / 'published_baseline.json'
+    checkpoint.write_text('{"sha256":"previous"}')
+    monkeypatch.setattr(publication, 'verify_published_design', lambda *args: {
+        'status': status, 'result_file': 'failure.json'})
+    with pytest.raises(ValueError, match='核验未通过'):
+        publication.record_manual_baseline(str(manifest(first)))
+    assert checkpoint.read_text() == '{"sha256":"previous"}'
+    assert not working.load(first['working_project_id']).get('published')
+    generate(project, 'ExSecond')
+    assert working.backups(first['working_project_id']) == []
+
+
+def test_sql_changes_during_manual_verification_preserve_previous_checkpoint(project, monkeypatch):
+    stub_manual_verification(monkeypatch)
+    first = generate(project, 'ExFirst')
+    fingerprints = iter(['before', 'after'])
+    monkeypatch.setattr(publication, 'metadata_fingerprint', lambda *args: next(fingerprints))
+    with pytest.raises(ValueError, match='核验期间'):
+        publication.record_manual_baseline(str(manifest(first)))
+    assert not (project.parent / 'published_baseline.json').exists()
+    assert not working.load(first['working_project_id']).get('published')
+
+
+def test_chat_mcp_and_ui_share_complete_cached_cycle(project, monkeypatch):
+    from designer import cycle
+    from tools import designer_design
+    stub_manual_verification(monkeypatch)
+    first = generate(project, 'ExFirst')
+    second = generate(project, 'ExSecond')
+    exports = []
+    original_export = vendor.export
+    def export(folder, baseline, modified):
+        exports.append(folder)
+        return original_export(folder, baseline, modified)
+    monkeypatch.setattr(vendor, 'export', export)
+    planned = []
+    def preflight(file):
+        planned.append(file)
+        plan = Path(file).parent / 'plan.json'
+        plan.write_text('{}')
+        return {'target': progress_actions.target(), 'blockers': [],
+                'plan_file': str(plan), 'manifest_file': file, 'manifest_sha256': vendor.digest(Path(file))}
+    monkeypatch.setattr(publication, 'preflight', preflight)
+    result = asyncio.run(designer_design.prepare_designer_publish_plan(str(manifest(second))))
+    combined = Path(result['manifest_file'])
+    saved = json.loads(combined.read_text())
+    assert saved['source_sha256'] == vendor.digest(project)
+    assert [op['name'] for op in saved['operations']] == ['ExFirst', 'ExSecond']
+    assert result['ready_for_publish']
+    assert cycle.prepare_plan(str(manifest(second)))['manifest_file'] == str(combined)
+    verified = []
+    monkeypatch.setattr(publication, 'verify_published_design', lambda file, *args: verified.append(file) or {'status': 'verified'})
+    assert asyncio.run(designer_design.verify_designer_published_design(str(manifest(second))))['status'] == 'verified'
+    published = []
+    monkeypatch.setattr(publication, 'publish_database', lambda *args, **kwargs: published.append((args, kwargs)) or {'status': 'database_published'})
+    asyncio.run(designer_design.publish_designer_test_database(str(manifest(second)), vendor.digest(manifest(second))))
+    assert published[0][0][0] == verified[0] == str(combined)
+    assert published[0][1]['expected_target_fingerprint'] == 'current catalog'
+    assert len(exports) == 1
+
+
+def test_older_chat_progress_follows_latest_project_and_all_current_cycle_changes(project):
+    one, two = memory.create_session('user'), memory.create_session('user')
+    first = generate(project, 'ExFirst'); record(one, first)
+    second = generate(project, 'ExSecond'); record(two, second)
+    state = progress.snapshot('user', one)
+    assert state['package']['id'] == manifest(second).parent.name
+    assert state['package']['objects'] == ['ExFirst', 'ExSecond']
+    assert set(state['_manifests']) == {str(manifest(first)), str(manifest(second))}
+
+
+def test_cancelled_design_is_recovered_by_history_and_progress(project):
+    import threading
+    from designer import progress_store as store
+    sid = memory.create_session('user')
+    memory.get_user_messages('user', sid).append({'role': 'user', 'content': '创建对象'})
+    started, release = threading.Event(), threading.Event()
+    def design():
+        started.set()
+        assert release.wait(3)
+        return generate(project, 'ExRecovered')
+    async def tool(): return await asyncio.to_thread(design)
+    async def execute():
+        request = asyncio.create_task(store.run_tool('user', sid, 'generate_designer_design_package',
+                                                     {}, 'cancelled-design', tool))
+        try:
+            assert await asyncio.to_thread(started.wait, 2)
+            request.cancel()
+            with pytest.raises(asyncio.CancelledError): await request
+            assert (await routes.history_endpoint('user', sid))['background_running']
+        finally:
+            release.set()
+            await store.drain()
+        history = await routes.history_endpoint('user', sid)
+        assert not history['background_running']
+        assert history['designer_results'][0]['objects'] == ['ExRecovered']
+        assert progress.snapshot('user', sid)['package']['objects'] == ['ExRecovered']
+        assert len([item for item in history['messages'] if item['role'] == 'tool']) == 1
+    asyncio.run(execute())
