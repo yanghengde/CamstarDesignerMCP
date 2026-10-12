@@ -77,7 +77,8 @@ def _save_metadata(username: str):
     if metadata_path.resolve().parent != Path(d):
         raise ValueError('会话配置文件不能指向用户目录之外')
     data_to_save = {
-        "active_session": user_memories[username].get("active_session")
+        "active_session": user_memories[username].get("active_session"),
+        "chat_preferences": user_memories[username].get("chat_preferences", {}),
     }
     _write_json(metadata_path, data_to_save)
 
@@ -147,7 +148,9 @@ def load_memory() -> dict:
             if os.path.exists(meta_path):
                 try:
                     with open(meta_path, "r", encoding="utf-8") as fm:
-                        mem[uname]["active_session"] = json.load(fm).get("active_session")
+                        metadata = json.load(fm)
+                        mem[uname]["active_session"] = metadata.get("active_session")
+                        mem[uname]['chat_preferences'] = metadata.get('chat_preferences', {})
                 except Exception:
                     pass
             

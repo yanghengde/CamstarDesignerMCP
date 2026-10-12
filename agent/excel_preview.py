@@ -33,6 +33,8 @@ def validate_sources(items, username, session_id):
 
 
 def build(calls, attachments):
+    from designer.design_contract import validate_calls
+    validate_calls(calls)
     rows, targets, objects = [], [], []
     def row(action, owner='', name='', parent='', values=None):
         value = values or {}

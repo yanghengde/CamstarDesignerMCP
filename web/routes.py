@@ -238,11 +238,17 @@ async def history_endpoint(username: str, session_id: str = None):
     return {"designer_results": session_packages(recovered),
             'background_running': progress_store.background_running(username, actual),
             'background_error': events[-1]['error'] if events and events[-1]['status'] == 'failed' else '',
+            'chat_events': get_chat_events(username, session_id or actual),
             'pending_excel_preview': pending_preview, "messages": [
         {**{key: value for key, value in message.items() if key != 'display_content'},
          'content': message.get('display_content', message.get('content', ''))}
         for message in messages
     ]}
+
+
+def get_chat_events(username, session_id):
+    from agent.memory import user_memories
+    return user_memories.get(username, {}).get('sessions', {}).get(session_id, {}).get('chat_events', [])
 
 
 @router.post("/chat")

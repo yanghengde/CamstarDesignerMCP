@@ -191,7 +191,7 @@ def test_compare_ignores_format_and_action_but_finds_attribute_change(metadata):
     assert "CDOFieldDefinition:existingtext" in diff["changed"][0]
 
 
-def test_registry_contains_only_designer_tools_in_clean_process():
+def test_registry_contains_only_designer_and_scoped_chat_tools_in_clean_process():
     code = "import asyncio,json; from tools import mcp; print(json.dumps([t.name for t in asyncio.run(mcp.list_tools())]))"
     names = json.loads(subprocess.check_output([sys.executable, "-c", code], text=True))
     assert set(names) == {
@@ -211,6 +211,7 @@ def test_registry_contains_only_designer_tools_in_clean_process():
         "inspect_designer_installation",
         "prepare_designer_review",
         "sync_designer_working_file", "restore_designer_mdb_backup",
+        "get_chat_evidence",
     }
 
 

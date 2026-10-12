@@ -11,6 +11,8 @@ import asyncio
 import json
 import os
 import time
+from datetime import datetime, timezone
+from weakref import WeakKeyDictionary
 from typing import Any, AsyncIterator, TypedDict
 
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
@@ -29,7 +31,7 @@ from agent.experience import (
     build_runtime_experience_context,
     record_tool_outcome,
 )
-from agent.prompts import CONVERSATION_INTENT_RULE, USER_FACING_LANGUAGE_RULE
+from agent.prompts import CHAT_QUALITY_RULE, CONVERSATION_INTENT_RULE, SYSTEM_PROMPT, USER_FACING_LANGUAGE_RULE
 from agent.safety import (
     MutationCounts,
     approval_prompt,
@@ -50,6 +52,9 @@ from designer.attachments import attachment_context, attachment_summary
 from agent.titles import first_message_title
 from designer import progress_store
 from agent import excel_preview
+from agent import chat_context, chat_intent, chat_preferences
+from agent.chat_evidence import evidence_scope
+from designer.design_contract import validate_calls
 
 
 class AgentState(TypedDict, total=False):
@@ -68,12 +73,32 @@ class AgentState(TypedDict, total=False):
     excel_sources: list[dict]
     excel_approved_calls: list[str]
     excel_confirmation_response: str
+    task_context: dict
+    read_only: bool
+    validation_failures: int
+    tool_failures: list[str]
 
 
 _client: Any = None
 _openai_tools: list[dict[str, Any]] = []
 _graph: Any = None
 _checkpointer_cm: Any = None
+_session_locks = WeakKeyDictionary()
+
+
+def _pending_key(state):
+    return '|'.join(str(call.get('id')) for call in state.get('pending_tool_calls', []))
+
+
+def _notes(username, session_id, state):
+    return user_memories[username]['sessions'][session_id].get('pending_dialogue', {}).get(_pending_key(state), [])
+
+
+def _merge_notes(messages, notes):
+    if not notes:
+        return list(messages)
+    # The queued assistant call stays adjacent to its future tool responses.
+    return list(messages[:-1]) + notes + list(messages[-1:])
 
 
 def _sse(payload: dict[str, Any]) -> str:
@@ -117,10 +142,15 @@ def _first_interrupt_value(snapshot: Any) -> dict[str, Any] | None:
 
 async def _agent_node(state: AgentState) -> dict[str, Any]:
     writer = get_stream_writer()
+    history = state.get('messages', [])
+    if history and history[0].get('role') == 'system':
+        # Old checkpoints must use current program-owned instructions too.
+        state = {**state, 'messages': [{**history[0], 'content': SYSTEM_PROMPT}] + history[1:]}
     loops = int(state.get("loop_count", 0)) + 1
-    if loops > MAX_TOOL_LOOPS:
+    limit = 4 if state.get('read_only') else MAX_TOOL_LOOPS
+    if loops > limit:
         reply = (
-            f"⚠️ 连续操作已达到上限（{MAX_TOOL_LOOPS} 次），任务已安全停止。"
+            f"连续操作已达到上限（{limit} 次），本次处理已停止。"
             "请缩小范围后继续。"
         )
         return {
@@ -145,30 +175,18 @@ async def _agent_node(state: AgentState) -> dict[str, Any]:
         experience_context = build_runtime_experience_context(
             state.get("request_message", ""), tool_names
         )
-        # UI metadata is retained in checkpoints/history, never sent as API fields.
-        model_messages = [
-            {key: value for key, value in message.items() if key not in {'display_content', 'attachments', 'excel_preview'}}
-            for message in state.get("messages", [])
-        ]
-        language_message = {
-            "role": "system",
-            "content": USER_FACING_LANGUAGE_RULE,
-        }
-        insert_at = 1 if model_messages and model_messages[0].get("role") == "system" else 0
-        model_messages.insert(insert_at, language_message)
-        # Apply current intent rules even when resuming an older checkpoint.
-        model_messages.insert(insert_at + 1, {"role": "system", "content": CONVERSATION_INTENT_RULE})
-        if experience_context:
-            context_message = {
-                "role": "system",
-                "content": experience_context,
-            }
-            model_messages.insert(insert_at + 2, context_message)
+        model_messages = chat_context.build_messages(
+            state.get('messages', []), task=state.get('task_context'),
+            preferences=chat_preferences.current(state['username'], state['session_id']),
+            extra_system=[USER_FACING_LANGUAGE_RULE, CONVERSATION_INTENT_RULE, CHAT_QUALITY_RULE, experience_context],
+        )
+        available_tools = [tool for tool in _openai_tools if not state.get('read_only')
+                           or chat_intent.read_only_tool(tool.get('function', {}).get('name', ''))]
 
         response_stream = await _client.chat.completions.create(
             model=LLM_MODEL,
             messages=model_messages,
-            tools=_openai_tools,
+            tools=available_tools,
             tool_choice="auto",
             stream=True,
         )
@@ -241,6 +259,8 @@ async def _agent_node(state: AgentState) -> dict[str, Any]:
         "pending_tool_calls": ordered_calls,
         "final_reply": full_content if not ordered_calls else "",
         "stop_reason": "complete" if not ordered_calls else "",
+        "task_context": chat_context.update_task(state.get('task_context'), '', [], ordered_calls)
+                        if not state.get('read_only') else state.get('task_context', {}),
     }
     if stream_started and not ordered_calls:
         writer({"type": "stream_end"})
@@ -253,14 +273,45 @@ def _route_after_agent(state: AgentState) -> str:
 
 def _policy_node(state: AgentState) -> dict[str, Any]:
     pending = state.get("pending_tool_calls", [])
+    if not state.get('task_context'):
+        task = chat_context.update_task({}, '', state.get('messages', []))
+        state = {**state, 'task_context': chat_context.update_task(task, '', [], pending)}
+    if state.get('read_only') and any(not chat_intent.read_only_tool((call.get('function') or {}).get('name', '')) for call in pending):
+        return _reject_plan(state, '追问期间仅允许只读查询，待确认设计保持不变。')
+    try:
+        validate_calls(pending)
+        task = state.get('task_context', {})
+        for call in pending:
+            function = call.get('function') or {}
+            if function.get('name') not in excel_preview.DESIGN_TOOLS:
+                continue
+            if _attempt_key(call) in state.get('tool_failures', []):
+                raise ValueError('相同参数和来源版本的设计调用已经失败；请先只读核验实际结果和错误原因，不要直接重复写入。')
+            args = json.loads(function.get('arguments') or '{}')
+            creates = ([{'name': args.get('cdo_name'), 'create_table': False}]
+                       if function['name'] == 'generate_designer_cdo_package' else
+                       [op for op in args.get('operations', []) if op.get('action') == 'create_cdo'])
+            if task.get('requires_table') and any(not op.get('create_table') for op in creates):
+                raise ValueError('当前需求明确包含建表，请使用 create_cdo 的 create_table=true 和 table_name；仅创建 CDO 不满足本次目标。')
+            expected_name = task.get('required_object_name')
+            if expected_name and creates and not any(op.get('name') == expected_name for op in creates):
+                raise ValueError(f'对象名称未采用用户最新修正：应为 {expected_name}。')
+            prior_fields = chat_context.planned_fields(task.get('prior_plan', []))
+            if creates and prior_fields and '其他不变' in state.get('request_message', ''):
+                if prior_fields != chat_context.planned_fields(task.get('proposed_plan', [])):
+                    raise ValueError('用户要求其他不变，当前计划却遗漏或改变了原字段属性；请保留原字段、类型、长度、持久化和列表属性。')
+    except (ValueError, TypeError, KeyError) as exc:
+        return _reject_plan(state, f'参数校验未通过，尚未调用设计后端：{exc}')
+    if not state.get('read_only') and state.get('task_context', {}).get('proposed_plan'):
+        state = {**state, 'task_context': {**state['task_context'], 'validated_plan': state['task_context']['proposed_plan']}}
     design_calls = [call for call in pending if (call.get('function') or {}).get('name') in excel_preview.DESIGN_TOOLS
                     and excel_preview.fingerprint(call) not in state.get('excel_approved_calls', [])]
     needs_preview = bool(state.get('excel_sources') and design_calls)
     if state.get("approval_granted") and not needs_preview:
-        return {}
+        return {'task_context': state.get('task_context', {})}
     decision = evaluate_mutations(_completed_counts(state), pending)
     if not decision.requires_approval and not needs_preview:
-        return {}
+        return {'task_context': state.get('task_context', {})}
     preview = excel_preview.build(design_calls, state['excel_sources']) if needs_preview else None
     approval = interrupt(
         {
@@ -271,6 +322,10 @@ def _policy_node(state: AgentState) -> dict[str, Any]:
             "categories": list(decision.categories),
         }
     )
+    notes = _notes(state['username'], state['session_id'], state)
+    if notes:
+        state = {**state, 'messages': _merge_notes(state.get('messages', []), notes)}
+        user_memories[state['username']]['sessions'][state['session_id']].get('pending_dialogue', {}).pop(_pending_key(state), None)
     if isinstance(approval, dict) and approval.get("revision") is True:
         messages = (excel_preview.attach_preview(state.get('messages', []), {**preview, 'status': 'superseded'}, pending)
                     if preview else list(state.get('messages', [])))
@@ -283,6 +338,8 @@ def _policy_node(state: AgentState) -> dict[str, Any]:
                 "content": "旧方案因用户补充要求已作废，本调用未执行。请按最新要求重新核对并生成预览。",
             })
         response = approval['response']
+        revised_task = dict(state.get('task_context', {}))
+        revised_task.pop('prior_plan', None)
         messages.append({'role': 'user', 'content': response})
         legacy_messages = get_user_messages(state['username'], state['session_id'])
         legacy_messages[:] = messages
@@ -295,16 +352,23 @@ def _policy_node(state: AgentState) -> dict[str, Any]:
             "messages": messages, "request_message": response, "loop_count": 0,
             "pending_tool_calls": [], "final_reply": "", "stop_reason": "replan",
             "approval_granted": False, "excel_approved_calls": [], "excel_confirmation_response": '',
+            "task_context": chat_context.update_task(revised_task, response, [], reset=chat_intent.new_task(response)),
+            "excel_sources": [] if chat_intent.new_task(response) else state.get('excel_sources', []),
+            "validation_failures": 0,
         }
     if isinstance(approval, dict) and approval.get("approved") is True:
         update = {"approval_granted": state.get('approval_granted', False) or decision.requires_approval,
-                  "excel_confirmation_response": approval.get('response', '')}
+                  "excel_confirmation_response": approval.get('response', ''), 'messages': state.get('messages', []),
+                  'task_context': state.get('task_context', {})}
         if preview:
             if not excel_preview.confirmation(approval.get('response', '')):
                 raise ValueError('Excel 设计需要人员输入“确定”或“确认”')
             update.update(excel_approved_calls=state.get('excel_approved_calls', []) + preview['call_fingerprints'],
                           excel_confirmation_response=approval['response'],
-                          messages=excel_preview.attach_preview(state.get('messages', []), {**preview, 'status': 'confirmed'}, pending))
+                          messages=excel_preview.attach_preview(state.get('messages', []), {
+                              **preview, 'status': 'confirmed', 'confirmation_response': approval['response'],
+                              'confirmation_received_utc': approval.get('received_utc', datetime.now(timezone.utc).isoformat()),
+                          }, pending))
         return update
 
     cancelled_messages = (excel_preview.attach_preview(state.get('messages', []), {**preview, 'status': 'cancelled'}, pending)
@@ -329,6 +393,42 @@ def _policy_node(state: AgentState) -> dict[str, Any]:
         "final_reply": reply,
         "stop_reason": "cancelled",
     }
+
+
+def _reject_plan(state, reason):
+    messages = list(state.get('messages', []))
+    if not state.get('read_only'):
+        notes = _notes(state['username'], state['session_id'], state)
+        messages = _merge_notes(messages, notes)
+        session = user_memories[state['username']]['sessions'][state['session_id']]
+        session.get('pending_dialogue', {}).pop(_pending_key(state), None)
+        ids = {call.get('id') for call in state.get('pending_tool_calls', [])}
+        old_preview = next((message['excel_preview'] for message in session.get('messages', [])
+                            if message.get('excel_preview', {}).get('status') == 'pending'
+                            and any(call.get('id') in ids for call in message.get('tool_calls', []))), None)
+        if old_preview:
+            messages = excel_preview.attach_preview(messages, {**old_preview, 'status': 'invalid'}, state.get('pending_tool_calls', []))
+            get_stream_writer()({'type': 'excel_preview_status', 'id': old_preview['id'], 'status': 'invalid'})
+    for call in state.get('pending_tool_calls', []):
+        messages.append({'role': 'tool', 'tool_call_id': call.get('id', 'unknown'),
+                         'name': (call.get('function') or {}).get('name', 'unknown'), 'content': reason})
+    attempts = int(state.get('validation_failures', 0)) + 1
+    reply = '方案连续两次未通过校验，已停止执行。' + reason if attempts >= 2 else ''
+    if reply:
+        messages.append({'role': 'assistant', 'content': reply})
+    return {'messages': messages, 'pending_tool_calls': [], 'validation_failures': attempts,
+            'approval_granted': False, 'excel_approved_calls': [], 'excel_confirmation_response': '',
+            'final_reply': reply, 'stop_reason': 'validation_failed' if reply else 'replan',
+            'task_context': state.get('task_context', {})}
+
+
+def _attempt_key(call):
+    function = call.get('function') or {}
+    try:
+        arguments = json.loads(function.get('arguments') or '{}')
+    except (ValueError, TypeError):
+        arguments = function.get('arguments')
+    return json.dumps({'name': function.get('name'), 'arguments': arguments}, sort_keys=True, ensure_ascii=False)
 
 
 def _route_after_policy(state: AgentState) -> str:
@@ -367,9 +467,10 @@ async def _execute_tool_node(state: AgentState) -> dict[str, Any]:
             if tool_func is None:
                 result = f"Error: tool '{func_name}' not found"
             else:
-                result = await progress_store.run_tool(
-                    state.get('username', 'unknown'), state.get('session_id', 'unknown'),
-                    func_name, func_args, tool_call.get('id', ''), tool_func)
+                with evidence_scope(state.get('messages', [])):
+                    result = await progress_store.run_tool(
+                        state.get('username', 'unknown'), state.get('session_id', 'unknown'),
+                        func_name, func_args, tool_call.get('id', ''), tool_func)
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # Tool errors are returned to the model for recovery.
@@ -441,6 +542,13 @@ async def _execute_tool_node(state: AgentState) -> dict[str, Any]:
         "create_count": creates,
         "update_count": updates,
         "delete_count": deletes,
+        "tool_failures": state.get('tool_failures', []) + ([_attempt_key(tool_call)]
+                         if str(result).startswith('Error') or isinstance(result, dict) and result.get('status') == 'failed' else []),
+        "task_context": {**state.get('task_context', {}), 'latest_evidence': {
+            'tool': func_name, 'evidence_id': tool_call.get('id'),
+            'status': result.get('status') if isinstance(result, dict) else ('failed' if str(result).startswith('Error') else 'returned'),
+            'notice': '只依据该回执报告，不将返回结果等同于数据库发布或整项设计已验收。',
+        }},
     }
 
 
@@ -488,8 +596,9 @@ async def close_langgraph_runtime() -> None:
 async def _stream_graph(
     graph_input: AgentState | Command,
     graph_config: dict[str, Any],
+    graph=None,
 ) -> AsyncIterator[str]:
-    async for mode, payload in _graph.astream(
+    async for mode, payload in (graph or _graph).astream(
         graph_input,
         graph_config,
         stream_mode=["custom", "updates"],
@@ -510,6 +619,8 @@ async def _sync_legacy_messages(
         preview = (_first_interrupt_value(snapshot) or {}).get('excel_preview')
         legacy_messages[:] = (excel_preview.attach_preview(state["messages"], preview, state.get('pending_tool_calls', []))
                               if preview else state["messages"])
+        if _has_interrupt(snapshot):
+            legacy_messages.extend(_notes(username, session_id, state))
         save_user_session(username, session_id)
     return state
 
@@ -520,6 +631,66 @@ async def langgraph_chat_stream(
     session_id: str | None = None,
     attachments: list[dict] | None = None,
 ) -> AsyncIterator[str]:
+    # Requests from multiple browser tabs must not race the same checkpoint.
+    loop = asyncio.get_running_loop()
+    locks = _session_locks.setdefault(loop, {})
+    get_user_messages(username, session_id)
+    actual = _actual_session_id(username, session_id)
+    lock = locks.setdefault((username, actual), asyncio.Lock())
+    if lock.locked():
+        yield _sse({'type': 'error', 'message': '这个对话正在处理上一条消息，请等处理结束后再发送。'})
+        return
+    async with lock:
+        async for event in _chat_stream(username, message, actual, attachments):
+            yield event
+
+
+async def _pending_question(username, session_id, message, snapshot):
+    """Use an isolated, read-only graph without resuming the pending write."""
+    from langgraph.checkpoint.memory import InMemorySaver
+    state = snapshot.values
+    session = user_memories[username]['sessions'][session_id]
+    notes = session.setdefault('pending_dialogue', {}).setdefault(_pending_key(state), [])
+    previous_notes = list(notes)
+    user_record = {'role': 'user', 'content': message}
+    notes.append(user_record)
+    await _sync_legacy_messages(username, session_id, _graph_config(username, session_id))
+    yield _sse({'type': 'message_saved', 'session_id': session_id})
+    preference_reply = chat_preferences.apply(username, session_id, message)
+    if preference_reply:
+        notes.append({'role': 'assistant', 'content': preference_reply})
+        await _sync_legacy_messages(username, session_id, _graph_config(username, session_id))
+        yield _sse({'type': 'done', 'reply': preference_reply})
+        return
+    preview = (_first_interrupt_value(snapshot) or {}).get('excel_preview')
+    base = list(state.get('messages', [])[:-1]) + previous_notes + [user_record]
+    base.insert(1, {'role': 'system', 'content': '当前设计仍在等待人员确认。本次只回答追问或执行只读查询，不能确认、取消或修改该方案。待确认预览数据：\n' + json.dumps(preview or state.get('pending_tool_calls', []), ensure_ascii=False)})
+    graph = _build_graph(InMemorySaver())
+    inquiry_config = _graph_config(username, session_id + ':question:' + str(time.time_ns()))
+    inquiry_state: AgentState = {
+        'messages': base, 'username': username, 'session_id': session_id, 'request_message': message,
+        'read_only': True, 'loop_count': 0, 'pending_tool_calls': [], 'excel_sources': [],
+        'excel_approved_calls': [], 'approval_granted': False, 'validation_failures': 0,
+        'task_context': state.get('task_context', {}), 'final_reply': '', 'stop_reason': '',
+    }
+    try:
+        async for event in _stream_graph(inquiry_state, inquiry_config, graph):
+            yield event
+        result = (await graph.aget_state(inquiry_config)).values
+        notes.extend(result.get('messages', [])[len(base):])
+        if result.get('stop_reason') in {'validation_failed', 'loop_limit'}:
+            yield _sse({'type': 'done', 'reply': result['final_reply']})
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        reply = f'追问处理失败：{exc}。待确认方案保持不变。'
+        notes.append({'role': 'assistant', 'content': reply})
+        yield _sse({'type': 'error', 'message': reply})
+    finally:
+        await _sync_legacy_messages(username, session_id, _graph_config(username, session_id))
+
+
+async def _chat_stream(username, message, session_id=None, attachments=None):
     if _graph is None:
         raise RuntimeError("LangGraph runtime has not been initialized")
 
@@ -540,16 +711,26 @@ async def langgraph_chat_stream(
             return
         confirmed = excel_preview.confirmation(message) if interrupt_value.get('excel_preview') else is_explicit_confirmation(message)
         if confirmed:
+            received_utc = datetime.now(timezone.utc).isoformat()
+            session = user_memories[username]['sessions'][actual_session_id]
+            session.setdefault('chat_events', []).append({
+                'type': 'confirmation_received', 'received_utc': received_utc, 'response': message,
+                'preview_id': (interrupt_value.get('excel_preview') or {}).get('id'),
+                'call_fingerprints': [excel_preview.fingerprint(call) for call in snapshot.values.get('pending_tool_calls', [])],
+            })
+            save_user_session(username, actual_session_id)
             try:
                 if interrupt_value.get('excel_preview'):
                     await asyncio.to_thread(excel_preview.validate_sources, interrupt_value['excel_preview']['attachments'], username, actual_session_id)
                 async for event in _stream_graph(
-                    Command(resume={"approved": True, "response": message}),
+                    Command(resume={"approved": True, "response": message,
+                                    "received_utc": received_utc}),
                     graph_config,
                 ):
                     yield event
                 if interrupt_value.get('excel_preview'):
-                    yield _sse({'type': 'excel_preview_status', 'id': interrupt_value['excel_preview']['id'], 'status': 'confirmed'})
+                    yield _sse({'type': 'excel_preview_status', 'id': interrupt_value['excel_preview']['id'],
+                                'status': 'confirmed', 'confirmation_received_utc': received_utc})
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -577,6 +758,10 @@ async def langgraph_chat_stream(
             yield _sse({"type": "done", "reply": prompt, 'excel_preview': interrupt_value.get('excel_preview')})
             return
         else:
+            if chat_intent.pending_intent(message) != 'revision':
+                async for event in _pending_question(username, actual_session_id, message, snapshot):
+                    yield event
+                return
             try:
                 async for event in _stream_graph(
                     Command(resume={"revision": True, "response": message}), graph_config,
@@ -597,6 +782,12 @@ async def langgraph_chat_stream(
         chat_messages.append(record)
         save_user_session(username, actual_session_id)
         yield _sse({"type": "message_saved", "session_id": actual_session_id})
+        preference_reply = chat_preferences.apply(username, actual_session_id, message)
+        if preference_reply:
+            chat_messages.append({'role': 'assistant', 'content': preference_reply})
+            save_user_session(username, actual_session_id)
+            yield _sse({'type': 'done', 'reply': preference_reply})
+            return
 
         if is_first_message and actual_session_id != "unknown":
             # Persist a useful name before network latency or a cancelled turn.
@@ -616,6 +807,9 @@ async def langgraph_chat_stream(
                 }
             )
 
+        task = dict(snapshot.values.get('task_context') or chat_context.update_task({}, '', chat_messages[:-1]))
+        task.pop('prior_plan', None)
+        reset = chat_intent.new_task(message) or bool(attachments)
         initial_state: AgentState = {
             "messages": list(chat_messages),
             "username": username,
@@ -629,10 +823,19 @@ async def langgraph_chat_stream(
             "pending_tool_calls": [],
             "final_reply": "",
             "stop_reason": "",
-            "excel_sources": excel_preview.sources(chat_messages),
+            "excel_sources": (attachments and [attachment_summary(item) for item in attachments]) or
+                             ([] if reset else snapshot.values.get('excel_sources', excel_preview.sources(chat_messages))),
             "excel_approved_calls": [],
             "excel_confirmation_response": '',
+            "task_context": chat_context.update_task(task, message, [], reset=reset),
+            "validation_failures": 0, "read_only": False,
+            "tool_failures": [] if reset else snapshot.values.get('tool_failures', []),
         }
+        if initial_state['excel_sources']:
+            initial_state['task_context']['attachment_evidence'] = [
+                {'evidence_id': 'attachment-' + item['id'], 'name': item['name'], 'sha256': item['sha256']}
+                for item in initial_state['excel_sources']
+            ]
         try:
             async for event in _stream_graph(initial_state, graph_config):
                 yield event
@@ -672,7 +875,7 @@ async def langgraph_chat_stream(
         username, actual_session_id, graph_config
     )
     reply = final_state.get("final_reply", "")
-    if reply and final_state.get("stop_reason") in {"loop_limit", "cancelled"}:
+    if reply and final_state.get("stop_reason") in {"loop_limit", "cancelled", "validation_failed"}:
         yield _sse({"type": "done", "reply": reply})
     elif not reply:
         yield _sse({"type": "done", "reply": "任务已完成。"})

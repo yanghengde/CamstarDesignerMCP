@@ -1,11 +1,25 @@
 """Designer object-model tools backed by the locally installed vendor assembly."""
 import asyncio
 from pathlib import Path
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 import config
 from designer import vendor
 from designer.files import artifact_dir, source_path
 from tools import mcp
+
+
+class DesignOperation(BaseModel):
+    model_config = ConfigDict(extra='allow')
+    action: str = Field(description='设计动作，必须使用 action 字段',
+                        json_schema_extra={'enum': sorted(vendor.DESIGN_ACTIONS)})
+
+    @field_validator('action')
+    @classmethod
+    def known_action(cls, value):
+        if value not in vendor.DESIGN_ACTIONS:
+            raise ValueError('未知 action，请读取 get_designer_capabilities')
+        return value
 
 
 @mcp.tool
@@ -166,14 +180,15 @@ async def analyze_designer_where_used(mdb_file: str, kind: str, name: str, owner
 
 
 @mcp.tool
-async def generate_designer_design_package(mdb_file: str, expected_sha256: str, operations: list[dict], workspace: str = "") -> dict:
+async def generate_designer_design_package(mdb_file: str, expected_sha256: str, operations: list[DesignOperation], workspace: str = "") -> dict:
     """执行官方设计操作、重新加载并导出真实差异XML，成功后更新同一个固定工作MDB；不发布数据库。
 
     首次设计从指定来源建立项目工作文件，后续来源路径自动指向该工作文件，必须用最新读取的哈希。
     发布后的下一轮首次修改前自动备份上一版，最多保留10个版本；后续批次不重复备份。
     files['modified.mdb']与working_mdb返回固定工作路径；清单与核验快照单独留存。
 
-    operations（顺序执行，最多50条）：
+    operations（顺序执行，最多50条，每项必须有 action，不使用 op 或操作名作包装键）：
+    示例：[{"action":"create_cdo","name":"ExExample","parent":"NamedDataObject","create_table":true,"table_name":"ExExample"}]
     create_cdo: name,parent,description,create_table,table_name,create_revision_base,create_maintenance。
     create_field_type: name,data_type,String需max_length；数值可precision/scale。
     add_field: name,owner,field_type,persistent(默认false),is_list(默认false),description。
@@ -199,7 +214,8 @@ async def generate_designer_design_package(mdb_file: str, expected_sha256: str, 
     delete: kind,name,owner，仅允许删除当前客户工作区拥有且厂商判定未被引用的定义。
     workspace为空时仅自动选择唯一描述为Site的活跃客户工作区，否则需要明确指定。
     """
-    return await asyncio.to_thread(vendor.design, mdb_file, expected_sha256, workspace, operations)
+    payload = [op.model_dump(exclude_unset=True) if isinstance(op, DesignOperation) else op for op in operations]
+    return await asyncio.to_thread(vendor.design, mdb_file, expected_sha256, workspace, payload)
 
 
 @mcp.tool
@@ -213,28 +229,8 @@ async def generate_designer_cdo_package(
     String必须指定max_length；省略field_type时创建专用类型，避免改变共享类型。
     使用已有field_type时只引用它，不能同时更改长度。persistent默认true，厂商创建存储列；可明确指定false。
     """
-    operations = [{"action": "create_cdo", "name": cdo_name, "parent": parent_cdo, "description": description}]
-    if not isinstance(fields, list) or not 1 <= len(fields) <= 20:
-        raise ValueError("fields 必须为1～20个字段定义")
-    for field in fields:
-        if not isinstance(field, dict) or not field.get("name"):
-            raise ValueError("每个字段需要name")
-        name = field["name"]
-        field_type = field.get("field_type")
-        if field_type and "max_length" in field:
-            raise ValueError("使用现有field_type时不能同时指定max_length；请创建专用类型")
-        if not field_type:
-            if not field.get("data_type"):
-                raise ValueError("每个字段需要data_type或现有field_type")
-            field_type = name + (str(field["max_length"]) if field.get("data_type") == "String" and "max_length" in field else "Type")
-            type_op = {"action": "create_field_type", "name": field_type, "data_type": field["data_type"]}
-            for key in ("max_length", "precision", "scale"):
-                if key in field:
-                    type_op[key] = field[key]
-            operations.append(type_op)
-        operations.append({"action": "add_field", "name": name, "owner": cdo_name, "field_type": field_type,
-                           "persistent": field.get("persistent", True), "is_list": field.get("is_list", False),
-                           "description": field.get("description", "")})
+    from designer.design_contract import cdo_operations
+    operations = cdo_operations(cdo_name, parent_cdo, fields, description)
     return await asyncio.to_thread(vendor.design, mdb_file, expected_sha256, workspace, operations)
 
 

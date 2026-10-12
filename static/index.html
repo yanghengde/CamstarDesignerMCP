@@ -621,7 +621,7 @@
         function renderAttachmentDrafts() {
             const list = document.getElementById('attachmentList');
             list.replaceChildren(...attachmentDrafts.map(attachment => attachmentCard(attachment, true)));
-            input.placeholder = pendingExcelPreview ? '输入修改要求可更新预览；核对后输入“确定”或“确认”…' : attachmentDrafts.length ? '说明如何使用 Excel，例如：按附件创建对象，字段长度以表格为准…' : '描述你的对象或字段设计需求…';
+            input.placeholder = pendingExcelPreview ? '可追问或修改要求；核对后输入“确定”或“确认”…' : attachmentDrafts.length ? '说明如何使用 Excel，例如：按附件创建对象，字段长度以表格为准…' : '描述你的对象或字段设计需求…';
             updateControls();
         }
 
@@ -703,9 +703,15 @@
             const steps = document.createElement('p'); steps.textContent = `选择客户工作区 ${result.workspace}，搜索 ${result.objects.join('、') || '目标对象'}。审核、编译和发布继续在 Designer 中执行。`; status.appendChild(steps);
         }
 
-        function excelPreviewStatus(id,status) {
+        function excelPreviewStatus(id,status,receivedUtc) {
             const card=Array.from(messagesDiv.querySelectorAll('[data-excel-preview]')).find(node=>node.dataset.excelPreview===id);
-            if(card){card.querySelector('.excel-preview-status').textContent={pending:'待确认',confirmed:'已确认',cancelled:'已取消',superseded:'已被新要求替代'}[status]||status;card.querySelector('.excel-preview-note').textContent=status==='pending'?'可直接输入修改要求更新预览；输入“确定”或“确认”后开始创建；输入“取消”可停止。':status==='cancelled'?'本批设计已取消。':status==='superseded'?'旧方案未执行，请核对按新要求生成的预览。':'本批设计已由人员确认，执行结果请查看后续回复。';}
+            if(card){
+                if(receivedUtc)card.dataset.confirmationUtc=receivedUtc;
+                card.querySelector('.excel-preview-status').textContent={pending:'待确认',confirmed:'已确认',cancelled:'已取消',superseded:'已被新要求替代',invalid:'校验未通过'}[status]||status;
+                const notes={pending:'可追问或直接输入修改要求；输入“确定”或“确认”后开始创建；输入“取消”可停止。',cancelled:'本批设计已取消。',superseded:'旧方案未执行，请核对按新要求生成的预览。',invalid:'旧方案校验未通过，尚未执行；请查看参数修正后的方案。'};
+                const time=card.dataset.confirmationUtc?`确认接收时间：${new Date(card.dataset.confirmationUtc).toLocaleString('zh-CN',{hour12:false})}。`:'';
+                card.querySelector('.excel-preview-note').textContent=notes[status]||`${time}本批设计已由人员确认，执行结果请查看后续回复。`;
+            }
             if(pendingExcelPreview?.id===id&&status!=='pending')pendingExcelPreview=null;
             renderAttachmentDrafts();updateControls();
         }
@@ -720,7 +726,7 @@
             const note=document.createElement('p');note.className='excel-preview-note';card.appendChild(note);
             const previous=Array.from(messagesDiv.querySelectorAll('[data-excel-preview]')).find(node=>node.dataset.excelPreview===preview.id);if(previous)previous.replaceWith(card);else messagesDiv.insertBefore(card,typingIndicator);
             if(preview.status==='pending')pendingExcelPreview=preview;
-            excelPreviewStatus(preview.id,preview.status);scrollToBottom();
+            excelPreviewStatus(preview.id,preview.status,preview.confirmation_received_utc);scrollToBottom();
         }
 
         async function loadHistory() {
@@ -829,7 +835,7 @@
                     typingIndicator.hidden = true;
                     if(data.excel_preview)showExcelPreview(data.excel_preview);else appendMessage('agent', data.reply);
                 } else if (data.type === 'excel_preview_status') {
-                    excelPreviewStatus(data.id,data.status);
+                    excelPreviewStatus(data.id,data.status,data.confirmation_received_utc);
                 } else if (data.type === 'error') {
                     typingIndicator.hidden = true;
                     appendMessage('agent', '处理失败：' + data.message);

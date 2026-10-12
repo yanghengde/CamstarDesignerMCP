@@ -321,6 +321,7 @@ def test_excel_preview_survives_sqlite_restart(isolated_store, design_runtime, m
 def test_preview_matches_generic_field_defaults_and_keeps_operation_details():
     from agent import excel_preview
     call = {'id': 'batch', 'function': {'name': 'generate_designer_design_package', 'arguments': json.dumps({
+        'mdb_file': 'test-only.mdb', 'expected_sha256': 'a' * 64,
         'operations': [{'action': 'add_field', 'owner': 'ExProduct', 'name': 'ExStatus', 'field_type': 'Integer'},
                        {'action': 'reorder_clf_functions', 'owner': 'ExFlow', 'function_ids': [2, 1], 'expected_function_ids': [1, 2]}]})}}
     preview = excel_preview.build([call], [])

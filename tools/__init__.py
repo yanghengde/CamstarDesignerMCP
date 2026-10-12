@@ -26,7 +26,7 @@ mcp = FastMCP(
 # -------------------------------------------------------
 # 按模块导入工具 —— 工具通过 @mcp.tool 自动注册
 # -------------------------------------------------------
-_module_names = ["designer", "designer_design", "system_info"]
+_module_names = ["designer", "designer_design", "system_info", "chat"]
 _modules = [importlib.import_module(f"tools.{name}") for name in _module_names]
 
 
