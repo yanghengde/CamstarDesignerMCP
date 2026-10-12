@@ -78,7 +78,7 @@ def build(calls, attachments):
     identity = sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
     return {**payload, 'id': identity, 'status': 'pending',
             'object_count': len(objects), 'field_count': sum(row['action'] == '新增字段' for row in rows),
-            'message': '请核对 Excel 设计预览，输入“确定”或“确认”后开始创建；输入“取消”可停止。'}
+            'message': '请核对 Excel 设计预览，可直接输入修改要求更新预览；输入“确定”或“确认”后开始创建；输入“取消”可停止。'}
 
 
 def attach_preview(messages, preview, calls):

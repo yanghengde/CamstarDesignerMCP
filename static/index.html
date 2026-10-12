@@ -621,7 +621,7 @@
         function renderAttachmentDrafts() {
             const list = document.getElementById('attachmentList');
             list.replaceChildren(...attachmentDrafts.map(attachment => attachmentCard(attachment, true)));
-            input.placeholder = pendingExcelPreview ? '核对预览后输入“确定”或“确认”；输入“取消”可停止…' : attachmentDrafts.length ? '说明如何使用 Excel，例如：按附件创建对象，字段长度以表格为准…' : '描述你的对象或字段设计需求…';
+            input.placeholder = pendingExcelPreview ? '输入修改要求可更新预览；核对后输入“确定”或“确认”…' : attachmentDrafts.length ? '说明如何使用 Excel，例如：按附件创建对象，字段长度以表格为准…' : '描述你的对象或字段设计需求…';
             updateControls();
         }
 
@@ -660,8 +660,9 @@
         function scrollToBottom() { messagesDiv.scrollTop = messagesDiv.scrollHeight; }
 
         function showDesignerResult(result) {
-            messagesDiv.querySelector('.designer-result')?.remove();
-            const card = document.createElement('section'); card.className = 'designer-result';
+            const previous = messagesDiv.querySelector('.designer-result');
+            const sameResult = previous?.dataset.packageId === result.id;
+            const card = document.createElement('section'); card.className = 'designer-result'; card.dataset.packageId = result.id;
             const title = document.createElement('h3'); title.textContent = '设计已保存 · 在 Designer 中继续'; card.appendChild(title);
             const objects = document.createElement('p'); objects.textContent = `对象：${result.objects.join('、') || '查看变更包'} · 客户工作区：${result.workspace}`; card.appendChild(objects);
             const caption = document.createElement('p'); caption.textContent = result.working ? (result.is_current?'后续设计继续更新同一个工作 MDB。发布后下一轮设计自动备份上一版，最多保留 10 个版本。':'这是历史设计版本。后续设计请使用当前工作 MDB。') : '准备 Designer 可打开的 MDB 文件。'; card.appendChild(caption);
@@ -687,7 +688,9 @@
                     const note = document.createElement('p'); note.textContent = `准备失败：${error.message}`; status.appendChild(note); button.textContent = '重试在 Designer 中查看';
                 } finally { reviewPreparing = false; updateControls(); scrollToBottom(); }
             });
-            messagesDiv.insertBefore(card, typingIndicator); updateControls(); scrollToBottom();
+            if (sameResult) previous.replaceWith(card);
+            else { previous?.remove(); messagesDiv.insertBefore(card, typingIndicator); scrollToBottom(); }
+            updateControls();
         }
 
         function renderReviewReceipt(status, receipt, result) {
@@ -702,7 +705,7 @@
 
         function excelPreviewStatus(id,status) {
             const card=Array.from(messagesDiv.querySelectorAll('[data-excel-preview]')).find(node=>node.dataset.excelPreview===id);
-            if(card){card.querySelector('.excel-preview-status').textContent={pending:'待确认',confirmed:'已确认',cancelled:'已取消'}[status]||status;card.querySelector('.excel-preview-note').textContent=status==='pending'?'输入“确定”或“确认”后开始创建；输入“取消”可停止。':status==='cancelled'?'本批设计已取消。':'本批设计已由人员确认，执行结果请查看后续回复。';}
+            if(card){card.querySelector('.excel-preview-status').textContent={pending:'待确认',confirmed:'已确认',cancelled:'已取消',superseded:'已被新要求替代'}[status]||status;card.querySelector('.excel-preview-note').textContent=status==='pending'?'可直接输入修改要求更新预览；输入“确定”或“确认”后开始创建；输入“取消”可停止。':status==='cancelled'?'本批设计已取消。':status==='superseded'?'旧方案未执行，请核对按新要求生成的预览。':'本批设计已由人员确认，执行结果请查看后续回复。';}
             if(pendingExcelPreview?.id===id&&status!=='pending')pendingExcelPreview=null;
             renderAttachmentDrafts();updateControls();
         }

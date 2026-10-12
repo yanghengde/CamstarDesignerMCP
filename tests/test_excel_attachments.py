@@ -245,7 +245,7 @@ def test_upload_to_graph_to_design_tool_and_reload_history(api, design_runtime, 
     pending = api.get(f'/history/user?session_id={session}').json()['pending_excel_preview']
     assert pending['rows'][1]['max_length'] == 300
     assert pending['object_count'] == pending['field_count'] == 1
-    for ambiguous in ['继续', '好的', '确认，但先别创建', '修改长度为 400']:
+    for ambiguous in ['继续', '好的', '继续。', '好的。', 'YES!']:
         repeated = api.post('/chat', json={'username':'user', 'session_id':session, 'message':ambiguous})
         assert 'excel_preview' in repeated.text and not calls
     other = api.post('/sessions/user/new').json()['session_id']
@@ -328,3 +328,162 @@ def test_preview_matches_generic_field_defaults_and_keeps_operation_details():
     assert preview['rows'][1]['details']['function_ids'] == [2, 1]
     changed = {**call, 'id': 'another-batch'}
     assert excel_preview.fingerprint(changed) not in preview['call_fingerprints']
+
+
+@pytest.fixture
+def revision_runtime(monkeypatch):
+    calls, requests = [], []
+
+    async def title(_):
+        return '连续修正设计'
+
+    async def tool(**kwargs):
+        calls.append(kwargs)
+        return {'status': 'saved_to_test_copy_and_exported', 'modified_mdb': 'test-copy.mdb'}
+
+    async def create(**kwargs):
+        messages = kwargs['messages']
+        requests.append(messages)
+        latest = next(item['content'] for item in reversed(messages) if item['role'] == 'user')
+        # Check the actual API contract: each interrupted tool call must have a
+        # result before the next user turn can be sent to the model.
+        outstanding = set()
+        for item in messages:
+            if item.get('tool_calls'):
+                assert not outstanding
+                outstanding.update(call['id'] for call in item['tool_calls'])
+            elif item['role'] == 'tool':
+                outstanding.remove(item['tool_call_id'])
+            elif item['role'] == 'user':
+                assert not outstanding
+        assert not outstanding
+        if latest in {'确认', '确定'} or '先别创建' in latest:
+            delta = SimpleNamespace(content='已处理最新要求。', tool_calls=None)
+        else:
+            name = 'AssetTrace_6382' if '6382' in latest else 'AssetTrace_6381'
+            length = 400 if '400' in latest else 200
+            workspace = 300 if '工作区改为 300' in latest else 200
+            args = {'mdb_file': 'base.mdb', 'expected_sha256': 'a' * 64, 'workspace': workspace,
+                    'cdo_name': name, 'parent_cdo': 'NamedDataObject',
+                    'fields': [{'name': 'OwnerEmail', 'data_type': 'String', 'max_length': length}]}
+            index = len(requests)
+            function = SimpleNamespace(name='generate_designer_cdo_package', arguments=json.dumps(args))
+            proposed = [SimpleNamespace(index=0, id=f'design-{index}', function=function)]
+            if index == 1:
+                proposed.append(SimpleNamespace(index=1, id='stale-read', function=SimpleNamespace(
+                    name='get_designer_environment', arguments='{}')))
+            delta = SimpleNamespace(content=None, tool_calls=proposed)
+        async def chunks():
+            yield SimpleNamespace(choices=[SimpleNamespace(delta=delta)])
+        return chunks()
+
+    monkeypatch.setattr(llm_client, 'generate_title', title)
+    monkeypatch.setattr(runtime, '_client', SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create))))
+    monkeypatch.setattr(runtime, '_graph', runtime._build_graph(InMemorySaver()))
+    monkeypatch.setattr(runtime, 'get_tool_func', lambda name: tool)
+    monkeypatch.setattr(runtime, 'record_perf', lambda *args, **kwargs: None)
+    monkeypatch.setattr(runtime, 'record_tool_outcome', lambda **kwargs: None)
+    monkeypatch.setattr(runtime, 'build_runtime_experience_context', lambda *args: '')
+    return calls, requests
+
+
+@pytest.mark.parametrize(('revision', 'name', 'length', 'workspace'), [
+    ('AssetTrace_6381换成6382，请继续', 'AssetTrace_6382', 200, 200),
+    ('修改长度为 400', 'AssetTrace_6381', 400, 200),
+    ('确认，但工作区改为 300', 'AssetTrace_6381', 200, 300),
+])
+def test_pending_design_replans_latest_request_before_any_write(api, revision_runtime, revision, name, length, workspace):
+    calls, requests = revision_runtime
+    session = api.post('/sessions/user/new').json()['session_id']
+    attachment = upload(api, session).json()
+    api.post('/chat', json={'username': 'user', 'session_id': session, 'message': '按附件创建', 'attachment_ids': [attachment['id']]})
+    old = api.get(f'/history/user?session_id={session}').json()['pending_excel_preview']
+    response = api.post('/chat', json={'username': 'user', 'session_id': session, 'message': revision})
+    assert 'message_saved' in response.text and 'superseded' in response.text
+    history = api.get(f'/history/user?session_id={session}').json()
+    new = history['pending_excel_preview']
+    assert new['id'] != old['id'] and not calls and len(requests) == 2
+    assert new['objects'][0]['name'] == name
+    assert new['rows'][1]['max_length'] == length
+    assert new['targets'][0]['workspace'] == workspace
+    assert any(m['role'] == 'user' and m['content'] == revision for m in history['messages'])
+    assert any(m.get('excel_preview', {}).get('id') == old['id'] and m['excel_preview']['status'] == 'superseded'
+               for m in history['messages'])
+    api.post('/chat', json={'username': 'user', 'session_id': session, 'message': '确认'})
+    assert len(calls) == 1 and calls[0]['cdo_name'] == name
+    assert calls[0]['fields'][0]['max_length'] == length and calls[0]['workspace'] == workspace
+
+
+def test_request_to_wait_supersedes_pending_design_without_writing(api, revision_runtime):
+    calls, _ = revision_runtime
+    session = api.post('/sessions/user/new').json()['session_id']
+    attachment = upload(api, session).json()
+    api.post('/chat', json={'username': 'user', 'session_id': session, 'message': '按附件创建', 'attachment_ids': [attachment['id']]})
+    api.post('/chat', json={'username': 'user', 'session_id': session, 'message': '确认，但先别创建'})
+    assert not calls
+    assert api.get(f'/history/user?session_id={session}').json()['pending_excel_preview'] is None
+
+
+def test_non_excel_approval_replans_without_reusing_old_approval(api, revision_runtime, monkeypatch):
+    from agent import safety
+    monkeypatch.setattr(safety, 'SAFE_CREATE_THRESHOLD', 0)
+    calls, requests = revision_runtime
+    session = api.post('/sessions/user/new').json()['session_id']
+    api.post('/chat', json={'username': 'user', 'session_id': session, 'message': '创建 AssetTrace_6381'})
+    response = api.post('/chat', json={'username': 'user', 'session_id': session, 'message': 'AssetTrace_6381换成6382，请继续'})
+    assert not calls and len(requests) == 2
+    assert '安全确认' in response.text
+    api.post('/chat', json={'username': 'user', 'session_id': session, 'message': '确认'})
+    assert len(calls) == 1 and calls[0]['cdo_name'] == 'AssetTrace_6382'
+    history = api.get(f'/history/user?session_id={session}').json()['messages']
+    assert history[-2] == {'role': 'user', 'content': '确认'}
+
+
+def test_correction_is_saved_even_if_replanning_model_fails(api, revision_runtime, monkeypatch):
+    calls, _ = revision_runtime
+    session = api.post('/sessions/user/new').json()['session_id']
+    attachment = upload(api, session).json()
+    api.post('/chat', json={'username': 'user', 'session_id': session, 'message': '按附件创建', 'attachment_ids': [attachment['id']]})
+
+    async def broken_model(**kwargs):
+        raise RuntimeError('model unavailable')
+
+    monkeypatch.setattr(runtime._client.chat.completions, 'create', broken_model)
+    revision = 'AssetTrace_6381换成6382，请继续'
+    response = api.post('/chat', json={'username': 'user', 'session_id': session, 'message': revision})
+    assert 'message_saved' in response.text and 'superseded' in response.text and 'model unavailable' in response.text
+    assert not calls
+    memory.init_memory()
+    history = api.get(f'/history/user?session_id={session}').json()
+    assert history['pending_excel_preview'] is None
+    assert history['messages'][-1] == {'role': 'user', 'content': revision}
+    assert any(item.get('excel_preview', {}).get('status') == 'superseded' for item in history['messages'])
+
+
+def test_revised_preview_survives_restart_and_multiple_corrections(isolated_store, revision_runtime, monkeypatch):
+    from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+    calls, _ = revision_runtime
+    session = memory.create_session('user')
+    attachment = excel.save_attachment(workbook_bytes(), '设计.xlsx', 'user', session)
+    documents = excel.resolve_attachments([attachment['id']], 'user', session)
+
+    async def send(message, attachments=None):
+        return [event async for event in runtime.langgraph_chat_stream('user', message, session, attachments)]
+
+    async def run():
+        checkpoint_file = str(isolated_store / 'revisions.sqlite')
+        async with AsyncSqliteSaver.from_conn_string(checkpoint_file) as saver:
+            monkeypatch.setattr(runtime, '_graph', runtime._build_graph(saver))
+            await send('按附件创建', documents)
+            await send('AssetTrace_6381换成6382，请继续')
+        memory.init_memory()
+        async with AsyncSqliteSaver.from_conn_string(checkpoint_file) as saver:
+            monkeypatch.setattr(runtime, '_graph', runtime._build_graph(saver))
+            snapshot = await runtime._graph.aget_state(runtime._graph_config('user', session))
+            assert runtime._first_interrupt_value(snapshot)['excel_preview']['objects'][0]['name'] == 'AssetTrace_6382'
+            await send('AssetTrace_6382 保留，长度改为 400')
+            assert not calls
+            await send('确定')
+            assert len(calls) == 1 and calls[0]['cdo_name'] == 'AssetTrace_6382'
+            assert calls[0]['fields'][0]['max_length'] == 400
+    asyncio.run(run())

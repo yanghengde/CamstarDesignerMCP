@@ -29,7 +29,7 @@ from agent.experience import (
     build_runtime_experience_context,
     record_tool_outcome,
 )
-from agent.prompts import USER_FACING_LANGUAGE_RULE
+from agent.prompts import CONVERSATION_INTENT_RULE, USER_FACING_LANGUAGE_RULE
 from agent.safety import (
     MutationCounts,
     approval_prompt,
@@ -156,12 +156,14 @@ async def _agent_node(state: AgentState) -> dict[str, Any]:
         }
         insert_at = 1 if model_messages and model_messages[0].get("role") == "system" else 0
         model_messages.insert(insert_at, language_message)
+        # Apply current intent rules even when resuming an older checkpoint.
+        model_messages.insert(insert_at + 1, {"role": "system", "content": CONVERSATION_INTENT_RULE})
         if experience_context:
             context_message = {
                 "role": "system",
                 "content": experience_context,
             }
-            model_messages.insert(insert_at + 1, context_message)
+            model_messages.insert(insert_at + 2, context_message)
 
         response_stream = await _client.chat.completions.create(
             model=LLM_MODEL,
@@ -269,8 +271,34 @@ def _policy_node(state: AgentState) -> dict[str, Any]:
             "categories": list(decision.categories),
         }
     )
+    if isinstance(approval, dict) and approval.get("revision") is True:
+        messages = (excel_preview.attach_preview(state.get('messages', []), {**preview, 'status': 'superseded'}, pending)
+                    if preview else list(state.get('messages', [])))
+        # Close every old tool call before adding the new user turn. The model
+        # must see valid tool-call pairs and must not retry the superseded batch.
+        for call in pending:
+            messages.append({
+                "role": "tool", "tool_call_id": call.get('id', 'unknown'),
+                "name": (call.get('function') or {}).get('name', 'unknown'),
+                "content": "旧方案因用户补充要求已作废，本调用未执行。请按最新要求重新核对并生成预览。",
+            })
+        response = approval['response']
+        messages.append({'role': 'user', 'content': response})
+        legacy_messages = get_user_messages(state['username'], state['session_id'])
+        legacy_messages[:] = messages
+        save_user_session(state['username'], state['session_id'])
+        writer = get_stream_writer()
+        if preview:
+            writer({'type': 'excel_preview_status', 'id': preview['id'], 'status': 'superseded'})
+        writer({'type': 'message_saved', 'session_id': state['session_id']})
+        return {
+            "messages": messages, "request_message": response, "loop_count": 0,
+            "pending_tool_calls": [], "final_reply": "", "stop_reason": "replan",
+            "approval_granted": False, "excel_approved_calls": [], "excel_confirmation_response": '',
+        }
     if isinstance(approval, dict) and approval.get("approved") is True:
-        update = {"approval_granted": state.get('approval_granted', False) or decision.requires_approval}
+        update = {"approval_granted": state.get('approval_granted', False) or decision.requires_approval,
+                  "excel_confirmation_response": approval.get('response', '')}
         if preview:
             if not excel_preview.confirmation(approval.get('response', '')):
                 raise ValueError('Excel 设计需要人员输入“确定”或“确认”')
@@ -291,7 +319,7 @@ def _policy_node(state: AgentState) -> dict[str, Any]:
                 "content": "Action cancelled by the user before execution.",
             }
         )
-    if preview and isinstance(approval, dict):
+    if isinstance(approval, dict):
         cancelled_messages.append({'role': 'user', 'content': approval.get('response', '取消')})
     reply = "已取消本次 Excel 设计，尚未写入 Designer。" if preview else "已取消本次待确认操作，未继续执行被拦截的工具。"
     cancelled_messages.append({"role": "assistant", "content": reply})
@@ -304,6 +332,8 @@ def _policy_node(state: AgentState) -> dict[str, Any]:
 
 
 def _route_after_policy(state: AgentState) -> str:
+    if state.get("stop_reason") == "replan":
+        return "agent"
     return "execute_tool" if state.get("pending_tool_calls") else END
 
 
@@ -475,9 +505,11 @@ async def _sync_legacy_messages(
 ) -> AgentState:
     snapshot = await _graph.aget_state(graph_config)
     state: AgentState = snapshot.values
-    if not _has_interrupt(snapshot) and state.get("messages"):
+    if state.get("messages"):
         legacy_messages = get_user_messages(username, session_id)
-        legacy_messages[:] = state["messages"]
+        preview = (_first_interrupt_value(snapshot) or {}).get('excel_preview')
+        legacy_messages[:] = (excel_preview.attach_preview(state["messages"], preview, state.get('pending_tool_calls', []))
+                              if preview else state["messages"])
         save_user_session(username, session_id)
     return state
 
@@ -537,13 +569,26 @@ async def langgraph_chat_stream(
             except Exception as exc:
                 yield _sse({"type": "error", "message": f"工作流取消失败: {exc}"})
                 return
-        else:
+        elif is_explicit_confirmation(message) or message.strip(' \t\r\n，。！？、,.!?;；:：') in {'', '好的', '好'}:
             prompt = interrupt_value.get(
                 "message",
                 "当前有操作等待确认。请回复明确的确认指令，或回复“取消执行”。",
             )
             yield _sse({"type": "done", "reply": prompt, 'excel_preview': interrupt_value.get('excel_preview')})
             return
+        else:
+            try:
+                async for event in _stream_graph(
+                    Command(resume={"revision": True, "response": message}), graph_config,
+                ):
+                    yield event
+            except asyncio.CancelledError:
+                await _sync_legacy_messages(username, actual_session_id, graph_config)
+                raise
+            except Exception as exc:
+                await _sync_legacy_messages(username, actual_session_id, graph_config)
+                yield _sse({"type": "error", "message": f"工作流调整失败: {exc}"})
+                return
     else:
         record = {"role": "user", "content": message + attachment_context(attachments or [])}
         if attachments:
@@ -610,6 +655,7 @@ async def langgraph_chat_stream(
 
     final_snapshot = await _graph.aget_state(graph_config)
     if _has_interrupt(final_snapshot):
+        await _sync_legacy_messages(username, actual_session_id, graph_config)
         interrupt_value = _first_interrupt_value(final_snapshot) or {}
         yield _sse(
             {
