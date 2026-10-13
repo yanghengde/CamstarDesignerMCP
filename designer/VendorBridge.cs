@@ -616,8 +616,19 @@ public static class DesignerVendorBridge {
                    "coverage","field maps, direct event bindings and inherited overrides; expressions and runtime usage require Designer review");
       } else {
        if(method==null) throw new ArgumentException("Official where-used method unavailable for this kind");
-       var references=Values(method.Invoke(obj,new object[]{false}));
-       result=Dict("where_used",references.Take(100).Select(Record).ToArray(),"total",references.Count,"truncated",references.Count>100);
+       var used=method.Invoke(obj,new object[]{false});
+       var table=used as System.Data.DataTable;
+       if(table!=null) {
+        // This SDK returns tabular references for FieldDefinition.GetWhereUsed.
+        // Preserve its actual columns; a DataTable is not an IEnumerable.
+        var rows=table.Rows.Cast<System.Data.DataRow>().Take(100).Select(row=>
+         table.Columns.Cast<System.Data.DataColumn>().ToDictionary(column=>column.ColumnName,
+          column=>row.IsNull(column) ? null : Scalar(row[column]))).ToArray();
+        result=Dict("where_used",rows,"total",table.Rows.Count,"truncated",table.Rows.Count>100);
+       } else {
+        var references=Values(used);
+        result=Dict("where_used",references.Take(100).Select(Record).ToArray(),"total",references.Count,"truncated",references.Count>100);
+       }
       }
      } else {
       var record=Record(obj); if(obj is CDODefinition) {

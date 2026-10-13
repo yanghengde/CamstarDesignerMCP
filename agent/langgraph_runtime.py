@@ -353,6 +353,8 @@ def _policy_node(state: AgentState) -> dict[str, Any]:
         return revised
     pending = state.get("pending_tool_calls", [])
     creation_checks = []
+    if state.get('task_context'):
+        state = {**state, 'task_context': chat_context.update_task(state['task_context'], '', [])}
     if not state.get('task_context'):
         task = chat_context.update_task({}, '', state.get('messages', []))
         state = {**state, 'task_context': chat_context.update_task(task, '', [], pending)}
@@ -391,6 +393,11 @@ def _policy_node(state: AgentState) -> dict[str, Any]:
             return _reject_plan(state, '\n'.join(preflight_error(report) for report in rejected))
     except (ValueError, TypeError, KeyError) as exc:
         return _reject_plan(state, f'参数校验未通过，尚未调用设计后端：{exc}')
+    # A rejected mutation may leave high cumulative attempt counts behind.
+    # Reads needed to diagnose it must not ask for mutation approval, nor mark
+    # the rejected proposed plan as validated just because a read is valid.
+    if pending and all(chat_intent.read_only_tool((call.get('function') or {}).get('name', '')) for call in pending):
+        return {'task_context': state.get('task_context', {})}
     if not state.get('read_only') and state.get('task_context', {}).get('proposed_plan'):
         state = {**state, 'task_context': {**state['task_context'], 'validated_plan': state['task_context']['proposed_plan']}}
     design_calls = [call for call in pending if (call.get('function') or {}).get('name') in excel_preview.DESIGN_TOOLS

@@ -7,6 +7,55 @@ import re
 import config
 
 API_KEYS = {'role', 'content', 'tool_calls', 'tool_call_id', 'name'}
+TASK_CONSTRAINT_VERSION = 2
+
+
+def _object_names(task):
+    names = set()
+    for key in ('validated_plan', 'prior_plan', 'proposed_plan'):
+        for plan in task.get(key, []):
+            args = plan.get('arguments', {})
+            if plan.get('tool') == 'generate_designer_cdo_package':
+                names.add(str(args.get('cdo_name', '')).casefold())
+            elif plan.get('tool') == 'generate_designer_design_package':
+                names.update(str(op.get('name', '')).casefold() for op in args.get('operations', [])
+                             if op.get('action') == 'create_cdo')
+    return names - {''}
+
+
+def _object_rename(text, task, *, restoring=False):
+    """Only promote an object-scoped edit to the hard CDO-name constraint."""
+    known = _object_names(task)
+    result = None
+    pattern = r'(?<![A-Za-z0-9_])([A-Za-z_][A-Za-z0-9_]*)\s*(?:换成|改成|改为)\s*([A-Za-z_][A-Za-z0-9_]*|\d+)'
+    for match in re.finditer(pattern, text):
+        old, new = match.groups()
+        clause = re.split(r'[，。；;,\n]', text[:match.start()])[-1]
+        if re.search(r'字段|类型|父对象|表名|工作区|不要|不需要|别|为什么|为何', clause):
+            continue
+        if re.match(r'\s*(?:类型|数据类型|字段类型)', text[match.end():]):
+            continue
+        explicit = re.search(r'(?:对象|CDO)(?:名称|名)?\s*[:：]?\s*$', clause, re.I)
+        if new.isdigit() and re.search(r'\d+$', old):
+            new = re.sub(r'\d+$', new, old)
+        if explicit or old.casefold() in known or (restoring and new.casefold() in known):
+            result = {'from': old, 'to': new, 'request': text}
+    return result
+
+
+def _repair_legacy_constraints(task):
+    if task.get('constraint_version') == TASK_CONSTRAINT_VERSION:
+        return
+    # Older checkpoints promoted every "X 改成 Y" to an object rename. Rebuild
+    # from user requirements and object identities, never from assistant claims.
+    task.pop('required_object_name', None)
+    task.pop('object_rename', None)
+    for request in task.get('requirements', []):
+        rename = _object_rename(request, task, restoring=True)
+        if rename:
+            task['required_object_name'] = rename['to']
+            task['object_rename'] = rename
+    task['constraint_version'] = TASK_CONSTRAINT_VERSION
 
 
 def _brief(value, depth=0):
@@ -50,6 +99,8 @@ def compact_tool(message, index):
 
 def update_task(previous, request, messages, calls=(), reset=False):
     task = deepcopy(previous or {}) if not reset else {}
+    if task:
+        _repair_legacy_constraints(task)
     if request:
         from agent.chat_intent import design_question
         if task and design_question(request) and not reset:
@@ -64,12 +115,10 @@ def update_task(previous, request, messages, calls=(), reset=False):
             task['requires_table'] = False
         elif re.search(r'建表|物理表|表名|一张表|创建[^。\n]*表', text):
             task['requires_table'] = True
-        rename = re.search(r'([A-Za-z][A-Za-z0-9_]+)\s*(?:换成|改成|改为)\s*([A-Za-z0-9_]+)', text)
+        rename = _object_rename(text, task)
         if rename:
-            old, new = rename.groups()
-            if new.isdigit() and re.search(r'\d+$', old):
-                new = re.sub(r'\d+$', new, old)
-            task['required_object_name'] = new
+            task['required_object_name'] = rename['to']
+            task['object_rename'] = rename
         # User constraints are not silently truncated. Reject oversized model
         # context later instead of losing an old requirement or authorization.
     plans = []
@@ -88,6 +137,8 @@ def update_task(previous, request, messages, calls=(), reset=False):
         for message in messages:
             if message.get('role') == 'user':
                 task = update_task(task, message.get('display_content', message.get('content', '')).split('Excel 附件设计数据', 1)[0], [])
+    if task:
+        task['constraint_version'] = TASK_CONSTRAINT_VERSION
     return task
 
 

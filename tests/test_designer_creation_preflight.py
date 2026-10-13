@@ -163,6 +163,14 @@ def test_installed_sdk_schema_denies_generic_relationship_setters(installed_sdk)
         assert properties[name]['editable'] is False
 
 
+def test_installed_sdk_where_used_reads_vendor_datatable(installed_sdk):
+    result = vendor.query(str(installed_sdk), 'impact', 'field_type', '[Integer]')
+    assert result['total'] > 0 and result['where_used']
+    assert result['truncated'] == (result['total'] > 100)
+    assert len(result['where_used']) == min(result['total'], 100)
+    assert all(isinstance(row, dict) and row for row in result['where_used'])
+
+
 @pytest.mark.parametrize('collision', ['maintenance', 'table'])
 def test_installed_sdk_rejects_generated_structure_collisions(installed_sdk, collision):
     operations = ([{'action':'create_cdo','name':'ExDerivedProbeMaint','parent':'Service'},
