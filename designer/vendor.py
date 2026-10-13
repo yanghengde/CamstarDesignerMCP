@@ -18,7 +18,7 @@ KINDS = (
     "column", "index", "map", "label", "label_category", "workspace", "data_type",
     "query_type", "clf_type", "sql_type", "db_type", "storage_category",
     "clf_function", "clf_parameter", "query_text", "query_parameter", "index_entry", "function_parameter",
-    "event_binding", "feature", "field_map",
+    "event_binding", "feature", "field_map", "cdo_usage",
 )
 from designer.operations import CREATE_ACTIONS, DESIGN_ACTIONS
 
@@ -173,6 +173,10 @@ def validate_operations(operations: list[dict]) -> None:
                 raise ValueError("patch 需要 kind/name/changes")
             if not isinstance(op.get("expected"), dict) or not set(op["changes"]).issubset(op["expected"]):
                 raise ValueError("每个修改属性都必须提供 expected 原值")
+            protected = {'cdousagemask', 'cdousagemaskid', 'parentcdo', 'parentcdoname', 'parentcdoid',
+                         'storagecategoryname', 'storagecategoryid'}
+            if op['kind'] == 'cdo' and any(key.casefold() in protected for key in op['changes']):
+                raise ValueError('对象用途、父对象和存储类别不能通过 patch 修改；使用官方创建或 change_parent/change_storage_category 专用流程')
             for key in ("Name", "FieldName", "FieldDefName"):
                 if key in op["changes"]:
                     identifier(op["changes"][key])
@@ -181,6 +185,72 @@ def validate_operations(operations: list[dict]) -> None:
         if action in {'replace_clf_function', 'remove_clf_function', 'set_clf_parameter'}:
             if isinstance(op['call_id'], bool) or not isinstance(op['call_id'], int) or op['call_id'] < 1:
                 raise ValueError('call_id 必须为实际读取的正整数')
+
+
+def preflight(mdb_file: str, expected_sha256: str, operations: list[dict], workspace: str = '') -> dict:
+    """Run vendor factories on an isolated graph; never save or commit a design."""
+    if operations:
+        validate_operations(operations)
+    elif operations != []:
+        raise ValueError('operations 必须为设计操作列表')
+    from designer import working, read_cache
+    source = working.resolve(mdb_file)
+    before = digest(source)
+    if before != expected_sha256:
+        raise ValueError('来源 MDB SHA256 不匹配，请重新读取设计定义')
+    dll = assembly()
+    dll_hash = digest(dll)
+    bridge = Path(__file__).with_name('VendorBridge.cs')
+    bridge_hash = digest(bridge)
+    workspace = select_workspace(source, workspace)
+    request = {'mode': 'preflight', 'workspace': workspace, 'operations': operations}
+    key = read_cache.identity(source, before, dll, request)
+    result = read_cache.load(key)
+    if result is not None:
+        if digest(source) != before or digest(dll) != dll_hash or digest(bridge) != bridge_hash:
+            raise ValueError('预检期间来源 MDB 已变化')
+        return result
+    folder = artifact_dir()
+    private = folder / 'read.mdb'
+    try:
+        shutil.copyfile(source, private)
+        if digest(private) != before or digest(source) != before or digest(dll) != dll_hash or digest(bridge) != bridge_hash:
+            raise ValueError('预检复制期间来源 MDB 已变化')
+        result = run(folder, {**request, 'mdb': str(private)})
+        if digest(private) != before or digest(source) != before or digest(dll) != dll_hash or digest(bridge) != bridge_hash:
+            raise ValueError('只读预检修改了 MDB 或来源已变化，拒绝使用结果')
+        if (result.get('complete') is not True or not isinstance(result.get('conflicts'), list)
+                or not isinstance(result.get('ready'), bool) or not isinstance(result.get('objects'), list)):
+            raise ValueError('厂商创建预检结果不完整')
+        if any(profile.get('complete') is not True or profile.get('total_fields') != len(profile.get('fields', []))
+               for profile in result['objects']):
+            raise ValueError('厂商基础字段列表不完整，不能用于冲突预检')
+        result = {**result, 'source_file': str(source), 'source_sha256': before,
+                  'vendor_assembly_sha256': dll_hash, 'bridge_sha256': bridge_hash, 'read_only': True}
+        read_cache.save(key, result)
+        return result
+    finally:
+        private.unlink(missing_ok=True)
+
+
+def preflight_error(result: dict) -> str:
+    lines = []
+    for conflict in result['conflicts'][:10]:
+        label = '.'.join(value for value in (conflict.get('owner'), conflict.get('name')) if value)
+        existing = conflict.get('existing')
+        detail = ''
+        if existing:
+            detail = (f"已有字段来自 {existing['origin']}，{existing['field_type']} ({existing['data_type']})，"
+                      f"长度/精度 {existing['precision']}，小数位 {existing['scale']}，"
+                      f"持久化 {'是' if existing['persistent'] else '否'}，列表 {'是' if existing['is_list'] else '否'}")
+            if existing['system_field']:
+                detail += '，属于系统用途字段'
+            requested = conflict['requested']
+            detail += (f"；请求 {requested['field_type']} ({requested['data_type']})，长度/精度 {requested['precision']}，"
+                       f"小数位 {requested['scale']}，持久化 {'是' if requested['persistent'] else '否'}，"
+                       f"列表 {'是' if requested['is_list'] else '否'}。")
+        lines.append(f"{label}：{detail}{conflict['message']}")
+    return '创建预检未通过，尚未保存 Designer：' + '\n'.join(lines)
 
 
 def export(folder: Path, baseline: Path, modified: Path) -> dict:
@@ -214,6 +284,10 @@ def _design(mdb_file: str, expected_sha256: str, workspace: str, operations: lis
     before = digest(source)
     if before != expected_sha256:
         raise ValueError("来源 MDB SHA256 不匹配，请重新读取设计定义")
+    if any(op['action'] in {'create_cdo', 'add_field'} for op in operations):
+        inspected = preflight(mdb_file, expected_sha256, operations, workspace)
+        if not inspected['ready']:
+            raise ValueError(preflight_error(inspected))
     if work_state.get('server_mdb'):
         from designer import review
         review.assert_server_unchanged(work_state)

@@ -202,6 +202,7 @@ def test_registry_contains_only_designer_and_scoped_chat_tools_in_clean_process(
         "export_designer_metadata_diff", "get_mcp_server_status",
         "get_designer_capabilities", "get_designer_catalog", "list_designer_entities",
         "get_designer_entity", "get_designer_entity_schema", "analyze_designer_where_used",
+        "inspect_designer_creation_plan",
         "generate_designer_design_package", "generate_designer_cdo_package", "export_designer_vendor_diff",
         "inspect_designer_database", "prepare_designer_publish_plan",
         "compile_designer_mdb",

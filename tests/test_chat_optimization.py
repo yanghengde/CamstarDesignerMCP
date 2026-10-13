@@ -16,6 +16,43 @@ async def text_stream(text=None, calls=None):
     yield SimpleNamespace(choices=[SimpleNamespace(delta=SimpleNamespace(content=text, tool_calls=calls))])
 
 
+def test_creation_conflicts_are_rejected_before_preview_or_write(api, revision_runtime, monkeypatch):
+    from designer import vendor
+    calls, _ = revision_runtime
+    monkeypatch.setattr(vendor, 'preflight', lambda *args: {
+        'ready': False, 'complete': True, 'objects': [], 'categories': [],
+        'conflicts': [{'owner': 'ExObject', 'name': 'Name', 'message': '已有同名字段来自 NamedDataObject'}]})
+    sid = api.post('/sessions/user/new').json()['session_id']
+    file = upload(api, sid).json()
+    result = api.post('/chat', json={'username': 'user', 'session_id': sid,
+        'message': '按附件创建', 'attachment_ids': [file['id']]})
+    assert '创建预检未通过' in result.text and not calls
+    assert api.get(f'/history/user?session_id={sid}').json()['pending_excel_preview'] is None
+
+
+def test_changed_sdk_invalidates_preview_instead_of_executing_under_old_confirmation(api, revision_runtime, monkeypatch):
+    from designer import vendor
+    calls, _ = revision_runtime
+    sdk = ['original-sdk']
+    monkeypatch.setattr(vendor, 'preflight', lambda *args: {
+        'ready': True, 'complete': True, 'objects': [], 'categories': [], 'conflicts': [],
+        'vendor_assembly_sha256': sdk[0]})
+    sid = api.post('/sessions/user/new').json()['session_id']
+    file = upload(api, sid).json()
+    api.post('/chat', json={'username': 'user', 'session_id': sid,
+        'message': '按附件创建', 'attachment_ids': [file['id']]})
+    old = api.get(f'/history/user?session_id={sid}').json()['pending_excel_preview']
+    sdk[0] = 'changed-sdk'
+    result = api.post('/chat', json={'username': 'user', 'session_id': sid, 'message': '确认'})
+    assert not calls and 'invalid' in result.text
+    history = api.get(f'/history/user?session_id={sid}').json()
+    assert history['pending_excel_preview']['id'] != old['id']
+    assert history['pending_excel_preview']['creation_checks'][0]['vendor_assembly_sha256'] == 'changed-sdk'
+    assert any('原预览已失效' in m.get('content', '') for m in history['messages'])
+    assert any(m.get('excel_preview', {}).get('id') == old['id'] and m['excel_preview']['status'] == 'invalid'
+               for m in history['messages'])
+
+
 def test_million_character_receipts_are_bounded_without_changing_history(monkeypatch):
     monkeypatch.setattr(config, 'CHAT_CONTEXT_CHARS', 16000)
     messages = [{'role': 'system', 'content': '规则'}]
@@ -273,7 +310,8 @@ def test_old_session_uses_current_rules_without_losing_user_requirements(isolate
     assert any(m.get('content') == '需要保留原字段和工作区200' for m in observed)
 
 
-def test_rename_otherwise_unchanged_cannot_drop_a_field(api, revision_runtime, monkeypatch):
+@pytest.mark.parametrize('unchanged', ['其他不变', '其余要求不变'])
+def test_rename_otherwise_unchanged_cannot_drop_a_field(api, revision_runtime, monkeypatch, unchanged):
     calls, _ = revision_runtime
     sid = api.post('/sessions/user/new').json()['session_id']
     attachment = upload(api, sid).json()
@@ -287,5 +325,16 @@ def test_rename_otherwise_unchanged_cannot_drop_a_field(api, revision_runtime, m
         proposal.function.arguments = json.dumps(payload)
         return text_stream(calls=[proposal])
     monkeypatch.setattr(runtime._client.chat.completions, 'create', model)
-    result = api.post('/chat', json={'username': 'user', 'session_id': sid, 'message': 'AssetTrace_6381换成6382，其他不变'})
+    result = api.post('/chat', json={'username': 'user', 'session_id': sid, 'message': 'AssetTrace_6381换成6382，' + unchanged})
     assert not calls and '遗漏或改变了原字段属性' in result.text
+
+
+def test_parent_selection_cannot_be_ignored_by_replanned_creation(api, revision_runtime):
+    calls, _ = revision_runtime
+    sid = api.post('/sessions/user/new').json()['session_id']
+    attachment = upload(api, sid).json()
+    api.post('/chat', json={'username': 'user', 'session_id': sid, 'message': '按附件创建', 'attachment_ids': [attachment['id']]})
+    result = api.post('/chat', json={'username': 'user', 'session_id': sid,
+        'message': '将 AssetTrace_6381 的父对象改为 Product，其余要求不变，请重新预检并生成预览。'})
+    assert not calls and '当前计划没有应用此选择' in result.text
+    assert api.get(f'/history/user?session_id={sid}').json()['pending_excel_preview'] is None

@@ -49,6 +49,7 @@ async def get_designer_capabilities() -> dict:
             "design_operations": sorted(vendor.DESIGN_ACTIONS),
             "features": {"effective_metadata_read": available, "workspace_and_inheritance": available,
                          "create_cdo": available, "create_field_type": available, "add_field": available,
+                         "creation_preflight_and_inherited_field_conflicts": available,
                          "persistent_field_mapping": available, "property_patch_with_expected_values": available,
                          "official_diff_export": available, "xml_import": False,
                          "native_xml_import_executable_configured": bool(config.DESIGNER_SERVER_IMPORT_EXE),
@@ -174,6 +175,18 @@ async def get_designer_entity_schema(mdb_file: str, kind: str, name: str, owner:
 
 
 @mcp.tool
+async def inspect_designer_creation_plan(mdb_file: str, expected_sha256: str,
+                                          operations: list[DesignOperation], workspace: str = '') -> dict:
+    """只读预检对象创建计划：使用厂商工厂在隔离内存中推演，不保存 MDB 或发布数据库。
+
+    operations=[] 时读取常用类别、真实父对象及基础字段数量。传入完整有序操作时，返回完整基础字段、系统字段、派生对象/表、同批及继承重名冲突。
+    ready=false 时先向用户说明冲突；不能静默跳过、改名或覆盖。类型/长度相符仍需明确复用并移除新增操作。
+    """
+    operations = [op.model_dump(exclude_unset=True) if isinstance(op, DesignOperation) else op for op in operations]
+    return await asyncio.to_thread(vendor.preflight, mdb_file, expected_sha256, operations, workspace)
+
+
+@mcp.tool
 async def analyze_designer_where_used(mdb_file: str, kind: str, name: str, owner: str = "") -> dict:
     """调用厂商GetWhereUsed追踪定义引用者，最多100条；没有该方法的设计类型会明确返回错误。"""
     return await asyncio.to_thread(vendor.query, mdb_file, "impact", kind, name, owner)
@@ -221,16 +234,21 @@ async def generate_designer_design_package(mdb_file: str, expected_sha256: str, 
 @mcp.tool
 async def generate_designer_cdo_package(
     mdb_file: str, expected_sha256: str, cdo_name: str, parent_cdo: str,
-    fields: list[dict], workspace: str = "", description: str = "",
+    fields: list[dict], workspace: str = "", description: str = "", create_table: bool = False,
+    table_name: str = '', table_description: str = '', create_revision_base: bool = False, create_maintenance: bool = False,
 ) -> dict:
     """创建继承CDO和字段并更新固定工作MDB，生成官方XML，不需要现有XML模板。例如ExProduct继承Product，ExDescription为String/max_length=200。
 
     fields每项{name,data_type,max_length,field_type,persistent,is_list,description}。
     String必须指定max_length；省略field_type时创建专用类型，避免改变共享类型。
     使用已有field_type时只引用它，不能同时更改长度。persistent默认true，厂商创建存储列；可明确指定false。
+    create_table/table_name/table_description、create_revision_base、create_maintenance 明确控制厂商派生结构，默认均不启用。
+    创建前执行官方只读预检，继承字段或派生名称冲突会拒绝保存。
     """
     from designer.design_contract import cdo_operations
-    operations = cdo_operations(cdo_name, parent_cdo, fields, description)
+    operations = cdo_operations(cdo_name, parent_cdo, fields, description, create_table=create_table,
+        table_name=table_name, table_description=table_description, create_revision_base=create_revision_base,
+        create_maintenance=create_maintenance)
     return await asyncio.to_thread(vendor.design, mdb_file, expected_sha256, workspace, operations)
 
 

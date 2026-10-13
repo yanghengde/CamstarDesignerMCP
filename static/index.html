@@ -161,6 +161,16 @@
         .excel-preview-table th,.excel-preview-table td { padding:9px 10px; border-bottom:1px solid var(--border); text-align:left; white-space:nowrap; }
         .excel-preview-table th { background:#f3f7f5; color:var(--secondary); font-weight:500; position:sticky; top:0; }
         .excel-preview-source { color:var(--secondary); font-size:11px; margin:10px 0; }
+        .creation-profiles { display:grid; gap:10px; margin:12px 0; }
+        .creation-profile { border:1px solid var(--border); border-radius:8px; padding:12px; background:#fafbfb; }
+        .creation-profile strong { display:block; font-size:12px; margin-bottom:6px; }
+        .creation-profile p { font-size:11px; color:var(--secondary); line-height:1.8; }
+        .creation-parent { max-width:100%; margin:8px 0; padding:6px 8px; border:1px solid #dce2e5; border-radius:6px; background:white; color:var(--text); font:inherit; font-size:11px; }
+        .creation-profile details { margin-top:6px; font-size:11px; color:var(--secondary); }
+        .creation-profile summary { cursor:pointer; }
+        .creation-fields { overflow:auto; max-height:260px; margin-top:8px; }
+        .creation-fields table { width:100%; border-collapse:collapse; font-size:11px; }
+        .creation-fields th,.creation-fields td { padding:6px 8px; border-bottom:1px solid var(--border); text-align:left; white-space:nowrap; }
         .excel-preview-source summary { cursor:pointer; }
         .excel-preview-source code { display:block; padding:7px 0; overflow-wrap:anywhere; white-space:pre-wrap; }
         .upload-status { color: var(--teal); font-size: 11px; margin-bottom: 10px; }
@@ -437,6 +447,9 @@
             sendBtn.hidden = showStop;
             stopBtn.hidden = !showStop;
             stopBtn.disabled = navigationLocked;
+            document.querySelectorAll('.creation-parent').forEach(select => {
+                select.disabled = locked || select.closest('[data-excel-preview]').dataset.excelPreview !== pendingExcelPreview?.id;
+            });
             messagesDiv.setAttribute('aria-busy', String(locked));
         }
 
@@ -798,10 +811,37 @@
             if(pendingExcelPreview?.id===id&&status!=='pending')pendingExcelPreview=null;
             renderAttachmentDrafts();updateControls();
         }
+        function creationProfiles(preview) {
+            const area=document.createElement('div');area.className='creation-profiles';
+            for(const check of preview.creation_checks||[])for(const profile of check.objects||[]) {
+                const panel=document.createElement('section');panel.className='creation-profile';
+                const title=document.createElement('strong');title.textContent=`${profile.name} · ${profile.category}`;panel.appendChild(title);
+                const basis=document.createElement('p');basis.textContent=`父对象 ${profile.parent} · ${profile.total_fields} 个基础字段 · 存储类别 ${profile.storage_category}`;panel.appendChild(basis);
+                const generated=document.createElement('p');generated.textContent=[profile.create_table?`新表 ${(profile.tables||[]).join('、')||'由厂商生成'}`:'存储按厂商继承规则处理',profile.create_revision_base?'生成 Revision Base':'不新增 Revision Base',profile.create_maintenance?'生成 Maintenance':'不新增 Maintenance'].join(' · ');panel.appendChild(generated);
+                if(profile.related_objects?.length){const related=document.createElement('p');related.textContent=`派生对象：${profile.related_objects.map(item=>item.name).join('、')}`;panel.appendChild(related);}
+                const select=document.createElement('select');select.className='creation-parent';select.setAttribute('aria-label',`变更 ${profile.name} 的对象类别和父对象`);
+                const current=document.createElement('option');current.value=profile.parent;current.textContent=`当前：${profile.category} · ${profile.parent}`;select.appendChild(current);
+                for(const option of check.categories||[]){if(option.parent===profile.parent)continue;const node=document.createElement('option');node.value=option.parent;node.textContent=`${option.category} · ${option.parent} · ${option.total_fields} 个基础字段`;select.appendChild(node);}
+                select.value=profile.parent;select.disabled=preview.status!=='pending';
+                select.addEventListener('change',()=>{
+                    const parent=select.value;select.value=profile.parent;
+                    input.value=`将 ${profile.name} 的父对象改为 ${parent}，其余要求不变，请重新预检并生成预览。`;
+                    input.dispatchEvent(new Event('input'));input.focus();showNotice('父对象变更已放入输入框，发送后会生成新的预览；当前方案尚未更改。');
+                });panel.appendChild(select);
+                const details=document.createElement('details');const summary=document.createElement('summary');summary.textContent=`查看全部 ${profile.total_fields} 个基础字段（含系统字段）`;details.appendChild(summary);
+                const scroll=document.createElement('div');scroll.className='creation-fields';const table=document.createElement('table');const head=table.createTHead().insertRow();
+                for(const label of ['字段','类型','长度 / 精度','持久化','列表','来源','用途']){const th=document.createElement('th');th.textContent=label;head.appendChild(th);}
+                const body=table.createTBody();for(const field of profile.fields||[]){const row=body.insertRow();const precision=field.precision|| (field.data_type==='String'?'产品默认':'—');for(const value of [field.name,field.field_type,precision,field.persistent?'是':'否',field.is_list?'是':'否',field.origin,field.system_field?`系统 · ${field.field_usage}`:'基础字段'])row.insertCell().textContent=value;}
+                scroll.appendChild(table);details.appendChild(scroll);panel.appendChild(details);area.appendChild(panel);
+            }
+            return area;
+        }
+
         function showExcelPreview(preview) {
-            const card=document.createElement('section');card.className='excel-design-preview';card.dataset.excelPreview=preview.id;card.setAttribute('aria-label','Excel 设计预览');
-            const heading=document.createElement('div');heading.className='excel-preview-heading';const title=document.createElement('strong');title.textContent='Excel 设计预览';const status=document.createElement('span');status.className='excel-preview-status';heading.append(title,status);card.appendChild(heading);
-            const meta=document.createElement('p');meta.className='excel-preview-meta';meta.textContent=`${preview.attachments.map(item=>item.name).join('、')} · ${preview.object_count} 个新对象 · ${preview.field_count} 个字段`;card.appendChild(meta);
+            const card=document.createElement('section');card.className='excel-design-preview';card.dataset.excelPreview=preview.id;card.setAttribute('aria-label',preview.attachments.length?'Excel 设计预览':'对象设计预览');
+            const heading=document.createElement('div');heading.className='excel-preview-heading';const title=document.createElement('strong');title.textContent=preview.attachments.length?'Excel 设计预览':'对象设计预览';const status=document.createElement('span');status.className='excel-preview-status';heading.append(title,status);card.appendChild(heading);
+            const meta=document.createElement('p');meta.className='excel-preview-meta';meta.textContent=[preview.attachments.map(item=>item.name).join('、'),`${preview.object_count} 个新对象`,`${preview.field_count} 个新增字段`].filter(Boolean).join(' · ');card.appendChild(meta);
+            card.appendChild(creationProfiles(preview));
             const scroll=document.createElement('div');scroll.className='excel-preview-table';const table=document.createElement('table');const head=table.createTHead().insertRow();for(const text of ['动作','对象','字段 / 名称','类型','长度','持久化','列表','说明']){const th=document.createElement('th');th.textContent=text;head.appendChild(th);}const body=table.createTBody();
             for(const item of preview.rows){const row=body.insertRow();const yes=value=>value==null?'—':value?'是':'否';const details=[item.parent?`继承 ${item.parent}`:'',item.description,Object.keys(item.details||{}).length?JSON.stringify(item.details):''].filter(Boolean).join(' · ');for(const value of [item.action,item.owner||item.name,item.name,item.data_type||'—',item.max_length===''?'—':item.max_length,yes(item.persistent),yes(item.is_list),details||'—'])row.insertCell().textContent=value;}
             scroll.appendChild(table);card.appendChild(scroll);

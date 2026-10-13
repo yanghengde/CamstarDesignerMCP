@@ -33,7 +33,7 @@ public static class DesignerVendorBridge {
   {"column","DBColumns"},{"index","DBIndexes"},{"query","QueryDefinitions"},{"map","CDOMapDefinitions"},
   {"label","AllLabels"},{"label_category","LabelCategories"},{"workspace","Workspaces"},
   {"data_type","CPPDataTypes"},{"query_type","QueryTypes"},{"clf_type","CLFTypes"},
-  {"sql_type","SQLDataTypes"},{"db_type","DBTypes"},{"storage_category","DBCategories"}
+  {"sql_type","SQLDataTypes"},{"db_type","DBTypes"},{"storage_category","DBCategories"},{"cdo_usage","CDOUsages"}
   ,{"event_binding","CLFEventMaps"},{"feature","InSiteFeatures"}
  };
  static List<object> Objects(MDBMetadataSet set,string kind,string owner) {
@@ -130,12 +130,13 @@ public static class DesignerVendorBridge {
    try { d[p.Name]=Scalar(p.GetValue(o,null)); } catch { /* Report only readable properties. */ }
   } return d;
  }
- static readonly HashSet<string> ReadOnlyKinds=new HashSet<string>(new[]{"workspace","event","feature","data_type","sql_type","db_type","storage_category","query_type","clf_type","label_category"});
+ static readonly HashSet<string> ReadOnlyKinds=new HashSet<string>(new[]{"workspace","event","feature","data_type","sql_type","db_type","storage_category","cdo_usage","query_type","clf_type","label_category"});
  static readonly HashSet<string> Protected=new HashSet<string>(new[]{
   "Metadata","WorkspaceCode","WorkspaceOverride","LowerWorkspaceOverride","OverrideToDelete","ExistsInLowerWorkspace",
   "ModifiedStatus","InheritedID","InheritedField","InheritMask","SequenceNumber","Sequence","CDODefinition","ParentFunctionDefinition",
   "DBTable","ParentCLFDefinition","CDOName","FieldDefId","CPPDataTypeID","CPPDataTypeId","CDODefId","FieldID",
-  "ParentQueryDef","ParentCLFFunction","ParentCLFEventMap","ParentCLFDefintion","CPPDataType","CDOType"
+  "ParentQueryDef","ParentCLFFunction","ParentCLFEventMap","ParentCLFDefintion","CPPDataType","CDOType",
+  "CDOUsageMask","ParentCDO","ParentCDOName","StorageCategoryName"
  });
  static bool Editable(PropertyInfo p) {
   if(!p.CanWrite || Protected.Contains(p.Name) || p.Name.EndsWith("Id",StringComparison.OrdinalIgnoreCase)
@@ -171,6 +172,114 @@ public static class DesignerVendorBridge {
  }
  static void CheckName(MDBMetadataSet set,string kind,string name,string owner) {
   if(Objects(set,kind,owner).Any(x=>String.Equals(Name(x),name,StringComparison.OrdinalIgnoreCase))) throw new ArgumentException("Name already exists: "+name);
+ }
+ static Dictionary<string,object> FieldProfile(CDOField field) {
+  var origin=field; var seen=new HashSet<int>();
+  while(origin.InheritedID!=0 && seen.Add(origin.FieldID) && origin.InheritedField!=null) origin=origin.InheritedField;
+  var type=field.FieldDefinition;
+  return Dict("name",field.FieldName,"field_type",type.FieldDefName,"data_type",type.CPPDataType,
+   "precision",type.PrecisionValue,"scale",type.Scale,"persistent",!field.IsNonPersistent,
+   "is_list",field.IsListType,"origin",origin.CDODefinition.Name,"field_usage",field.CDOFieldUsageName,
+   "system_field",field.CDOFieldUsageId!=0,"description",field.FieldDescription);
+ }
+ static string Category(CDODefinition cdo) {
+  var ancestors=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+  for(var item=cdo;item!=null && ancestors.Add(item.Name);item=item.ParentCDO) {}
+  if(ancestors.Contains("HistoryMainline") || ancestors.Contains("HistoryDetails")) return "历史记录";
+  if(ancestors.Contains("Inquiry")) return "查询服务";
+  if(ancestors.Contains("Service")) return "业务服务";
+  if(ancestors.Contains("Subentity")) return "子实体／明细";
+  if(ancestors.Contains("RevisionedObject")) return "版本化主数据";
+  if(ancestors.Contains("NamedDataObject")) return "命名主数据";
+  return "高级对象";
+ }
+ static Dictionary<string,object> ObjectProfile(CDODefinition cdo) {
+  var fields=cdo.AllFields.Values.OrderBy(f=>f.FieldName,StringComparer.OrdinalIgnoreCase).Select(FieldProfile).ToArray();
+  return Dict("name",cdo.Name,"parent",cdo.ParentCDOName,"category",Category(cdo),
+   "usage",cdo.CDOUsageMask,"usage_id",cdo.CDOUsageMaskId,"storage_category",cdo.StorageCategoryName,
+   "total_fields",fields.Length,"fields",fields,"complete",true);
+ }
+ static string CollisionBeforeFactoryRename(string generated,IEnumerable<string> priorNames) {
+  // The installed factory's GetUniqueCDOName appends _<number> on collision.
+  // Inspect its actual output instead of guessing Maint/Base/Changes templates.
+  foreach(var prior in priorNames) {
+   string prefix=prior+"_"; int suffix;
+   if(generated.StartsWith(prefix,StringComparison.OrdinalIgnoreCase) &&
+      Int32.TryParse(generated.Substring(prefix.Length),out suffix) && suffix>0) return prior;
+  }
+  return null;
+ }
+ static object Preflight(MDBMetadataSet set,Dictionary<string,object> request) {
+  var profiles=new List<object>(); var conflicts=new List<object>();
+  var categories=new List<object>();
+  foreach(var parentName in new[]{"NamedDataObject","RevisionedObject","Subentity","Service","Inquiry","HistoryMainline","HistoryDetails"}) {
+   var candidate=set.CDODefinitions.Values.FirstOrDefault(c=>c.Name.Equals(parentName,StringComparison.OrdinalIgnoreCase));
+   if(candidate!=null) categories.Add(Dict("category",Category(candidate),"parent",candidate.Name,
+    "usage",candidate.CDOUsageMask,"total_fields",candidate.AllFields.Count));
+  }
+  Aliases.Clear(); RemovedIdentities.Clear();
+  int index=0;
+  foreach(var item in (object[])request["operations"]) {
+   index++; var op=Map(item); string action=Text(op,"action"),name=Text(op,"name"),owner=Text(op,"owner");
+   try {
+    if(action=="add_field") {
+     var cdo=(CDODefinition)Find(set,"cdo",owner,"");
+     var existing=cdo.AllFields.Values.FirstOrDefault(f=>f.FieldName.Equals(name,StringComparison.OrdinalIgnoreCase));
+     if(existing!=null) {
+      var type=(FieldDefinition)Find(set,"field_type",Text(op,"field_type"),"");
+      bool compatible=existing.FieldDefinition.CPPDataType==type.CPPDataType && existing.FieldDefinition.PrecisionValue==type.PrecisionValue &&
+       existing.FieldDefinition.Scale==type.Scale && existing.IsListType==Flag(op,"is_list") && !existing.IsNonPersistent==Flag(op,"persistent") &&
+       (type.CPPDataType!="Object" || existing.FieldDefId==type.FieldDefID);
+      conflicts.Add(Dict("operation",index,"kind","field_name","owner",owner,"name",name,
+       "existing",FieldProfile(existing),"requested",Dict("field_type",type.FieldDefName,"data_type",type.CPPDataType,
+        "precision",type.PrecisionValue,"scale",type.Scale,"persistent",Flag(op,"persistent"),"is_list",Flag(op,"is_list")),
+       "compatible_shape",compatible,"message",compatible ? "已有同名字段，类型、精度、持久化和列表属性相符；请明确复用并移除新增操作，不能重复创建。" : "已有同名字段，类型或属性不同；请明确改名或使用允许的客户字段覆盖。"));
+      continue;
+     }
+    }
+    var beforeCDOs=new HashSet<int>(set.CDODefinitions.Keys);
+    var beforeTables=new HashSet<int>(set.DBTableDefinitions.Keys);
+    var beforeCDONames=set.CDODefinitions.Values.Select(c=>c.Name).ToArray();
+    var beforeTableNames=set.DBTableDefinitions.Values.Select(t=>t.Name).ToArray();
+    var target=Apply(set,op);
+    if(action=="create_cdo") {
+     var cdo=(CDODefinition)target;
+     var profile=ObjectProfile(cdo);
+     profile["parent"] = Text(op,"parent");
+     profile["create_table"]=Flag(op,"create_table");
+     profile["create_revision_base"]=Flag(op,"create_revision_base");
+     profile["create_maintenance"]=Flag(op,"create_maintenance");
+     profile["related_objects"]=set.CDODefinitions.Values.Where(c=>!beforeCDOs.Contains(c.CDODefId) && c.CDODefId!=cdo.CDODefId).Select(c=>Dict("name",c.Name,"parent",c.ParentCDOName)).ToArray();
+     profile["tables"]=set.DBTableDefinitions.Values.Where(t=>!beforeTables.Contains(t.DBTableId)).Select(t=>t.Name).ToArray();
+     foreach(var related in set.CDODefinitions.Values.Where(c=>!beforeCDOs.Contains(c.CDODefId))) {
+      if(set.CDODefinitions.Values.Count(c=>c.Name.Equals(related.Name,StringComparison.OrdinalIgnoreCase))>1)
+       conflicts.Add(Dict("operation",index,"kind","derived_name","owner",name,"name",related.Name,"message","厂商生成的对象名称与现有定义重复，请调整对象名或派生结构。"));
+      var collided=CollisionBeforeFactoryRename(related.Name,beforeCDONames);
+      if(collided!=null && related.CDODefId!=cdo.CDODefId)
+       conflicts.Add(Dict("operation",index,"kind","derived_name","owner",name,"name",related.Name,"existing_name",collided,
+        "message","厂商因已有对象 "+collided+" 自动改名为 "+related.Name+"；请明确调整对象名或派生结构后重新预检。"));
+     }
+     foreach(var table in set.DBTableDefinitions.Values.Where(t=>!beforeTables.Contains(t.DBTableId))) {
+      if(set.DBTableDefinitions.Values.Count(t=>t.Name.Equals(table.Name,StringComparison.OrdinalIgnoreCase))>1)
+       conflicts.Add(Dict("operation",index,"kind","table_name","owner",name,"name",table.Name,"message","厂商生成的表名与现有表重复，请明确表名。"));
+      var collided=CollisionBeforeFactoryRename(table.Name,beforeTableNames);
+      var requestedTable=Text(op,"table_name");
+      if(collided!=null && !table.Name.Equals(String.IsNullOrEmpty(requestedTable)?name:requestedTable,StringComparison.OrdinalIgnoreCase))
+       conflicts.Add(Dict("operation",index,"kind","table_name","owner",name,"name",table.Name,"existing_name",collided,
+        "message","厂商因已有表 "+collided+" 自动改名为 "+table.Name+"；请明确表名后重新预检。"));
+     }
+     profiles.Add(profile);
+    }
+   } catch(Exception error) {
+    conflicts.Add(Dict("operation",index,"kind","invalid_operation","owner",owner,"name",name,
+     "message",error.Message));
+   }
+  }
+  // Factories and setters above affect only this isolated in-memory graph.
+  // Deliberately do not call SaveAll or export/compile in preflight mode.
+  return Dict("ready",conflicts.Count==0,"objects",profiles,"conflicts",conflicts,"categories",categories,
+   "usage_definition_count",set.CDOUsages.Count,
+   "workspace",set.WorkSpace,"complete",true,"read_only",true,"method","Camstar.Metadata.CreateNewCDO/AllFields (no SaveAll)");
  }
  static object Apply(MDBMetadataSet set,Dictionary<string,object> op) {
   string action=Text(op,"action"), kind=Text(op,"kind"), name=Text(op,"name"), owner=Text(op,"owner");
@@ -482,7 +591,9 @@ public static class DesignerVendorBridge {
    } else {
     var set=Load(Text(req,"mdb"),folder,Text(req,"workspace"));
     string kind=Text(req,"kind"),owner=Text(req,"owner"),name=Text(req,"name");
-    if(mode=="catalog") {
+    if(mode=="preflight") {
+     result=Preflight(set,req);
+    } else if(mode=="catalog") {
      var inventory=new Dictionary<string,object>(); foreach(var k in Collections.Keys) inventory[k]=Objects(set,k,"").Count;
      result=Dict("counts",inventory,"workspaces",set.GetWorkspaces().Select(Record).ToArray());
     } else if(mode=="list") {

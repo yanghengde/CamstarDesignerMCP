@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import time
 from datetime import datetime, timezone
 from weakref import WeakKeyDictionary
@@ -54,7 +55,7 @@ from designer import progress_store
 from agent import excel_preview
 from agent import chat_context, chat_intent, chat_preferences, chat_requirements
 from agent.chat_evidence import evidence_scope
-from designer.design_contract import validate_calls
+from designer.design_contract import validate_calls, inspect_calls
 
 
 class AgentState(TypedDict, total=False):
@@ -351,6 +352,7 @@ def _policy_node(state: AgentState) -> dict[str, Any]:
     if revised:
         return revised
     pending = state.get("pending_tool_calls", [])
+    creation_checks = []
     if not state.get('task_context'):
         task = chat_context.update_task({}, '', state.get('messages', []))
         state = {**state, 'task_context': chat_context.update_task(task, '', [], pending)}
@@ -366,7 +368,7 @@ def _policy_node(state: AgentState) -> dict[str, Any]:
             if _attempt_key(call) in state.get('tool_failures', []):
                 raise ValueError('相同参数和来源版本的设计调用已经失败；请先只读核验实际结果和错误原因，不要直接重复写入。')
             args = json.loads(function.get('arguments') or '{}')
-            creates = ([{'name': args.get('cdo_name'), 'create_table': False}]
+            creates = ([{'name': args.get('cdo_name'), 'parent': args.get('parent_cdo'), 'create_table': args.get('create_table', False)}]
                        if function['name'] == 'generate_designer_cdo_package' else
                        [op for op in args.get('operations', []) if op.get('action') == 'create_cdo'])
             if task.get('requires_table') and any(not op.get('create_table') for op in creates):
@@ -375,9 +377,18 @@ def _policy_node(state: AgentState) -> dict[str, Any]:
             if expected_name and creates and not any(op.get('name') == expected_name for op in creates):
                 raise ValueError(f'对象名称未采用用户最新修正：应为 {expected_name}。')
             prior_fields = chat_context.planned_fields(task.get('prior_plan', []))
-            if creates and prior_fields and '其他不变' in state.get('request_message', ''):
+            parent_edits = re.findall(r'([A-Za-z][A-Za-z0-9_]+)\s*的父对象\s*(?:改为|改成|换成)\s*([A-Za-z][A-Za-z0-9_]+)', state.get('request_message', ''))
+            for target, parent in parent_edits:
+                if any(op.get('name', '').casefold() == target.casefold() and op.get('parent', '').casefold() != parent.casefold() for op in creates):
+                    raise ValueError(f'用户已指定 {target} 的父对象为 {parent}，当前计划没有应用此选择；请重新生成符合要求的预览。')
+            if creates and prior_fields and any(text in state.get('request_message', '') for text in ('其他不变', '其余不变', '其余要求不变', '其他要求不变')):
                 if prior_fields != chat_context.planned_fields(task.get('proposed_plan', [])):
                     raise ValueError('用户要求其他不变，当前计划却遗漏或改变了原字段属性；请保留原字段、类型、长度、持久化和列表属性。')
+        creation_checks = inspect_calls(pending)
+        from designer.vendor import preflight_error
+        rejected = [report for report in creation_checks if not report['ready']]
+        if rejected:
+            return _reject_plan(state, '\n'.join(preflight_error(report) for report in rejected))
     except (ValueError, TypeError, KeyError) as exc:
         return _reject_plan(state, f'参数校验未通过，尚未调用设计后端：{exc}')
     if not state.get('read_only') and state.get('task_context', {}).get('proposed_plan'):
@@ -388,9 +399,12 @@ def _policy_node(state: AgentState) -> dict[str, Any]:
     if state.get("approval_granted") and not needs_preview:
         return {'task_context': state.get('task_context', {})}
     decision = evaluate_mutations(_completed_counts(state), pending)
+    if design_calls and any(report.get('objects') for report in creation_checks) and (
+            decision.requires_approval or state.get('validation_failures', 0)):
+        needs_preview = True
     if not decision.requires_approval and not needs_preview:
         return {'task_context': state.get('task_context', {})}
-    preview = excel_preview.build(design_calls, state.get('excel_sources', [])) if needs_preview else None
+    preview = excel_preview.build(design_calls, state.get('excel_sources', []), creation_checks) if needs_preview else None
     approval = interrupt(
         {
             "type": "approval_required",
@@ -435,6 +449,8 @@ def _policy_node(state: AgentState) -> dict[str, Any]:
             "validation_failures": 0,
         }
     if isinstance(approval, dict) and approval.get("approved") is True:
+        if preview and approval.get('preview_id') and approval['preview_id'] != preview['id']:
+            return _reject_plan(state, '创建预检的来源、SDK 或字段规则已变化，原预览已失效；请重新核对并生成预览后确认。')
         update = {"approval_granted": state.get('approval_granted', False) or decision.requires_approval,
                   "excel_confirmation_response": approval.get('response', ''), 'messages': state.get('messages', []),
                   'task_context': state.get('task_context', {})}
@@ -837,6 +853,7 @@ async def _chat_stream(username, message, session_id=None, attachments=None):
                     await asyncio.to_thread(excel_preview.validate_sources, interrupt_value['excel_preview']['attachments'], username, actual_session_id)
                 async for event in _stream_graph(
                     Command(resume={"approved": True, "response": message,
+                                    "preview_id": (interrupt_value.get('excel_preview') or {}).get('id'),
                                     "received_utc": received_utc}),
                     graph_config,
                 ):

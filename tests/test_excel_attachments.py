@@ -47,6 +47,12 @@ def isolated_store(tmp_path, monkeypatch):
     monkeypatch.setattr(memory, 'SESSIONS_DIR', str(tmp_path / 'sessions'))
     monkeypatch.setattr(memory, 'user_memories', {})
     monkeypatch.setattr(runtime, 'user_memories', memory.user_memories)
+    # Graph tests use a fake vendor and non-existent MDB paths; actual SDK
+    # preflight and inherited conflicts have dedicated coverage.
+    from designer import vendor
+    monkeypatch.setattr(vendor, 'preflight', lambda mdb, checksum, operations, workspace='': {
+        'ready': True, 'complete': True, 'read_only': True, 'objects': [], 'conflicts': [],
+        'categories': [], 'source_sha256': checksum, 'workspace': workspace})
     return tmp_path
 
 

@@ -28,6 +28,8 @@ def project(tmp_path, monkeypatch):
     dll = tmp_path/'metadata.dll'; dll.write_bytes(b'vendor')
     monkeypatch.setattr(vendor, 'assembly', lambda: dll)
     monkeypatch.setattr(vendor, 'select_workspace', lambda source, workspace: workspace or '200')
+    monkeypatch.setattr(vendor, 'preflight', lambda mdb, checksum, operations, workspace='': {
+        'ready': True, 'complete': True, 'read_only': True, 'objects': [], 'conflicts': []})
     def run(folder, request):
         if request['mode'] == 'apply':
             mdb = Path(request['mdb'])

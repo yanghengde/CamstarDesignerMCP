@@ -32,7 +32,7 @@ def validate_sources(items, username, session_id):
         raise ValueError('Excel 附件已变化，请重新上传并预览')
 
 
-def build(calls, attachments):
+def build(calls, attachments, creation_checks=None):
     from designer.design_contract import validate_calls
     validate_calls(calls)
     rows, targets, objects = [], [], []
@@ -75,12 +75,13 @@ def build(calls, attachments):
         else:
             row('新增字段', args.get('target_cdo', ''), args.get('field_name', ''), values={**args, 'persistent': False})
     payload = {'rows': rows, 'objects': objects, 'targets': targets,
+               'creation_checks': creation_checks or [],
                'attachments': [{'id': item['id'], 'name': item['name'], 'sha256': item['sha256']} for item in attachments],
                'call_fingerprints': [fingerprint(call) for call in calls]}
     identity = sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
     return {**payload, 'id': identity, 'status': 'pending',
             'object_count': len(objects), 'field_count': sum(row['action'] == '新增字段' for row in rows),
-            'message': '请核对 Excel 设计预览，可直接输入修改要求更新预览；输入“确定”或“确认”后开始创建；输入“取消”可停止。'}
+            'message': '请核对设计预览，可直接输入修改要求更新预览；输入“确定”或“确认”后开始创建；输入“取消”可停止。'}
 
 
 def attach_preview(messages, preview, calls):

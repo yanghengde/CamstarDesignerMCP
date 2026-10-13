@@ -1,6 +1,6 @@
 # Designer 对象模型工具
 
-能力状态更新于 2026-10-11。本页列出现有合同；历史现场证据保留在下方。本轮改动与验证见 [程序优化记录](designer_program_optimizations_2026-10-11.md)。
+能力状态更新于 2026-10-13。本页列出现有合同；历史现场证据保留在下方。对象创建预检与类别选择见 [优化记录](designer_creation_optimization_2026-10-13.md)。
 
 ## 工具入口
 
@@ -12,6 +12,7 @@
 | list_designer_entities / get_designer_entity | 有效定义与字段、CLF、查询文本和参数 |
 | get_designer_entity_schema | 实际属性、类型、枚举、可编辑标记 |
 | analyze_designer_where_used | 厂商引用追踪；不支持的类型明确拒绝 |
+| inspect_designer_creation_plan | 按来源 SHA256 和实际工作区进行只读创建预检；完整基础字段、类别、派生结构和重名冲突；空 operations 查询常用类别 |
 | generate_designer_cdo_package | CDO 继承、专用类型、字段和存储映射 |
 | generate_designer_design_package | 批量设计、原值检查、保存、回读、官方导出 |
 | sync_designer_working_file | 验证并接收 Designer 保存的版本，继续使用固定工作 MDB；多人合并由 Opcenter 完成 |
@@ -68,6 +69,12 @@ operations 为有序 JSON 列表，最多 50 项。在隔离副本执行、保�
 CDO 专用工具默认持久化；通用 add_field 默认非持久化，调用者应明确指定。工作区实际设置到 MDB，官方 XML Header 也携带 WorkspaceCode。旧模板工具仅在 manifest 记录工作区。
 
 patch 禁止内部 ID、继承掩码、集合、归属和关系引用。安装组件部分引用 setter 不同步 ID，关系必须使用专用方法。枚举只允许已定义值。继承字段的属性修改先创建目标 CDO 的覆盖，不修改父对象字段。column/index 可用 owner 表定位；嵌套定义必须提供所属对象；歧义名称拒绝执行。
+
+对象创建使用实际父对象决定用途和存储类别。类别浏览提供六个业务分组、七个实际基础父对象；已指定 Product 等业务父对象时保留该选择。`cdo_usage` 为只读目录，不能将其用途组合数量当作用户类别数量。通用 patch 不允许修改 CDOUsageMask、ParentCDOName、StorageCategoryName 或关联 ID；父对象和存储类别仍走专用流程。
+
+含 create_cdo 或 add_field 的官方设计包在聊天确认前及实际保存前均执行创建预检。桥接在隔离内存模型按顺序调用公开 Metadata 工厂及操作，使用完整 AllFields 检查字段，预检不调用 SaveAll、编译、导出或 Update DB。返回基础字段真实类型、精度、列表、持久化、来源和系统用途，另列厂商产生的表、Revision Base、Maint／Changes。继承重名、大小写重名、同批重名和派生结构冲突会阻断；不同对象允许相同字段名。属性相同仍需明确复用并移除新增操作，不能静默跳过。
+
+预览绑定实际 MDB、SDK、桥接实现、工作区及完整参数。未命中缓存时检查原文件和隔离副本均未变化，字段截断拒绝验收。确认恢复时重做预检，结果变化会使原预览失效。界面的父对象选择器生成修改草稿，发送后重新预检和预览，旧方案不会因下拉选择直接改变。便捷 CDO 接口现也支持建表、表名、Revision Base 和 Maintenance 选项；原默认值保持不变。
 
 ## 执行与发布一致性
 
