@@ -457,7 +457,9 @@ def test_correction_is_saved_even_if_replanning_model_fails(api, revision_runtim
     memory.init_memory()
     history = api.get(f'/history/user?session_id={session}').json()
     assert history['pending_excel_preview'] is None
-    assert history['messages'][-1] == {'role': 'user', 'content': revision}
+    assert history['messages'][-2] == {'role': 'user', 'content': revision}
+    assert 'model unavailable' in history['messages'][-1]['content']
+    assert history['background_chat']['status'] == 'failed'
     assert any(item.get('excel_preview', {}).get('status') == 'superseded' for item in history['messages'])
 
 

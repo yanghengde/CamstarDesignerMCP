@@ -30,6 +30,12 @@ class ProgressActionRequest(BaseModel):
     verify_types: list[str] | None = Field(default=None, max_length=20)
 
 
+class StopChatRequest(BaseModel):
+    username: str
+    session_id: str
+    job_id: str
+
+
 def require_progress_owner(username: str, session_id: str | None = None):
     if username != CHAT_USERNAME:
         raise HTTPException(404, '设计任务不存在')
@@ -227,8 +233,12 @@ async def history_endpoint(username: str, session_id: str = None):
         if runtime._has_interrupt(state):
             pending_preview = (runtime._first_interrupt_value(state) or {}).get('excel_preview')
     from designer import progress_store
+    from agent import chat_jobs
     actual = runtime._actual_session_id(username, session_id)
+    actual = session_id or actual
     progress_store.recover_chat_results(username, actual, messages)
+    background_chat = chat_jobs.status(username, actual)
+    chat_jobs.recover_notice(username, actual, messages, background_chat)
     events = progress_store.operations(username, actual)
     recovered = list(messages)
     known = {message.get('tool_call_id') for message in messages if message.get('role') == 'tool'}
@@ -236,8 +246,10 @@ async def history_endpoint(username: str, session_id: str = None):
                      for item in events
                      if item.get('result') and (not item.get('call_id') or item.get('call_id') not in known))
     return {"designer_results": session_packages(recovered),
-            'background_running': progress_store.background_running(username, actual),
-            'background_error': events[-1]['error'] if events and events[-1]['status'] == 'failed' else '',
+            'background_running': chat_jobs.running(username, actual) or progress_store.background_running(username, actual),
+            'background_chat': background_chat,
+            'background_error': ((background_chat or {}).get('error') or
+                                 (events[-1]['error'] if events and events[-1]['status'] == 'failed' else '')),
             'chat_events': get_chat_events(username, session_id or actual),
             'pending_excel_preview': pending_preview, "messages": [
         {**{key: value for key, value in message.items() if key != 'display_content'},
@@ -253,7 +265,7 @@ def get_chat_events(username, session_id):
 
 @router.post("/chat")
 async def chat_endpoint(req: ChatRequest):
-    """流式聊天接口 (SSE)。"""
+    """Start server-owned execution; this SSE connection only observes it."""
     require_progress_owner(req.username, req.session_id)
     if not req.message.strip():
         raise HTTPException(400, "请填写设计要求，或说明希望如何处理附件。")
@@ -264,11 +276,28 @@ async def chat_endpoint(req: ChatRequest):
             attachments = await asyncio.to_thread(resolve_attachments, req.attachment_ids, req.username, req.session_id)
         except AttachmentError as exc:
             raise HTTPException(exc.status_code, str(exc)) from exc
-    stream = chat_stream(req.username, req.message, req.session_id, attachments=attachments) if attachments else chat_stream(req.username, req.message, req.session_id)
+    from agent import memory, chat_jobs
+    memory.get_user_messages(req.username, req.session_id)
+    actual = req.session_id or memory.user_memories[req.username]['active_session']
+    factory = lambda: chat_stream(req.username, req.message, actual, attachments=attachments) if attachments else chat_stream(req.username, req.message, actual)
+    try:
+        job = chat_jobs.start(req.username, actual, factory)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
     return StreamingResponse(
-        stream,
-        media_type="text/event-stream"
+        job.stream(), media_type="text/event-stream",
+        headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no', 'X-Chat-Job-ID': job.info['id'], 'X-Chat-Session-ID': actual},
     )
+
+
+@router.post('/chat/stop')
+async def stop_chat_endpoint(req: StopChatRequest):
+    require_progress_owner(req.username, req.session_id)
+    from agent import chat_jobs
+    try:
+        return await chat_jobs.stop(req.username, req.session_id, req.job_id)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
 
 
 @router.get("/logs")

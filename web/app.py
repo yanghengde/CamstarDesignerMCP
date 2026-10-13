@@ -46,7 +46,9 @@ async def lifespan(app: FastAPI):
         else:
             yield
     finally:
+        from agent import chat_jobs
         from designer import progress, progress_store
+        await chat_jobs.drain()
         await progress_store.drain()
         if progress._tasks:
             import asyncio

@@ -305,7 +305,7 @@
                             <textarea id="inputBox" rows="2" aria-label="设计需求" placeholder="描述你的对象或字段设计需求…" autocomplete="off"></textarea>
                             <div class="composer-bottom"><div class="composer-tools"><button class="attach-button" id="attachBtn" type="button"><svg class="icon"><use href="#i-attach"/></svg>添加 Excel</button></div><button class="send-button" id="sendBtn" type="submit" aria-label="发送" title="发送"><svg class="icon" aria-hidden="true"><use href="#i-send"/></svg></button><button class="send-button stop-button" id="stopBtn" type="button" aria-label="停止回答" title="停止回答" hidden><svg class="icon" aria-hidden="true"><use href="#i-stop"/></svg></button></div>
                         </form>
-                        <div class="composer-hint"><span id="backgroundStatus" role="status" hidden></span><span class="composer-shortcuts">Enter 发送 · Shift + Enter 换行</span></div>
+                        <div class="composer-hint"><span id="backgroundStatus" role="status">提交成功后可离开或关闭此页，设计会在后台继续；返回后查看进度与结果。</span><span class="composer-shortcuts">Enter 发送 · Shift + Enter 换行</span></div>
                     </div>
                 </section>
                 <section class="records" id="recordsView" aria-label="设计记录" hidden><h2>每一次设计，都有迹可循。</h2><p class="records-description">打开历史对话，继续查看需求、设计结果与变更说明。</p><div id="recordList"></div></section>
@@ -344,6 +344,7 @@
         let abortController = null;
         let busy = false;
         let backgroundRunning = false;
+        let backgroundJobId = null;
         let backgroundTimer;
         let historyLoading = false;
         let sessions = [];
@@ -390,7 +391,7 @@
         }
 
         function setView(view, { updateUrl = true, replace = false } = {}) {
-            if (updateUrl && (busy || historyLoading || attachmentUploading || reviewPreparing)) return;
+            if (updateUrl && (historyLoading || attachmentUploading || reviewPreparing)) return;
             const records = view === 'records';
             document.getElementById('chatColumn').hidden = records;
             document.getElementById('recordsView').hidden = !records;
@@ -415,29 +416,36 @@
 
         function updateControls() {
             const locked = busy || historyLoading || attachmentUploading || reviewPreparing;
+            const navigationLocked = historyLoading || attachmentUploading || reviewPreparing;
             input.disabled = locked;
             sendBtn.disabled = locked || backgroundRunning;
-            newChatTopBtn.disabled = locked;
-            for (const id of ['designNav', 'recordsNav']) document.getElementById(id).setAttribute('aria-disabled', String(locked));
+            newChatTopBtn.disabled = navigationLocked;
+            for (const id of ['designNav', 'recordsNav']) document.getElementById(id).setAttribute('aria-disabled', String(navigationLocked));
             attachBtn.disabled = locked || !!pendingExcelPreview || attachmentDrafts.length >= 3;
             fileInput.disabled = locked;
-            document.querySelectorAll('.session-item, .record-item, .prompt-card, .attachment-remove, .review-actions button').forEach(button => { button.disabled = locked || button.dataset.archived === 'true'; });
-            sendBtn.hidden = busy;
-            stopBtn.hidden = !busy;
+            document.querySelectorAll('.session-item, .record-item').forEach(button => { button.disabled = navigationLocked; });
+            document.querySelectorAll('.prompt-card, .attachment-remove, .review-actions button').forEach(button => { button.disabled = locked || button.dataset.archived === 'true'; });
+            sendBtn.hidden = busy || !!backgroundJobId;
+            stopBtn.hidden = !busy && !backgroundJobId;
             messagesDiv.setAttribute('aria-busy', String(locked));
         }
 
         function monitorBackground(data) {
             const previous = backgroundRunning;
             backgroundRunning = !!data.background_running;
+            if(data.background_chat)backgroundJobId=data.background_chat.status==='running'?data.background_chat.id:null;
             clearTimeout(backgroundTimer);
             const hint = document.getElementById('backgroundStatus');
-            hint.hidden = !backgroundRunning;
-            hint.textContent = backgroundRunning ? '后台操作仍在完成，可到设计进度查看；完成后可继续发送' : '';
+            hint.hidden = false;
+            const hintText=backgroundRunning ? '设计正在后台运行，可离开此页；返回后查看进度与结果。' : data.background_chat?.status==='waiting_approval' ? '当前设计等待确认，可离开页面，返回后继续核对。' : '提交成功后可离开或关闭此页，设计会在后台继续；返回后查看进度与结果。';
+            if(hint.textContent!==hintText)hint.textContent=hintText;
             updateControls();
+            if(!busy){typingIndicator.hidden=!backgroundRunning;if(backgroundRunning)typingIndicator.querySelector('span').textContent='设计正在后台进行…';}
             if (previous && !backgroundRunning) {
                 if (data.designer_results?.length) showDesignerResult(data.designer_results[data.designer_results.length - 1]);
-                showNotice(data.background_error ? `后台操作未完成：${data.background_error}` : '后台操作已完成，可以继续对话。');
+                const waiting=data.background_chat?.status==='waiting_approval';
+                showNotice(data.background_error ? `后台操作未完成：${data.background_error}` : waiting ? '当前设计等待确认，请核对后继续。' : data.background_chat?.status==='stopped' ? '本次回答已停止。' : '后台处理已完成，可以继续对话。');
+                if(!busy&&!historyLoading)loadHistory();
             }
             if (backgroundRunning) {
                 const session = currentSessionId;
@@ -502,12 +510,34 @@
         }
 
         async function selectSession(id) {
-            if (busy || historyLoading || attachmentUploading) return;
+            if (historyLoading || attachmentUploading || reviewPreparing) return;
+            if(busy||id!==currentSessionId)detachChatView();
             if (id !== currentSessionId) { attachmentDrafts = []; renderAttachmentDrafts(); }
             currentSessionId = id;
             setView('design');
             renderSessions();
             await loadHistory();
+        }
+
+        function detachChatView() {
+            const controller=abortController;
+            abortController=null;
+            if(controller){controller.detached=true;if(controller.jobId)controller.abort();}
+            busy=false;backgroundRunning=false;backgroundJobId=null;
+            clearTimeout(backgroundTimer);
+            typingIndicator.hidden=true;
+        }
+
+        async function stopCurrentChat() {
+            const controller=abortController;
+            const session=currentSessionId;
+            const jobId=controller?.jobId||backgroundJobId;
+            if(!jobId){if(controller)controller.stopRequested=true;return;}
+            try{
+                const result=await fetchJson('/chat/stop',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:currentUsername,session_id:session,job_id:jobId})});
+                if(result.status==='stopped'&&controller&&controller===abortController)controller.abort();
+                if(currentSessionId===session&&!busy){await loadHistory();await refreshBackground();}
+            }catch(error){showNotice(`无法停止当前回答：${error.message}`);}
         }
 
         function showWelcome() {
@@ -732,6 +762,7 @@
         async function loadHistory() {
             historyLoading = true;
             pendingExcelPreview = null;renderAttachmentDrafts();
+            backgroundJobId=null;
             updateControls();
             messagesDiv.replaceChildren(typingIndicator);
             typingIndicator.hidden = true;
@@ -740,13 +771,18 @@
                 if (currentSessionId) url += `?session_id=${encodeURIComponent(currentSessionId)}`;
                 const data = await fetchJson(url);
                 let hasVisible = false;
+                const result=data.designer_results?.[data.designer_results.length-1];
+                let resultShown=false;
                 (data.messages || []).forEach(message => {
                     if (message.role === 'user') { appendMessage('user', message.content, message.attachments || []); hasVisible = true; }
                     else if (message.role === 'assistant') {if(message.content){appendMessage('agent',message.content);hasVisible=true;}if(message.excel_preview){showExcelPreview(message.excel_preview);hasVisible=true;}}
+                    else if(message.role==='tool'&&result&&!resultShown&&String(message.content).includes(result.id)){showDesignerResult(result);resultShown=true;}
                 });
                 if(data.pending_excel_preview){showExcelPreview(data.pending_excel_preview);hasVisible=true;}
                 if (!hasVisible) showWelcome();
-                if (data.designer_results?.length) showDesignerResult(data.designer_results[data.designer_results.length - 1]);
+                if(result&&!resultShown)showDesignerResult(result);
+                if(data.background_chat?.error&&!(data.messages||[]).some(message=>message.content===data.background_chat.error))appendMessage('agent',data.background_chat.error);
+                if(data.background_chat?.status==='stopped'&&data.background_chat.notice&&!(data.messages||[]).some(message=>message.content===data.background_chat.notice))appendMessage('agent',data.background_chat.notice);
                 monitorBackground(data);
             } catch (error) {
                 appendMessage('agent', '对话记录加载失败，请刷新页面重试。');
@@ -800,6 +836,7 @@
             const text = input.value.trim() || (attachmentDrafts.length ? '请读取附件中的设计信息，说明对象和字段设计方案。' : '');
             if (!text || busy || backgroundRunning || historyLoading || attachmentUploading) return;
             const sentAttachments = attachmentDrafts.slice();
+            let requestSession=currentSessionId;
             let messageSaved = false;
             busy = true;
             input.value = '';
@@ -810,13 +847,24 @@
             const typingText = typingIndicator.querySelector('span');
             typingText.textContent = '正在分析设计需求…';
             scrollToBottom();
-            abortController = new AbortController();
+            const requestController=new AbortController();
+            abortController=requestController;
             let streamBubble = null;
             let streamContent = '';
             function handleEvent(line) {
+                if(requestController.detached||(requestSession&&currentSessionId!==requestSession))return;
                 if (!line.startsWith('data: ')) return;
                 const data = JSON.parse(line.substring(6));
-                if (data.type === 'message_saved') {
+                if(data.type==='chat_job'){
+                    requestSession=requestSession||data.session_id;
+                    if(!currentSessionId)currentSessionId=requestSession;
+                    if(data.status==='running'){
+                        requestController.jobId=data.id;
+                        monitorBackground({background_running:true,background_chat:{id:data.id,status:'running'}});
+                    }
+                } else if(data.type==='history_required'){
+                    requestController.historyRequired=true;
+                } else if (data.type === 'message_saved') {
                     messageSaved = true;
                     if (data.session_id) currentSessionId = data.session_id;
                     attachmentDrafts = []; renderAttachmentDrafts();
@@ -853,12 +901,17 @@
                 const reqBody = { message: text, username: currentUsername };
                 if (currentSessionId) reqBody.session_id = currentSessionId;
                 if (sentAttachments.length) reqBody.attachment_ids = sentAttachments.map(attachment => attachment.id);
-                const response = await fetch('/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(reqBody), signal: abortController.signal });
+                const body=JSON.stringify(reqBody);
+                const response = await fetch('/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body, keepalive:new TextEncoder().encode(body).byteLength<60000, signal: requestController.signal });
                 if (!response.ok) {
                     const error = await response.json().catch(() => ({}));
                     throw new Error(typeof error.detail === 'string' ? error.detail : `HTTP ${response.status}`);
                 }
                 if (!response.body) throw new Error('服务器未返回可读取的响应流');
+                requestController.jobId=response.headers.get('X-Chat-Job-ID');
+                requestSession=requestSession||response.headers.get('X-Chat-Session-ID');
+                if(requestController.stopRequested&&requestController.jobId)await fetchJson('/chat/stop',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:currentUsername,session_id:requestSession,job_id:requestController.jobId})});
+                if(requestController.detached){requestController.abort();return;}
                 const reader = response.body.getReader();
                 const decoder = new TextDecoder('utf-8');
                 let buffer = '';
@@ -873,16 +926,20 @@
                 buffer += decoder.decode();
                 if (buffer.trim()) handleEvent(buffer);
             } catch (error) {
+                if(requestController.detached||abortController!==requestController)return;
                 appendMessage('agent', error.name === 'AbortError' ? '本次回答已停止。' : '网络或服务错误：' + error.message);
             } finally {
-                if (!messageSaved && sentAttachments.length) {
+                if(requestController.detached||abortController!==requestController)return;
+                if (!messageSaved && !requestController.jobId && sentAttachments.length) {
                     input.value = text;
                     userBubble.parentElement.remove();
                 }
                 abortController = null;
                 busy = false;
                 typingIndicator.hidden = true;
+                if(requestController.jobId){attachmentDrafts=[];renderAttachmentDrafts();}
                 updateControls();
+                if(requestController.historyRequired)await loadHistory();
                 input.focus();
                 scrollToBottom();
                 refreshSessionsList().catch(() => showNotice('设计记录刷新失败，可稍后刷新页面。'));
@@ -891,7 +948,8 @@
         }
 
         newChatTopBtn.addEventListener('click', async () => {
-            if (busy || historyLoading || attachmentUploading) return;
+            if (historyLoading || attachmentUploading || reviewPreparing) return;
+            detachChatView();
             setView('design');
             historyLoading = true;
             updateControls();
@@ -919,7 +977,8 @@
             setView(viewFromLocation(), { updateUrl: false });
             const requestedSession = new URLSearchParams(location.search).get('session_id');
             if (requestedSession && requestedSession !== currentSessionId && sessions.some(session => session.id === requestedSession) &&
-                !busy && !historyLoading && !attachmentUploading && !reviewPreparing) {
+                !historyLoading && !attachmentUploading && !reviewPreparing) {
+                detachChatView();
                 currentSessionId = requestedSession;
                 attachmentDrafts = []; renderAttachmentDrafts();
                 renderSessions();
@@ -958,7 +1017,8 @@
             input.focus();
         });
         document.getElementById('composerForm').addEventListener('submit', event => { event.preventDefault(); handleSend(); });
-        stopBtn.addEventListener('click', () => abortController?.abort());
+        stopBtn.addEventListener('click', stopCurrentChat);
+        window.addEventListener('focus', () => refreshBackground());
         attachBtn.addEventListener('click', () => fileInput.click());
         fileInput.addEventListener('change', () => uploadFiles(Array.from(fileInput.files)));
         input.addEventListener('keydown', event => {
