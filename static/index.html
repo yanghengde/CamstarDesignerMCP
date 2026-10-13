@@ -120,13 +120,13 @@
         .dot:nth-child(2) { animation-delay: .15s; } .dot:nth-child(3) { animation-delay: .3s; }
         @keyframes pulse { 50% { opacity: .3; transform: translateY(-2px); } }
         .composer-area { padding: 8px max(32px, calc((100% - 820px) / 2)) 20px; flex-shrink: 0; }
-        .composer { border: 1px solid #dce2e5; border-radius: 12px; padding: 15px 17px 12px; background: white; box-shadow: 0 3px 10px #25343c04; transition: border-color .15s, box-shadow .15s; }
-        .composer:focus-within { border-color: #84b7a9; box-shadow: 0 0 0 3px #00857709; }
+        .composer { border: 1px solid #dce2e5; border-radius: 16px; padding: 15px 17px 12px; background: white; box-shadow: 0 3px 10px #25343c04; transition: border-color .15s, box-shadow .15s; }
+        .composer:focus-within { border-color: #b5bcc4; box-shadow: 0 0 0 2px #252b3205; }
         textarea { display: block; width: 100%; height: 52px; max-height: 160px; resize: none; border: 0; outline: none; background: transparent; color: var(--text); font-size: 13px; line-height: 1.7; }
         textarea::placeholder { color: #939ca5; }
         .composer-bottom { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 10px; }
         .composer-tools { display: flex; align-items: center; gap: 14px; }
-        .composer-actions { display: flex; align-items: center; gap: 8px; }
+        .composer-actions { display: flex; align-items: center; justify-content: center; width: 32px; height: 32px; flex-shrink: 0; }
         .attach-button { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--secondary); padding: 5px 0; }
         .attach-button:hover { color: var(--teal); }
         .attach-button .icon { width: 15px; height: 15px; }
@@ -164,13 +164,12 @@
         .excel-preview-source summary { cursor:pointer; }
         .excel-preview-source code { display:block; padding:7px 0; overflow-wrap:anywhere; white-space:pre-wrap; }
         .upload-status { color: var(--teal); font-size: 11px; margin-bottom: 10px; }
-        .send-button { background: #000; color: white; display: flex; align-items: center; justify-content: center; width: 36px; height: 36px; border-radius: 50%; padding: 0; flex-shrink: 0; }
-        .send-button:hover { background: #262626; }
-        .send-button .icon { width: 20px; height: 20px; stroke-width: 2; }
-        .stop-button { background: #dc2626; }
-        .stop-button:hover { background: #b91c1c; }
-        .stop-button:focus-visible { outline-color: #dc2626; }
-        .stop-button .icon { width: 24px; height: 24px; fill: currentColor; stroke: none; }
+        .send-button { background: #000; color: white; display: flex; align-items: center; justify-content: center; width: 32px; height: 32px; border-radius: 50%; padding: 0; flex-shrink: 0; }
+        .send-button:hover:not(:disabled) { background: #262626; }
+        .send-button:disabled { background: #e6e9ed; color: #9ba3ac; opacity: 1; }
+        .send-button:focus-visible { outline-color: var(--text); }
+        .send-button .icon { width: 18px; height: 18px; stroke-width: 2; }
+        .stop-button .icon { width: 20px; height: 20px; fill: currentColor; stroke: none; }
         .composer-hint { display: flex; justify-content: space-between; color: var(--muted); font-size: 10px; line-height: 1.6; padding: 10px 2px 0; }
         .requirement-status { display: block; margin-top: 6px; font-size: 11px; color: var(--muted); }
         .composer-shortcuts { margin-left: auto; }
@@ -422,8 +421,10 @@
             const locked = busy || historyLoading || attachmentUploading || reviewPreparing;
             const navigationLocked = historyLoading || attachmentUploading || reviewPreparing;
             const runningChat = !!(abortController?.jobId || backgroundJobId) && (busy || backgroundRunning);
+            const hasDraft = !!input.value.trim() || attachmentDrafts.length > 0;
+            const showStop = (busy || !!backgroundJobId) && !hasDraft;
             input.disabled = navigationLocked || (busy && !runningChat);
-            sendBtn.disabled = navigationLocked || requirementSubmitting || ((busy || backgroundRunning) && !runningChat);
+            sendBtn.disabled = !hasDraft || navigationLocked || requirementSubmitting || ((busy || backgroundRunning) && !runningChat);
             sendBtn.title = runningChat ? '补充要求' : '发送';
             sendBtn.setAttribute('aria-label', sendBtn.title);
             input.placeholder = runningChat ? '可以继续补充或修改要求，将在当前操作完成后处理…' : pendingExcelPreview ? '可追问或修改要求；核对后输入“确定”或“确认”…' : '描述你的对象或字段设计需求…';
@@ -433,8 +434,9 @@
             fileInput.disabled = locked || backgroundRunning;
             document.querySelectorAll('.session-item, .record-item').forEach(button => { button.disabled = navigationLocked; });
             document.querySelectorAll('.prompt-card, .attachment-remove, .review-actions button').forEach(button => { button.disabled = locked || button.dataset.archived === 'true'; });
-            sendBtn.hidden = false;
-            stopBtn.hidden = !busy && !backgroundJobId;
+            sendBtn.hidden = showStop;
+            stopBtn.hidden = !showStop;
+            stopBtn.disabled = navigationLocked;
             messagesDiv.setAttribute('aria-busy', String(locked));
         }
 
@@ -1086,7 +1088,7 @@
         input.addEventListener('keydown', event => {
             if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); handleSend(); }
         });
-        input.addEventListener('input', () => { input.style.height = '52px'; input.style.height = Math.min(input.scrollHeight, 160) + 'px'; });
+        input.addEventListener('input', () => { input.style.height = '52px'; input.style.height = Math.min(input.scrollHeight, 160) + 'px'; updateControls(); });
         if (window.marked) marked.setOptions({ breaks: true, gfm: true });
         syncNavigation();
         setView(viewFromLocation(), { updateUrl: false });

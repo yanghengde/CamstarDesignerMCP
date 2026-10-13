@@ -285,23 +285,32 @@ def run_browser_script(script):
     assert result.returncode == 0, result.stderr
 
 
-def test_running_composer_supports_sending_and_stopping_at_the_same_time():
+def test_composer_switches_one_action_between_send_and_stop():
     source = (Path(__file__).parents[1] / 'static/index.html').read_text(encoding='utf-8')
     controls = source.split('        function updateControls() {', 1)[1].split('        function monitorBackground', 1)[0]
     run_browser_script(r"""
 const assert=require('node:assert/strict');
 const element=()=>({disabled:false,hidden:false,setAttribute(){}});
 const input=element(),sendBtn=element(),stopBtn=element(),attachBtn=element(),fileInput=element(),newChatTopBtn=element(),messagesDiv=element();
+input.value='';
 const document={getElementById:element,querySelectorAll:()=>[]};
 let busy=true,backgroundRunning=false,backgroundJobId=null,abortController=null,historyLoading=false,attachmentUploading=false,reviewPreparing=false,requirementSubmitting=false,pendingExcelPreview=null,attachmentDrafts=[];
 """ + 'function updateControls() {' + controls + r"""
-updateControls();assert.equal(input.disabled,true);assert.equal(sendBtn.disabled,true);
+updateControls();assert.equal(input.disabled,true);assert.equal(sendBtn.disabled,true);assert.equal(sendBtn.hidden,true);assert.equal(stopBtn.hidden,false);
 abortController={jobId:'accepted'};updateControls();
-assert.equal(input.disabled,false);assert.equal(sendBtn.disabled,false);assert.equal(sendBtn.hidden,false);assert.equal(stopBtn.hidden,false);assert.equal(attachBtn.disabled,true);
+assert.equal(input.disabled,false);assert.equal(sendBtn.hidden,true);assert.equal(stopBtn.hidden,false);assert.equal(attachBtn.disabled,true);
+input.value='补充字段长度';updateControls();
+assert.equal(sendBtn.disabled,false);assert.equal(sendBtn.hidden,false);assert.equal(stopBtn.hidden,true);assert.equal(sendBtn.title,'补充要求');
+input.value='  \n ';updateControls();assert.equal(sendBtn.hidden,true);assert.equal(stopBtn.hidden,false);
 busy=false;abortController=null;backgroundRunning=true;backgroundJobId='return-job';updateControls();
-assert.equal(input.disabled,false);assert.equal(sendBtn.disabled,false);assert.equal(stopBtn.hidden,false);
+assert.equal(input.disabled,false);assert.equal(sendBtn.hidden,true);assert.equal(stopBtn.hidden,false);
+input.value='修改对象名称';updateControls();assert.equal(sendBtn.disabled,false);assert.equal(sendBtn.hidden,false);assert.equal(stopBtn.hidden,true);
 requirementSubmitting=true;updateControls();assert.equal(sendBtn.disabled,true);
 requirementSubmitting=false;backgroundJobId=null;updateControls();assert.equal(sendBtn.disabled,true);
+backgroundRunning=false;input.value='';updateControls();assert.equal(sendBtn.hidden,false);assert.equal(sendBtn.disabled,true);assert.equal(stopBtn.hidden,true);
+input.value='新需求';updateControls();assert.equal(sendBtn.disabled,false);assert.equal(sendBtn.title,'发送');assert.equal(stopBtn.hidden,true);
+input.value='';attachmentDrafts=[{id:'excel'}];updateControls();assert.equal(sendBtn.disabled,false);assert.equal(stopBtn.hidden,true);
+historyLoading=true;updateControls();assert.equal(sendBtn.disabled,true);assert.equal(input.disabled,true);
 """)
 
 
