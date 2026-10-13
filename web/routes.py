@@ -36,6 +36,11 @@ class StopChatRequest(BaseModel):
     job_id: str
 
 
+class ChatRequirementRequest(StopChatRequest):
+    request_id: str = Field(min_length=1, max_length=80, pattern=r'^[\w-]+$')
+    message: str = Field(min_length=1, max_length=10000)
+
+
 def require_progress_owner(username: str, session_id: str | None = None):
     if username != CHAT_USERNAME:
         raise HTTPException(404, '设计任务不存在')
@@ -233,7 +238,7 @@ async def history_endpoint(username: str, session_id: str = None):
         if runtime._has_interrupt(state):
             pending_preview = (runtime._first_interrupt_value(state) or {}).get('excel_preview')
     from designer import progress_store
-    from agent import chat_jobs
+    from agent import chat_jobs, chat_requirements
     actual = runtime._actual_session_id(username, session_id)
     actual = session_id or actual
     progress_store.recover_chat_results(username, actual, messages)
@@ -248,6 +253,7 @@ async def history_endpoint(username: str, session_id: str = None):
     return {"designer_results": session_packages(recovered),
             'background_running': chat_jobs.running(username, actual) or progress_store.background_running(username, actual),
             'background_chat': background_chat,
+            'chat_requirements': chat_requirements.records(username, actual),
             'background_error': ((background_chat or {}).get('error') or
                                  (events[-1]['error'] if events and events[-1]['status'] == 'failed' else '')),
             'chat_events': get_chat_events(username, session_id or actual),
@@ -296,6 +302,19 @@ async def stop_chat_endpoint(req: StopChatRequest):
     from agent import chat_jobs
     try:
         return await chat_jobs.stop(req.username, req.session_id, req.job_id)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@router.post('/chat/requirements')
+async def chat_requirement_endpoint(req: ChatRequirementRequest):
+    require_progress_owner(req.username, req.session_id)
+    if not req.message.strip():
+        raise HTTPException(400, '请填写补充或修改内容。')
+    from agent import chat_jobs
+    try:
+        return await chat_jobs.submit_requirement(req.username, req.session_id, req.job_id,
+                                                  req.request_id, req.message.strip())
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from exc
 

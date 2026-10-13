@@ -52,7 +52,7 @@ from designer.attachments import attachment_context, attachment_summary
 from agent.titles import first_message_title
 from designer import progress_store
 from agent import excel_preview
-from agent import chat_context, chat_intent, chat_preferences
+from agent import chat_context, chat_intent, chat_preferences, chat_requirements
 from agent.chat_evidence import evidence_scope
 from designer.design_contract import validate_calls
 
@@ -77,6 +77,7 @@ class AgentState(TypedDict, total=False):
     read_only: bool
     validation_failures: int
     tool_failures: list[str]
+    inquiry: bool
 
 
 _client: Any = None
@@ -138,6 +139,80 @@ def _first_interrupt_value(snapshot: Any) -> dict[str, Any] | None:
             value = task.interrupts[0].value
             return value if isinstance(value, dict) else {"message": str(value)}
     return None
+
+
+def _adopt_requirements(state):
+    if state.get('inquiry'):
+        return {}
+    username, session_id = state['username'], state['session_id']
+    queued = chat_requirements.pending(username, session_id)
+    revisions = [item for item in queued if item['kind'] == 'revision']
+    pending = state.get('pending_tool_calls', [])
+    # Ordinary questions wait for the current batch; they never cancel writes.
+    if not queued or pending and not revisions:
+        return {}
+    items = chat_requirements.claim(username, session_id)
+    messages = list(state.get('messages', []))
+    writer = get_stream_writer()
+    if pending:
+        messages = _merge_notes(messages, _notes(username, session_id, state))
+        user_memories[username]['sessions'][session_id].get('pending_dialogue', {}).pop(_pending_key(state), None)
+        ids = {call.get('id') for call in pending}
+        old_preview = next((message['excel_preview'] for message in reversed(messages)
+                            if message.get('excel_preview') and any(call.get('id') in ids for call in message.get('tool_calls', []))), None)
+        if not old_preview:
+            old_preview = next((message['excel_preview'] for message in reversed(get_user_messages(username, session_id))
+                                if message.get('excel_preview') and any(call.get('id') in ids for call in message.get('tool_calls', []))), None)
+        if old_preview:
+            batch_ids = {call.get('id') for call in next(
+                (m for m in reversed(messages) if m.get('tool_calls')), {}).get('tool_calls', [])}
+            preview = {**old_preview, 'status': 'superseded', 'partial_execution': any(
+                message.get('role') == 'tool' and message.get('tool_call_id') in batch_ids
+                for message in messages)}
+            messages = excel_preview.attach_preview(messages, preview, pending)
+            writer({'type': 'excel_preview_status', 'id': preview['id'], 'status': 'superseded',
+                    'partial_execution': preview['partial_execution']})
+        for call in pending:
+            messages.append({'role': 'tool', 'tool_call_id': call.get('id', 'unknown'),
+                             'name': call.get('function', {}).get('name', 'unknown'),
+                             'content': '用户在运行中补充了要求，本步骤尚未执行，已取消；已完成的步骤以真实工具回执为准，请按最新要求重新规划。'})
+    if state.get('excel_confirmation_response'):
+        messages.append({'role': 'user', 'content': state['excel_confirmation_response']})
+    messages.extend(chat_requirements.user_record(item) for item in items)
+    for item in items:
+        chat_preferences.apply(username, session_id, item['content'])
+    task = dict(state.get('task_context', {}))
+    task.pop('prior_plan', None)
+    sources = state.get('excel_sources', [])
+    for item in revisions:
+        reset = chat_intent.new_task(item['content'])
+        task = chat_context.update_task(task, item['content'], [], reset=reset)
+        if reset:
+            sources = []
+    if revisions:
+        task['live_revision'] = {'notice': '用户在运行中修改了需求。已执行步骤不能视为已撤销；先依据真实回执核对当前设计，再规划后续修改。新设计必须重新出预览确认，旧确认不授权新参数。',
+                                 'requirement_ids': [item['id'] for item in revisions]}
+    for item in items:
+        writer({'type': 'chat_requirement', 'requirement': item})
+    writer({'type': 'requirements_applied'})
+    return {'messages': messages, 'pending_tool_calls': [], 'loop_count': 0,
+            'request_message': '\n'.join(item['content'] for item in items),
+            'task_context': task, 'excel_sources': sources,
+            'approval_granted': False, 'excel_approved_calls': [], 'excel_confirmation_response': '',
+            'read_only': not bool(revisions), 'validation_failures': 0,
+            'final_reply': '', 'stop_reason': 'replan'}
+
+
+def _requirements_node(state):
+    return _adopt_requirements(state)
+
+
+def _route_after_requirements(state):
+    if state.get('stop_reason') == 'replan':
+        return 'agent'
+    if state.get('pending_tool_calls'):
+        return 'policy'
+    return END if state.get('stop_reason') in {'complete', 'loop_limit', 'validation_failed', 'cancelled'} else 'agent'
 
 
 async def _agent_node(state: AgentState) -> dict[str, Any]:
@@ -268,10 +343,13 @@ async def _agent_node(state: AgentState) -> dict[str, Any]:
 
 
 def _route_after_agent(state: AgentState) -> str:
-    return "policy" if state.get("pending_tool_calls") else END
+    return 'requirements'
 
 
 def _policy_node(state: AgentState) -> dict[str, Any]:
+    revised = _adopt_requirements(state)
+    if revised:
+        return revised
     pending = state.get("pending_tool_calls", [])
     if not state.get('task_context'):
         task = chat_context.update_task({}, '', state.get('messages', []))
@@ -306,13 +384,13 @@ def _policy_node(state: AgentState) -> dict[str, Any]:
         state = {**state, 'task_context': {**state['task_context'], 'validated_plan': state['task_context']['proposed_plan']}}
     design_calls = [call for call in pending if (call.get('function') or {}).get('name') in excel_preview.DESIGN_TOOLS
                     and excel_preview.fingerprint(call) not in state.get('excel_approved_calls', [])]
-    needs_preview = bool(state.get('excel_sources') and design_calls)
+    needs_preview = bool((state.get('excel_sources') or state.get('task_context', {}).get('live_revision')) and design_calls)
     if state.get("approval_granted") and not needs_preview:
         return {'task_context': state.get('task_context', {})}
     decision = evaluate_mutations(_completed_counts(state), pending)
     if not decision.requires_approval and not needs_preview:
         return {'task_context': state.get('task_context', {})}
-    preview = excel_preview.build(design_calls, state['excel_sources']) if needs_preview else None
+    preview = excel_preview.build(design_calls, state.get('excel_sources', [])) if needs_preview else None
     approval = interrupt(
         {
             "type": "approval_required",
@@ -438,6 +516,9 @@ def _route_after_policy(state: AgentState) -> str:
 
 
 async def _execute_tool_node(state: AgentState) -> dict[str, Any]:
+    revised = _adopt_requirements(state)
+    if revised:
+        return revised
     writer = get_stream_writer()
     pending = list(state.get("pending_tool_calls", []))
     if not pending:
@@ -459,10 +540,14 @@ async def _execute_tool_node(state: AgentState) -> dict[str, Any]:
     else:
         started = time.time()
         try:
-            if state.get('excel_sources') and func_name in excel_preview.DESIGN_TOOLS:
+            if (state.get('excel_sources') or state.get('task_context', {}).get('live_revision')) and func_name in excel_preview.DESIGN_TOOLS:
                 if excel_preview.fingerprint(tool_call) not in state.get('excel_approved_calls', []):
                     raise ValueError('Excel 设计尚未通过预览确认')
-                await asyncio.to_thread(excel_preview.validate_sources, state['excel_sources'], state['username'], state['session_id'])
+                await asyncio.to_thread(excel_preview.validate_sources, state.get('excel_sources', []), state['username'], state['session_id'])
+            # Source checks may await; intake can change while they run.
+            revised = _adopt_requirements(state)
+            if revised:
+                return revised
             tool_func = get_tool_func(func_name)
             if tool_func is None:
                 result = f"Error: tool '{func_name}' not found"
@@ -553,15 +638,17 @@ async def _execute_tool_node(state: AgentState) -> dict[str, Any]:
 
 
 def _route_after_tool(state: AgentState) -> str:
-    return "execute_tool" if state.get("pending_tool_calls") else "agent"
+    return 'requirements'
 
 
 def _build_graph(checkpointer: AsyncSqliteSaver):
     builder = StateGraph(AgentState)
     builder.add_node("agent", _agent_node)
+    builder.add_node('requirements', _requirements_node)
     builder.add_node("policy", _policy_node)
     builder.add_node("execute_tool", _execute_tool_node)
-    builder.add_edge(START, "agent")
+    builder.add_edge(START, 'requirements')
+    builder.add_conditional_edges('requirements', _route_after_requirements)
     builder.add_conditional_edges("agent", _route_after_agent)
     builder.add_conditional_edges("policy", _route_after_policy)
     builder.add_conditional_edges("execute_tool", _route_after_tool)
@@ -622,6 +709,7 @@ async def _sync_legacy_messages(
         if _has_interrupt(snapshot):
             legacy_messages.extend(_notes(username, session_id, state))
         save_user_session(username, session_id)
+        chat_requirements.reconcile(username, session_id, legacy_messages)
     return state
 
 
@@ -645,14 +733,14 @@ async def langgraph_chat_stream(
             yield event
 
 
-async def _pending_question(username, session_id, message, snapshot):
+async def _pending_question(username, session_id, message, snapshot, user_record=None):
     """Use an isolated, read-only graph without resuming the pending write."""
     from langgraph.checkpoint.memory import InMemorySaver
     state = snapshot.values
     session = user_memories[username]['sessions'][session_id]
     notes = session.setdefault('pending_dialogue', {}).setdefault(_pending_key(state), [])
     previous_notes = list(notes)
-    user_record = {'role': 'user', 'content': message}
+    user_record = user_record or {'role': 'user', 'content': message}
     notes.append(user_record)
     await _sync_legacy_messages(username, session_id, _graph_config(username, session_id))
     yield _sse({'type': 'message_saved', 'session_id': session_id})
@@ -672,6 +760,7 @@ async def _pending_question(username, session_id, message, snapshot):
         'read_only': True, 'loop_count': 0, 'pending_tool_calls': [], 'excel_sources': [],
         'excel_approved_calls': [], 'approval_granted': False, 'validation_failures': 0,
         'task_context': state.get('task_context', {}), 'final_reply': '', 'stop_reason': '',
+        'inquiry': True,
     }
     try:
         async for event in _stream_graph(inquiry_state, inquiry_config, graph):
@@ -688,6 +777,30 @@ async def _pending_question(username, session_id, message, snapshot):
         yield _sse({'type': 'error', 'message': reply})
     finally:
         await _sync_legacy_messages(username, session_id, _graph_config(username, session_id))
+
+
+async def continue_queued_chat_stream(username, session_id):
+    """Cover input accepted just as the previous graph ends or pauses."""
+    graph_config = _graph_config(username, session_id)
+    snapshot = await _graph.aget_state(graph_config)
+    queued = chat_requirements.pending(username, session_id)
+    if not queued:
+        return
+    if _has_interrupt(snapshot) and not any(item['kind'] == 'revision' for item in queued):
+        for item in chat_requirements.claim(username, session_id):
+            async for event in _pending_question(username, session_id, item['content'], snapshot,
+                                                 chat_requirements.user_record(item)):
+                yield event
+        return
+    graph_input = (Command(resume={'revision': True, 'response': '\n'.join(item['content'] for item in queued)})
+                   if _has_interrupt(snapshot) else snapshot.values)
+    async for event in _stream_graph(graph_input, graph_config):
+        yield event
+    final = await _graph.aget_state(graph_config)
+    await _sync_legacy_messages(username, session_id, graph_config)
+    if _has_interrupt(final):
+        value = _first_interrupt_value(final) or {}
+        yield _sse({'type': 'done', 'reply': value.get('message', '请核对后确认。'), 'excel_preview': value.get('excel_preview')})
 
 
 async def _chat_stream(username, message, session_id=None, attachments=None):
@@ -729,8 +842,12 @@ async def _chat_stream(username, message, session_id=None, attachments=None):
                 ):
                     yield event
                 if interrupt_value.get('excel_preview'):
-                    yield _sse({'type': 'excel_preview_status', 'id': interrupt_value['excel_preview']['id'],
-                                'status': 'confirmed', 'confirmation_received_utc': received_utc})
+                    approved_snapshot = await _graph.aget_state(graph_config)
+                    approved_preview = next((item.get('excel_preview') for item in approved_snapshot.values.get('messages', [])
+                                             if item.get('excel_preview', {}).get('id') == interrupt_value['excel_preview']['id']), None)
+                    if approved_preview and approved_preview.get('status') == 'confirmed':
+                        yield _sse({'type': 'excel_preview_status', 'id': approved_preview['id'],
+                                    'status': 'confirmed', 'confirmation_received_utc': received_utc})
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -829,6 +946,7 @@ async def _chat_stream(username, message, session_id=None, attachments=None):
             "excel_confirmation_response": '',
             "task_context": chat_context.update_task(task, message, [], reset=reset),
             "validation_failures": 0, "read_only": False,
+            'inquiry': False,
             "tool_failures": [] if reset else snapshot.values.get('tool_failures', []),
         }
         if initial_state['excel_sources']:

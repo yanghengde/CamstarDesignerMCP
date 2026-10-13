@@ -126,6 +126,7 @@
         textarea::placeholder { color: #939ca5; }
         .composer-bottom { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 10px; }
         .composer-tools { display: flex; align-items: center; gap: 14px; }
+        .composer-actions { display: flex; align-items: center; gap: 8px; }
         .attach-button { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--secondary); padding: 5px 0; }
         .attach-button:hover { color: var(--teal); }
         .attach-button .icon { width: 15px; height: 15px; }
@@ -171,6 +172,7 @@
         .stop-button:focus-visible { outline-color: #dc2626; }
         .stop-button .icon { width: 24px; height: 24px; fill: currentColor; stroke: none; }
         .composer-hint { display: flex; justify-content: space-between; color: var(--muted); font-size: 10px; line-height: 1.6; padding: 10px 2px 0; }
+        .requirement-status { display: block; margin-top: 6px; font-size: 11px; color: var(--muted); }
         .composer-shortcuts { margin-left: auto; }
         .guide { width: 272px; flex-shrink: 0; border-left: 1px solid var(--border); background: #fcfcfd; padding: 26px 23px; overflow-y: auto; }
         .guide-title { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; }
@@ -303,9 +305,9 @@
                             <div class="attachment-list" id="attachmentList" aria-label="待发送的 Excel 附件"></div>
                             <p class="upload-status" id="uploadStatus" role="status" hidden>正在读取 Excel…</p>
                             <textarea id="inputBox" rows="2" aria-label="设计需求" placeholder="描述你的对象或字段设计需求…" autocomplete="off"></textarea>
-                            <div class="composer-bottom"><div class="composer-tools"><button class="attach-button" id="attachBtn" type="button"><svg class="icon"><use href="#i-attach"/></svg>添加 Excel</button></div><button class="send-button" id="sendBtn" type="submit" aria-label="发送" title="发送"><svg class="icon" aria-hidden="true"><use href="#i-send"/></svg></button><button class="send-button stop-button" id="stopBtn" type="button" aria-label="停止回答" title="停止回答" hidden><svg class="icon" aria-hidden="true"><use href="#i-stop"/></svg></button></div>
+                            <div class="composer-bottom"><div class="composer-tools"><button class="attach-button" id="attachBtn" type="button"><svg class="icon"><use href="#i-attach"/></svg>添加 Excel</button></div><div class="composer-actions"><button class="send-button" id="sendBtn" type="submit" aria-label="发送" title="发送"><svg class="icon" aria-hidden="true"><use href="#i-send"/></svg></button><button class="send-button stop-button" id="stopBtn" type="button" aria-label="停止回答" title="停止回答" hidden><svg class="icon" aria-hidden="true"><use href="#i-stop"/></svg></button></div></div>
                         </form>
-                        <div class="composer-hint"><span id="backgroundStatus" role="status">提交成功后可离开或关闭此页，设计会在后台继续；返回后查看进度与结果。</span><span class="composer-shortcuts">Enter 发送 · Shift + Enter 换行</span></div>
+                        <div class="composer-hint"><span id="backgroundStatus" role="status">可随时补充或修改要求；提交成功后可离开此页，设计会在后台继续。</span><span class="composer-shortcuts">Enter 发送 · Shift + Enter 换行</span></div>
                     </div>
                 </section>
                 <section class="records" id="recordsView" aria-label="设计记录" hidden><h2>每一次设计，都有迹可循。</h2><p class="records-description">打开历史对话，继续查看需求、设计结果与变更说明。</p><div id="recordList"></div></section>
@@ -346,6 +348,8 @@
         let backgroundRunning = false;
         let backgroundJobId = null;
         let backgroundTimer;
+        let requirementSubmitting = false;
+        let requirementRequest = null;
         let historyLoading = false;
         let sessions = [];
         let noticeTimer;
@@ -417,15 +421,19 @@
         function updateControls() {
             const locked = busy || historyLoading || attachmentUploading || reviewPreparing;
             const navigationLocked = historyLoading || attachmentUploading || reviewPreparing;
-            input.disabled = locked;
-            sendBtn.disabled = locked || backgroundRunning;
+            const runningChat = !!(abortController?.jobId || backgroundJobId) && (busy || backgroundRunning);
+            input.disabled = navigationLocked || (busy && !runningChat);
+            sendBtn.disabled = navigationLocked || requirementSubmitting || ((busy || backgroundRunning) && !runningChat);
+            sendBtn.title = runningChat ? '补充要求' : '发送';
+            sendBtn.setAttribute('aria-label', sendBtn.title);
+            input.placeholder = runningChat ? '可以继续补充或修改要求，将在当前操作完成后处理…' : pendingExcelPreview ? '可追问或修改要求；核对后输入“确定”或“确认”…' : '描述你的对象或字段设计需求…';
             newChatTopBtn.disabled = navigationLocked;
             for (const id of ['designNav', 'recordsNav']) document.getElementById(id).setAttribute('aria-disabled', String(navigationLocked));
-            attachBtn.disabled = locked || !!pendingExcelPreview || attachmentDrafts.length >= 3;
-            fileInput.disabled = locked;
+            attachBtn.disabled = locked || backgroundRunning || !!pendingExcelPreview || attachmentDrafts.length >= 3;
+            fileInput.disabled = locked || backgroundRunning;
             document.querySelectorAll('.session-item, .record-item').forEach(button => { button.disabled = navigationLocked; });
             document.querySelectorAll('.prompt-card, .attachment-remove, .review-actions button').forEach(button => { button.disabled = locked || button.dataset.archived === 'true'; });
-            sendBtn.hidden = busy || !!backgroundJobId;
+            sendBtn.hidden = false;
             stopBtn.hidden = !busy && !backgroundJobId;
             messagesDiv.setAttribute('aria-busy', String(locked));
         }
@@ -437,8 +445,9 @@
             clearTimeout(backgroundTimer);
             const hint = document.getElementById('backgroundStatus');
             hint.hidden = false;
-            const hintText=backgroundRunning ? '设计正在后台运行，可离开此页；返回后查看进度与结果。' : data.background_chat?.status==='waiting_approval' ? '当前设计等待确认，可离开页面，返回后继续核对。' : '提交成功后可离开或关闭此页，设计会在后台继续；返回后查看进度与结果。';
+            const hintText=backgroundRunning ? backgroundJobId ? '设计在后台运行，可继续补充或修改要求；当前操作完成后处理。可离开此页。' : '当前保存操作仍在完成，可先输入补充内容，完成后发送；可离开此页。' : data.background_chat?.status==='waiting_approval' ? '当前设计等待确认，可修改要求或离开页面，返回后继续核对。' : '可随时补充或修改要求；提交成功后可离开此页，设计会在后台继续。';
             if(hint.textContent!==hintText)hint.textContent=hintText;
+            (data.chat_requirements || []).forEach(showRequirement);
             updateControls();
             if(!busy){typingIndicator.hidden=!backgroundRunning;if(backgroundRunning)typingIndicator.querySelector('span').textContent='设计正在后台进行…';}
             if (previous && !backgroundRunning) {
@@ -592,6 +601,47 @@
             return bubble;
         }
 
+        function showRequirement(item) {
+            let bubble = Array.from(messagesDiv.querySelectorAll('[data-requirement-id]')).find(node => node.dataset.requirementId === item.id);
+            if (!bubble) { bubble = appendMessage('user', item.content); bubble.dataset.requirementId = item.id; }
+            const priority = {queued:0,processing:1,incorporated:2,unhandled:3};
+            if ((priority[bubble.dataset.requirementStatus] ?? -1) > priority[item.status]) return;
+            bubble.dataset.requirementStatus = item.status;
+            let note = bubble.querySelector('.requirement-status');
+            if (!note) { note = document.createElement('small'); note.className = 'requirement-status'; bubble.appendChild(note); }
+            note.textContent = {queued:'已接收 · 等待当前操作结束后处理',processing:'正在纳入本轮处理',incorporated:'已纳入本轮处理 · 以预览和实际结果为准',unhandled:'尚未处理 · 本次运行已结束，请重新发送'}[item.status] || '已接收';
+        }
+
+        async function submitRequirement(text) {
+            const session = currentSessionId;
+            const jobId = abortController?.jobId || backgroundJobId;
+            if (!jobId || requirementSubmitting) return;
+            if (!requirementRequest || requirementRequest.session !== session || requirementRequest.jobId !== jobId || requirementRequest.text !== text) {
+                requirementRequest = {session,jobId,text,id:crypto.randomUUID()};
+            }
+            const request = requirementRequest;
+            requirementSubmitting = true;
+            updateControls();
+            try {
+                const item = await fetchJson('/chat/requirements', {method:'POST',headers:{'Content-Type':'application/json'},keepalive:true,
+                    body:JSON.stringify({username:currentUsername,session_id:session,job_id:jobId,request_id:request.id,message:text})});
+                if (currentSessionId === session) {
+                    showRequirement(item);
+                    if(item.status==='unhandled')showNotice('这条补充尚未处理，输入内容已保留；本次运行结束后可以重新发送。');
+                    else {
+                        if (input.value.trim() === text) { input.value=''; input.style.height=''; }
+                        showNotice(item.status==='incorporated' ? '补充已纳入处理，请查看预览和实际结果。' : '补充已接收，将在后续步骤开始前处理；修改后的设计需要重新核对确认。');
+                    }
+                }
+                if (requirementRequest === request) requirementRequest = null;
+            } catch (error) {
+                if (currentSessionId === session) { showNotice(`补充未确认提交：${error.message}。输入内容已保留。`); refreshBackground(); }
+            } finally {
+                requirementSubmitting = false;
+                updateControls();
+            }
+        }
+
         function attachmentCard(attachment, removable) {
             const item = document.createElement('div');
             item.className = 'attachment-item';
@@ -739,6 +789,7 @@
                 if(receivedUtc)card.dataset.confirmationUtc=receivedUtc;
                 card.querySelector('.excel-preview-status').textContent={pending:'待确认',confirmed:'已确认',cancelled:'已取消',superseded:'已被新要求替代',invalid:'校验未通过'}[status]||status;
                 const notes={pending:'可追问或直接输入修改要求；输入“确定”或“确认”后开始创建；输入“取消”可停止。',cancelled:'本批设计已取消。',superseded:'旧方案未执行，请核对按新要求生成的预览。',invalid:'旧方案校验未通过，尚未执行；请查看参数修正后的方案。'};
+                if(status==='superseded'&&card.dataset.partialExecution==='true')notes.superseded='未执行步骤已被新要求替代；已完成步骤保留，请核对新的修改预览。';
                 const time=card.dataset.confirmationUtc?`确认接收时间：${new Date(card.dataset.confirmationUtc).toLocaleString('zh-CN',{hour12:false})}。`:'';
                 card.querySelector('.excel-preview-note').textContent=notes[status]||`${time}本批设计已由人员确认，执行结果请查看后续回复。`;
             }
@@ -754,6 +805,7 @@
             scroll.appendChild(table);card.appendChild(scroll);
             const source=document.createElement('details');source.className='excel-preview-source';const summary=document.createElement('summary');summary.textContent='来源与工作区';source.appendChild(summary);for(const target of preview.targets){const code=document.createElement('code');code.textContent=`${target.mdb_file||target.xml_file}\n工作区：${target.workspace||'唯一活跃客户工作区'}`;source.appendChild(code);}card.appendChild(source);
             const note=document.createElement('p');note.className='excel-preview-note';card.appendChild(note);
+            if(preview.partial_execution)card.dataset.partialExecution='true';
             const previous=Array.from(messagesDiv.querySelectorAll('[data-excel-preview]')).find(node=>node.dataset.excelPreview===preview.id);if(previous)previous.replaceWith(card);else messagesDiv.insertBefore(card,typingIndicator);
             if(preview.status==='pending')pendingExcelPreview=preview;
             excelPreviewStatus(preview.id,preview.status,preview.confirmation_received_utc);scrollToBottom();
@@ -774,11 +826,12 @@
                 const result=data.designer_results?.[data.designer_results.length-1];
                 let resultShown=false;
                 (data.messages || []).forEach(message => {
-                    if (message.role === 'user') { appendMessage('user', message.content, message.attachments || []); hasVisible = true; }
+                    if (message.role === 'user') {const bubble=appendMessage('user', message.content, message.attachments || []);if(message.requirement_id)bubble.dataset.requirementId=message.requirement_id;hasVisible = true; }
                     else if (message.role === 'assistant') {if(message.content){appendMessage('agent',message.content);hasVisible=true;}if(message.excel_preview){showExcelPreview(message.excel_preview);hasVisible=true;}}
                     else if(message.role==='tool'&&result&&!resultShown&&String(message.content).includes(result.id)){showDesignerResult(result);resultShown=true;}
                 });
                 if(data.pending_excel_preview){showExcelPreview(data.pending_excel_preview);hasVisible=true;}
+                if(data.chat_requirements?.length){data.chat_requirements.forEach(showRequirement);hasVisible=true;}
                 if (!hasVisible) showWelcome();
                 if(result&&!resultShown)showDesignerResult(result);
                 if(data.background_chat?.error&&!(data.messages||[]).some(message=>message.content===data.background_chat.error))appendMessage('agent',data.background_chat.error);
@@ -834,7 +887,8 @@
 
         async function handleSend() {
             const text = input.value.trim() || (attachmentDrafts.length ? '请读取附件中的设计信息，说明对象和字段设计方案。' : '');
-            if (!text || busy || backgroundRunning || historyLoading || attachmentUploading) return;
+            if (!text || historyLoading || attachmentUploading || reviewPreparing || requirementSubmitting) return;
+            if (busy || backgroundRunning) { await submitRequirement(text); return; }
             const sentAttachments = attachmentDrafts.slice();
             let requestSession=currentSessionId;
             let messageSaved = false;
@@ -864,6 +918,12 @@
                     }
                 } else if(data.type==='history_required'){
                     requestController.historyRequired=true;
+                } else if(data.type==='chat_requirement'){
+                    showRequirement(data.requirement);
+                } else if(data.type==='requirements_applied'){
+                    streamBubble=null;
+                    typingIndicator.hidden=false;
+                    typingText.textContent='正在处理补充内容并核对后续步骤…';
                 } else if (data.type === 'message_saved') {
                     messageSaved = true;
                     if (data.session_id) currentSessionId = data.session_id;
@@ -883,6 +943,7 @@
                     typingIndicator.hidden = true;
                     if(data.excel_preview)showExcelPreview(data.excel_preview);else appendMessage('agent', data.reply);
                 } else if (data.type === 'excel_preview_status') {
+                    if(data.partial_execution){const card=Array.from(messagesDiv.querySelectorAll('[data-excel-preview]')).find(node=>node.dataset.excelPreview===data.id);if(card)card.dataset.partialExecution='true';}
                     excelPreviewStatus(data.id,data.status,data.confirmation_received_utc);
                 } else if (data.type === 'error') {
                     typingIndicator.hidden = true;
@@ -909,6 +970,7 @@
                 }
                 if (!response.body) throw new Error('服务器未返回可读取的响应流');
                 requestController.jobId=response.headers.get('X-Chat-Job-ID');
+                updateControls();
                 requestSession=requestSession||response.headers.get('X-Chat-Session-ID');
                 if(requestController.stopRequested&&requestController.jobId)await fetchJson('/chat/stop',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:currentUsername,session_id:requestSession,job_id:requestController.jobId})});
                 if(requestController.detached){requestController.abort();return;}

@@ -219,7 +219,7 @@ def test_switching_session_does_not_let_old_stream_reset_new_view():
     script = r"""
 const assert=require('node:assert/strict');
 let currentSessionId='old',currentUsername='user',busy=false,backgroundRunning=false,backgroundJobId=null,backgroundTimer;
-let historyLoading=false,attachmentUploading=false,attachmentDrafts=[],abortController=null;
+let historyLoading=false,attachmentUploading=false,reviewPreparing=false,requirementSubmitting=false,attachmentDrafts=[],abortController=null;
 const input={value:'创建对象',style:{},focus(){}};
 const typingIndicator={hidden:true,querySelector(){return {textContent:''}}};
 const updateControls=()=>{},scrollToBottom=()=>{},appendMessage=()=>({parentElement:{remove(){}}});
@@ -271,7 +271,7 @@ const assert=require('node:assert/strict');
 let backgroundRunning=false,backgroundJobId=null,backgroundTimer,busy=false,historyLoading=false,currentSessionId='session';
 const hint={hidden:true,textContent:''};const document={getElementById:()=>hint};
 const typingIndicator={hidden:true,querySelector:()=>({textContent:''})};
-const updateControls=()=>{},clearTimeout=()=>{},setTimeout=()=>0;
+const updateControls=()=>{},clearTimeout=()=>{},setTimeout=()=>0,showRequirement=()=>{};
 let reloads=0,notices=[];const loadHistory=()=>reloads++;const showNotice=text=>notices.push(text);
 """ + 'function monitorBackground(data) {' + monitor + r"""
 monitorBackground({background_running:true,background_chat:{id:'job',status:'running'}});

@@ -13,6 +13,9 @@ def pending_intent(text: str) -> str:
         return 'revision'
     if re.search(r'(?:改成|改为|换成|改一下|重新生成|重新设计|先别创建|先不要创建|暂停)', value):
         return 'revision'
+    if not re.search(r'^(?:为什么|为何|怎么|如何|是否|是不是|能否|可以|解释)', value) and not re.search(r'[?？]|(?:可以吗|可以么|行吗|行么)$', value):
+        if re.search(r'(?:再加|增加|新增|添加|补充|去掉|删除|移除|取消).*(?:字段|对象|属性|表|需求|长度)|(?:字段|对象|表名|长度|类型).*(?:调整为|设为|设置为|改到)', value):
+            return 'revision'
     if not re.search(r'^(?:为什么|为何|怎么|如何|是否|是不是|能否解释|解释)', value) and re.search(
             r'(?:修改|调整)(?:一下)?(?:名称|长度|字段|类型|工作区|方案|参数|这个|对象)', value):
         return 'revision'
@@ -23,6 +26,21 @@ def pending_intent(text: str) -> str:
 
 def new_task(text: str) -> bool:
     return bool(re.search(r'^(?:新任务[：:]|换个任务|另外一个任务|开始新设计|不要用(?:之前|上次)的附件)', text.strip()))
+
+
+def running_intent(text: str) -> str:
+    """The running composer accepts natural requirements and ordinary questions."""
+    value = text.strip()
+    intent = pending_intent(value)
+    if intent == 'feedback':
+        return intent
+    if re.search(r'^(?:为什么|为何|怎么|如何|是否|是不是|能否|可以|解释)|[?？]|(?:吗|么)$', value):
+        return 'question'
+    if intent == 'revision':
+        return intent
+    if design_question(value) or value.strip('，。！,.!') in {'确认', '确定', '取消', '好的', '好', '收到', '谢谢', '你好'}:
+        return 'question'
+    return 'revision'
 
 
 def design_question(text: str) -> bool:
