@@ -309,15 +309,29 @@ def verified_manifest(manifest_file: str) -> tuple[Path,dict]:
     return path,manifest
 
 
-def verify_published_design(manifest_file: str, test_string_boundaries: bool = False) -> dict:
-    """Check changed definitions and physical string columns, without business writes."""
+def verify_published_design(manifest_file: str, test_string_boundaries: bool = False,
+                            compiled_mdb: str = '', resolved_contract: dict | None = None) -> dict:
+    """Compare physical columns with vendor DDL, without business writes."""
     path,manifest=verified_manifest(manifest_file)
     root,_=load_xml(path.parent/"changes.xml")
+    from designer import column_contract
+    if column_contract.requested_columns(root) and not compiled_mdb:
+        compiled_folder = artifact_dir()
+        private = compiled_folder / 'input.mdb'
+        shutil.copyfile(path.parent / 'modified.mdb', private)
+        if vendor.digest(private) != manifest['artifacts']['modified.mdb']:
+            raise ValueError('核验复制期间设计文件发生变化')
+        compiled_mdb = vendor.run(compiled_folder, {'mode': 'compile', 'mdb': str(private)})['compiled_mdb']
+    contract = resolved_contract if resolved_contract is not None else column_contract.resolve(compiled_mdb, root)
+    if contract.get('compiled_sha256') and vendor.digest(source_path(compiled_mdb, '.mdb')) != contract['compiled_sha256']:
+        raise ValueError('核验使用的编译 MDB 与厂商列定义不匹配')
+    expected_columns = {(c['table'].casefold(), c['name'].casefold()): c for c in contract['columns']}
     checks=[]
     with target_connection() as conn:
         cur=conn.cursor(); schema=target_schema(cur); prefix=sql_identifier(schema)+"."
         from designer.acceptance import verify_manifest
-        checks.extend(verify_manifest({**manifest, '_modified_file': str(path.parent/'modified.mdb')}, cur, schema))
+        checks.extend(verify_manifest({**manifest, '_modified_file': str(path.parent/'modified.mdb'),
+                                      '_compiled_file': compiled_mdb}, cur, schema))
         for cdo in root.findall("Import/CDODefinitions/CDODefinition"):
             name=cdo.get("Name",""); parent=cdo.findtext("Attributes/ParentCDO/Name")
             if cdo.get("Action")=="Delete":
@@ -349,14 +363,13 @@ def verify_published_design(manifest_file: str, test_string_boundaries: bool = F
                     continue
                 column_name=column.get("Name","")
                 precision=column.findtext("Attributes/Precision")
-                string_type="String" in (column.findtext("Attributes/SQLType/Name") or "")
-                row=cur.execute("SELECT DATA_TYPE,CHARACTER_MAXIMUM_LENGTH FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=? AND TABLE_NAME=? AND COLUMN_NAME=?",schema,table_name,column_name).fetchone()
-                passed=bool(row) and (not string_type or row[0] in ("varchar","nvarchar","char","nchar") and precision is not None and row[1]==int(precision))
-                check={"kind":"column","table":table_name,"name":column_name,"actual_type":row[0] if row else None,
-                       "actual_length":row[1] if row else None,"expected_precision":precision,"passed":passed}
-                if passed and string_type and test_string_boundaries and 0<int(precision)<=4096:
+                expected = expected_columns[(table_name.casefold(), column_name.casefold())]
+                row=cur.execute("SELECT DATA_TYPE,CHARACTER_MAXIMUM_LENGTH,NUMERIC_PRECISION,NUMERIC_SCALE,IS_NULLABLE FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=? AND TABLE_NAME=? AND COLUMN_NAME=?",schema,table_name,column_name).fetchone()
+                check={"kind":"column", "expected_precision":precision, **column_contract.compare(expected, row)}
+                length = expected.get('expected_length', 0)
+                if check['passed'] and expected['expected_type'] in column_contract.STRING_TYPES and test_string_boundaries and 0<length<=4096:
                     if not config.DESIGNER_TEST_TARGET_CONFIRMED: raise ValueError("长度负例测试需要已确认测试目标")
-                    length=int(precision); col=sql_identifier(column_name)
+                    col=sql_identifier(column_name)
                     cur.execute("SET ANSI_WARNINGS ON")
                     cur.execute(f"SELECT TOP (0) {col} INTO #DesignerLengthProbe FROM {prefix}{sql_identifier(table_name)}")
                     try:
@@ -374,9 +387,20 @@ def verify_published_design(manifest_file: str, test_string_boundaries: bool = F
         "target":{"server":config.DESIGNER_DB_SERVER,"database":config.DESIGNER_DB_NAME},"schema":schema,
         "manifest_file":str(path),"checks":checks,"business_rows_modified":False,"runtime_service_verified":False,
         "coverage":"changed_compiled_metadata_rows_and_physical_columns; runtime_service_requires_separate_acceptance",
-        "no_metadata_changes":not checks}
+        "no_metadata_changes":not checks, "physical_column_contract": contract}
     file=folder/"verification_result.json"; file.write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding="utf-8")
     return {**result,"result_file":str(file)}
+
+
+def update_diagnostics(log_file: Path) -> dict:
+    """Keep vendor operational warnings separate from metadata acceptance."""
+    content = redact(log_file.read_text(encoding='utf-8-sig', errors='replace')) if log_file.is_file() else ''
+    issues = [line.strip() for line in content.splitlines() if line.strip().startswith(('ERROR:', 'WARNING:'))]
+    recycle_failed = any('SendMessage:' in issue for issue in issues)
+    return {'vendor_operational_issues': issues,
+            'site_state_status': 'failed' if any('SiteState' in issue for issue in issues) else 'not_verified',
+            'runtime_recycle_status': 'failed' if recycle_failed else 'not_verified',
+            'runtime_service_verified': False}
 
 
 def publish_database(manifest_file: str, expected_manifest_sha256: str, backup_receipt: str = '', siteinfo_mdb: str = '',
@@ -417,7 +441,9 @@ def _publish_database(manifest_file, expected_manifest_sha256, backup_receipt, s
     report={"status":"preparing","target":target,"manifest_file":str(path),"manifest_sha256":expected_manifest_sha256,
             "backup_receipt":str(receipt_path) if receipt_path else None,
             "backup_required":config.DESIGNER_REQUIRE_DATABASE_BACKUP,
-            "configuration_updated":False,"database_modified":False}
+            "configuration_updated":False,"database_modified":False,
+            "database_update_status":"not_started", "design_verification_status":"not_started",
+            "runtime_recycle_status":"not_verified", "runtime_service_verified":False}
     report_file=folder/"publish_result.json"
     try:
         compiled_folder=folder/"compile"
@@ -425,6 +451,10 @@ def _publish_database(manifest_file, expected_manifest_sha256, backup_receipt, s
         input_copy=compiled_folder/"input.mdb"
         shutil.copyfile(path.parent/"modified.mdb",input_copy)
         compiled=vendor.run(compiled_folder,{"mode":"compile","mdb":str(input_copy)})
+        from designer import column_contract
+        root, _ = load_xml(path.parent / 'changes.xml')
+        contract = column_contract.resolve(compiled['compiled_mdb'], root)
+        report['physical_column_contract'] = contract
         dll_dir=vendor.assembly().parent
         for name in ("Camstar.Data.dll","OECAdmin.dll","CIMS.DBUpdate.dll"):
             if not (dll_dir/name).is_file(): raise ValueError(f"缺少官方发布组件：{name}")
@@ -460,7 +490,7 @@ def _publish_database(manifest_file, expected_manifest_sha256, backup_receipt, s
             if receipt:
                 cur.execute("RESTORE VERIFYONLY FROM DISK=? WITH CHECKSUM",receipt["server_backup_file"])
                 while cur.nextset(): pass
-            report.update(status="executing_update",database_modified="unknown",schema=schema,compiled_mdb=compiled["compiled_mdb"],compiled_sha256=vendor.digest(Path(compiled["compiled_mdb"])))
+            report.update(status="executing_update",database_modified="unknown",database_update_status="executing",schema=schema,compiled_mdb=compiled["compiled_mdb"],compiled_sha256=vendor.digest(Path(compiled["compiled_mdb"])))
             report_file.write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding="utf-8")
             shell=Path(os.environ.get("SystemRoot","C:/Windows"))/"System32/WindowsPowerShell/v1.0/powershell.exe"
             args=[str(shell),"-NoProfile","-NonInteractive","-Mta","-File",str(Path(__file__).with_name("publication_bridge.ps1")),
@@ -468,14 +498,17 @@ def _publish_database(manifest_file, expected_manifest_sha256, backup_receipt, s
             with (folder/"update.log").open("wb") as log:
                 process=subprocess.run(args,cwd=folder,env=env,stdout=log,stderr=subprocess.STDOUT,
                                        timeout=config.DESIGNER_PUBLICATION_TIMEOUT,creationflags=getattr(subprocess,"CREATE_NO_WINDOW",0))
+            report.update(update_diagnostics(folder / 'update.log'))
             if process.returncode or not (folder/"result.json").is_file():
                 raise ValueError(f"发布组件退出码{process.returncode}，请检查update.log")
             result=json.loads((folder/"result.json").read_text(encoding="utf-8-sig"))
             if not result.get("ok"): raise ValueError(result.get("error","官方发布失败"))
-            report.update(result["result"],database_modified=True)
+            report.update(result["result"],database_modified=True,database_update_status="completed",
+                          design_verification_status="executing")
             before_verification = metadata_fingerprint(cur, schema)
-            verified = verify_published_design(str(path))
-            report.update(verification=verified, metadata_checks=verified.get('checks', []))
+            verified = verify_published_design(str(path), False, compiled['compiled_mdb'], contract)
+            report.update(verification=verified, metadata_checks=verified.get('checks', []),
+                          design_verification_status=verified['status'])
             if verified['status'] != 'verified':
                 raise ValueError('数据库已执行更新，但最终设计核验未通过：' + verified['result_file'])
             if metadata_fingerprint(cur, schema) != before_verification:
@@ -487,6 +520,10 @@ def _publish_database(manifest_file, expected_manifest_sha256, backup_receipt, s
             working.mark_published(path, siteinfo_file=str(siteinfo))
     except Exception as exc:
         error=redact(str(exc))
+        if report['database_update_status'] == 'executing':
+            report['database_update_status'] = 'failed_or_unknown'
+        if report['design_verification_status'] == 'executing':
+            report['design_verification_status'] = 'error'
         report.update(status="publish_failed",error=error)
         report_file.write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding="utf-8")
         raise ValueError(f"发布未完成；记录：{report_file}；{error}") from None

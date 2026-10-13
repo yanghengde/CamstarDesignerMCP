@@ -24,7 +24,7 @@ def workflow(tmp_path, monkeypatch):
     root = Path(config.DESIGNER_ROOT); root.mkdir()
     source = root / 'source.mdb'; source.write_bytes(b'base')
     folder = root / 'artifacts' / ('a'*32); folder.mkdir(parents=True)
-    for name, data in {'baseline.mdb': b'base', 'modified.mdb': b'new design', 'changes.xml': b'<InSiteMetaData/>',}.items():
+    for name, data in {'baseline.mdb': b'base', 'modified.mdb': b'new design', 'changes.xml': b'<InSiteMetaData><Header><Version>1.0</Version></Header><Import/></InSiteMetaData>',}.items():
         (folder/name).write_bytes(data)
     manifest = {'format_version': 2, 'status': 'saved_to_test_copy_and_exported', 'workspace_applied_to_mdb': True,
                 'source_file': str(source), 'source_sha256': vendor.digest(source), 'workspace': '200',
@@ -228,7 +228,7 @@ def test_api_only_returns_configured_users_tasks_and_files(workflow):
     result = client.get(f'/api/progress/{sid}', params={'username': 'user'}).json()
     assert '_manifests' not in result
     assert result['package']['objects'] == ['ExSample']
-    assert client.get(f'/api/progress/{sid}/changes', params={'username':'user','package_id':folder.name}).content == b'<InSiteMetaData/>'
+    assert client.get(f'/api/progress/{sid}/changes', params={'username':'user','package_id':folder.name}).content == (folder/'changes.xml').read_bytes()
     assert client.get(f'/api/progress/{empty}/changes', params={'username':'user','package_id':folder.name}).status_code == 404
     assert client.post('/api/progress/action', json={'username':'user','session_id':sid,'package_id':folder.name,'action':'confirm_complete'}).status_code == 409
     assert client.get('/progress').status_code == 200
@@ -559,6 +559,9 @@ def test_official_update_without_backup_never_executes_backup_sql(workflow, monk
         assert result['status'] == 'database_published'
         assert result['backup_receipt'] is None
         assert result['backup_required'] is False
+        assert result['database_update_status'] == 'completed'
+        assert result['design_verification_status'] == 'verified'
+        assert result['runtime_service_verified'] is False
         assert len(baseline_calls) == 1
     else:
         with pytest.raises(ValueError, match='最终设计核验未通过'):
@@ -566,7 +569,10 @@ def test_official_update_without_backup_never_executes_backup_sql(workflow, monk
                 siteinfo_mdb=str(folder/'baseline.mdb'), expected_target_fingerprint='catalog-digest')
         assert not baseline_calls
         reports = list(folder.parent.rglob('publish_result.json'))
-        assert json.loads(reports[-1].read_text(encoding='utf-8'))['database_modified'] is True
+        report = json.loads(reports[-1].read_text(encoding='utf-8'))
+        assert report['database_modified'] is True
+        assert report['database_update_status'] == 'completed'
+        assert report['design_verification_status'] == verification_status
     assert all('BACKUP' not in sql and 'RESTORE' not in sql for sql in statements)
     monkeypatch.setattr(config, 'DESIGNER_REQUIRE_DATABASE_BACKUP', True)
     with pytest.raises(ValueError, match='请先备份数据库'):

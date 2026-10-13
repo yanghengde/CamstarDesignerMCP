@@ -24,7 +24,7 @@
 | backup_designer_test_database | COPY_ONLY/CHECKSUM及RESTORE VERIFYONLY，生成校验凭证 |
 | publish_designer_test_database | 编译并调用官方Update DB，核对默认schema；保留审计和回退材料 |
 | restore_designer_test_database | 明确授权下，恢复精确测试目标和校验备份 |
-| verify_designer_published_design | 当前周期编译元数据的具体值、关系与删除结果及物理列；可选 String 临时表边界测试 |
+| verify_designer_published_design | 当前周期编译元数据的具体值、关系与删除结果；物理列使用厂商生成器核验类型、长度、数值精度和可空属性；可选 String 临时表边界测试 |
 | generate_designer_wcf_package | 隔离调用官方WCF生成器；检查程序集及目标类型，适配仍在验收；部分服务包不能用于整体部署 |
 
 原始 MDB、XML 和 MetadataExport CLI 工具仍可使用，其合同见 [历史 MVP](designer_mvp.md)。
@@ -75,6 +75,12 @@ patch 禁止内部 ID、继承掩码、集合、归属和关系引用。安装�
 
 聊天、MCP 和进度页使用相同的项目周期清单，例如将 B0→B1、B1→B2 汇总为 B0→B2；相同周期的差异产物复用。自动 Update DB 和手动更新核验都要通过完整元数据验收，才建立已验证发布基线与已发布 MDB 记录。核验失败保留旧基线；自动更新可能已改变 SQL，其审计记录会如实显示。
 
+物理列核验从不可变设计副本的官方编译 MDB 出发，通过隔离只读桥调用安装组件的 `CIMS.DBUpdate.DataDictionary.Table.LoadFromMDB` 和 `Column.GetSQLDefinitionClause(SQLServer)`。厂商读取器负责实例 ID／引用、零精度默认值、主键及布尔列可空性、数值精度等规则，项目仅解析生成的 SQL 定义并与 `INFORMATION_SCHEMA.COLUMNS` 比较。差异 XML 仅选择核验对象，不能用省略的属性或 `Precision=0` 猜测物理长度。可选边界测试也使用厂商解析后的实际长度；不会向业务表写入记录。
+
+上述列生成类为内部 API，当前只接受现场核对过的 `CIMS.DBUpdate.dll` 10.6.0.0（SHA256 `3784cba5c3cd3de154738ca6bbfe7b93a10cc358129302d540fe6581ef10a10c`）。未知组件哈希、未知 SQL 类型、不完整返回或读取期间文件变化均停止核验；自动发布在调用 Update DB 前完成这一检查。组件升级需重新检查 API 及现场映射，不能仅添加版本号或放宽字符串长度比较。核验记录保存实际 SQL 定义、组件哈希、编译 MDB 哈希和适配版本；自动发布与 Designer 手动更新确认复用同一核验器，并复用同一编译快照完成元数据及物理列验收。
+
+发布回执分别记录 `database_update_status`、`design_verification_status`、`runtime_recycle_status`、`site_state_status` 和厂商运行告警。官方 Update DB 返回成功不证明服务回收或运行验收通过；`runtime_service_verified` 保持 false，直到独立运行验收。SiteState 冲突和 SendMessage 连接失败保留为运行问题，不会据此改写已确认的数据库更新事实。
+
 测试环境默认 `DESIGNER_REQUIRE_DATABASE_BACKUP=false`；只有显式启用时，才要求 SQL 备份凭证。MDB 的 10 份版本备份独立于 SQL 备份。WCF 字段验收先计算最终名称和存在状态，再读取当前编译 MDB 的有效字段，包含继承；覆盖重命名、恢复继承字段以及新增后删除。
 
 只读模型查询按 MDB、SDK、桥接实现和查询参数的哈希缓存，最多 128 项、16 MiB。MDB 或组件变化时不会复用旧结果；未命中时仍使用隔离副本，结束后释放临时 `read.mdb`。历史审计 MDB、发布基线、工作文件和备份不参与自动删除。
@@ -101,7 +107,7 @@ CamstarPRD 官方发布已成功：ExProduct继承Product；ExDescription使用E
 
 ## 待完成边界
 
-1. 当前使用安装版本公开成员，未确认厂商独立 SDK 兼容性承诺。
+1. 设计操作使用安装版本公开成员；物理列生成使用按 DLL 哈希限制的内部只读适配器，均未确认厂商独立 SDK 兼容性承诺。
 2. 对象模型保存不等同于 Designer File > Import；原生 XML Import 往返尚未验证。
 3. CIMS.DBUpdate.Processor.DoUpdate 已适配并实际发布。备份管理员和Update DB账号分离；后者默认schema及schema CONTROL必须匹配。组件需MTA、多线程及安装版本回归。
 4. 批处理确认 WCFBuilderLauncher.exe -nogui -nosilverlight，会复制到多个运行目录；部署目录、服务回收及输出核对尚需验证。

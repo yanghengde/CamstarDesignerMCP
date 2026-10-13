@@ -106,5 +106,6 @@ def verify_manifest(manifest, cursor, schema):
     from designer.files import source_path
     # The immutable manifest snapshot, not a later working version.
     current = source_path(manifest['_modified_file'], '.mdb')
-    desired = compiled_metadata(current)
+    compiled = manifest.get('_compiled_file')
+    desired = read_metadata(source_path(compiled, '.mdb')) if compiled else compiled_metadata(current)
     return verify_changes(cursor, schema, changes(base, desired))
