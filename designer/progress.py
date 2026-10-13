@@ -249,7 +249,7 @@ def snapshot(username, session_id):
             7: [('compile', '执行 Compile'), ('confirm_compile', '手动编译确认')],
             8: [('preflight', '检查发布')] +
                ([('backup', '备份数据库')] if publication_info['backup_required'] else []) +
-               [('publish', '执行 Update Database'), ('confirm_publish', '核验手动更新' if package.get('working') else '手动更新确认')],
+               [('publish', '执行 Update Database'), ('confirm_publish', '核验已更新数据库并继续' if package.get('working') else '手动更新确认')],
             9: [('wcf', '生成 WCF'), ('confirm_wcf', '手动生成确认'), ('skip_services', '无需 WCF')],
             10: [('confirm_services', '手动部署确认')],
             11: [('verify', '核验数据库'), ('confirm_complete', '确认验收完成')]}
@@ -262,6 +262,8 @@ def snapshot(username, session_id):
                 if item['id'] == 'publish':
                     item['enabled'] &= publication_info['ready'] and stages[7]['status'] not in DONE
                 if item['id'] in ('preflight', 'backup') and stages[7]['status'] in DONE:
+                    item['enabled'] = False
+                if item['id'] == 'confirm_publish' and stages[7]['status'] in DONE:
                     item['enabled'] = False
                 if item['id'] == 'backup':
                     item['enabled'] &= bool(publication_info['plan'] and publication_info['plan'].get('ready_for_publish'))

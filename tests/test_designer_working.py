@@ -321,10 +321,46 @@ def test_manual_publish_confirmation_triggers_next_design_backup(project, monkey
         assert progress.start_action('user', sid, manifest(first).parent.name, 'confirm_publish')['status'] == 'running'
         await asyncio.gather(*list(progress._tasks))
     asyncio.run(confirm())
-    assert progress.snapshot('user', sid)['stages'][7]['status'] == 'done'
+    state = progress.snapshot('user', sid)
+    assert state['stages'][7]['status'] == 'done'
+    assert state['current'] == 9
+    assert next(action for action in state['stages'][8]['actions'] if action['id'] == 'wcf')['enabled']
+    assert not next(action for action in state['stages'][7]['actions'] if action['id'] == 'confirm_publish')['enabled']
     assert working.load(first['working_project_id'])['published']['method'] == 'manual'
     generate(project, 'ExSecond')
     assert len(working.backups(first['working_project_id'])) == 1
+
+
+def test_existing_database_verification_recovers_failed_update_step_without_republishing(project, monkeypatch):
+    stub_manual_verification(monkeypatch)
+    sid = memory.create_session('user')
+    result = generate(project, 'ExRecovery'); record(sid, result)
+    file = manifest(result); package_id = file.parent.name
+    from designer import progress_store as store
+    check_id, _ = store.begin('user', sid, 'check_designer_package', {'manifest_file': str(file)}, package_id=package_id)
+    store.finish(check_id, {'intact': True})
+    for action in ('confirm_review', 'confirm_compile'):
+        progress.start_action('user', sid, package_id, action)
+    failed_id, _ = store.begin('user', sid, 'confirm_designer_manual_publish',
+        {'manifest_file': str(file)}, package_id=package_id, action='confirm_publish')
+    store.finish(failed_id, error='旧核验规则未通过', status='failed')
+    state = progress.snapshot('user', sid)
+    assert state['current'] == 8
+    assert not state['publication']['ready']
+    recovery = next(item for item in state['stages'][7]['actions'] if item['id'] == 'confirm_publish')
+    assert recovery['enabled']
+    assert recovery['label'] == '核验已更新数据库并继续'
+    monkeypatch.setattr(publication, 'publish_database', lambda *args, **kwargs: pytest.fail('must not repeat Update DB'))
+    async def recover():
+        progress.start_action('user', sid, package_id, 'confirm_publish')
+        await asyncio.gather(*list(progress._tasks))
+    asyncio.run(recover())
+    state = progress.snapshot('user', sid)
+    assert state['current'] == 9
+    assert state['stages'][7]['status'] == 'done'
+    assert state['last_job']['status'] == 'done'
+    assert state['last_job']['result']['database_modified'] is False
+    assert working.load(result['working_project_id'])['published']['method'] == 'manual'
 
 
 def test_backup_download_requires_owned_package_and_intact_version(project):
