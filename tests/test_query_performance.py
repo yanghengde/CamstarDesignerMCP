@@ -73,3 +73,36 @@ def test_installed_inheritance_matches_vendor_parent(installed_sdk):
         assert detail['ParentCDO']['name'] == row['parent']
     assert vendor.query(str(installed_sdk), 'inheritance', 'cdo', 'Product') == result
 
+
+def test_single_turn_evidence_overflow_keeps_latest_round_and_original_history(monkeypatch):
+    from copy import deepcopy
+    import config
+    monkeypatch.setattr(config, 'CHAT_CONTEXT_CHARS', 32000)
+    messages = [{'role': 'system', 'content': 'rules'}, {'role': 'user', 'content': '查询Product继承模型'}]
+    for i in range(6):
+        messages += [
+            {'role': 'assistant', 'tool_calls': [{'id': str(i), 'function': {'name': 'get_chat_evidence', 'arguments': '{}'}}]},
+            {'role': 'tool', 'tool_call_id': str(i), 'name': 'get_chat_evidence', 'content': json.dumps({
+                'scope': 'current_chat_original_receipt', 'content': 'x' * 11000, 'next_offset': 11000})}]
+    original = deepcopy(messages)
+    result = chat_context.build_messages(messages)
+    assert len(json.dumps(result, ensure_ascii=False)) <= 32000
+    assert messages == original
+    assert json.loads(result[-1]['content'])['content'] == 'x' * 11000
+    assert json.loads(result[3]['content'])['evidence_id'] == '0'
+    assert result[1]['content'] == messages[1]['content']
+    assert [m.get('tool_call_id') for m in result if m['role'] == 'tool'] == [str(i) for i in range(6)]
+
+
+def test_overflow_never_shortens_write_receipts_or_user_requirements(monkeypatch):
+    import config
+    monkeypatch.setattr(config, 'CHAT_CONTEXT_CHARS', 16000)
+    monkeypatch.setattr(config, 'CHAT_TOOL_CONTEXT_CHARS', 30000)
+    messages = [{'role': 'user', 'content': '创建对象'},
+                {'role': 'assistant', 'tool_calls': [{'id': 'save', 'function': {'name': 'generate_designer_design_package', 'arguments': '{}'}}]},
+                {'role': 'tool', 'name': 'generate_designer_design_package', 'tool_call_id': 'save', 'content': 'x' * 20000},
+                {'role': 'assistant', 'tool_calls': [{'id': 'read', 'function': {'name': 'get_designer_entity', 'arguments': '{}'}}]},
+                {'role': 'tool', 'name': 'get_designer_entity', 'tool_call_id': 'read', 'content': '{}'}]
+    with pytest.raises(ValueError, match='上下文预算'):
+        chat_context.build_messages(messages)
+

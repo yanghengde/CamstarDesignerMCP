@@ -228,6 +228,24 @@ def build_messages(messages, *, task=None, preferences=None, extra_system=()):
     size = lambda items: len(json.dumps(items, ensure_ascii=False))
     selected = []
     for group in reversed(groups):
+        if not selected and size(systems + group) > budget:
+            # One user turn can itself contain many tool rounds. Shrinking only
+            # older user turns cannot bound repeated evidence pages in this one.
+            # Keep the most recent tool round intact; replace older read receipts
+            # with retrievable pointers, never user requirements or write results.
+            from agent.chat_intent import read_only_tool
+            last_call = max((i for i, item in enumerate(group) if item.get('tool_calls')), default=-1)
+            group = deepcopy(group)
+            for i, item in enumerate(group):
+                if i >= last_call or item.get('role') != 'tool' or not read_only_tool(item.get('name', '')):
+                    continue
+                item['content'] = json.dumps({
+                    'evidence_id': item.get('tool_call_id'),
+                    'summary_is_partial': True,
+                    'notice': '较早的只读回执已移出模型上下文以节省空间；原始记录完整保留，可用 get_chat_evidence 按需读取。不能据此推断查询为空、定义不存在或写入成功。',
+                }, ensure_ascii=False)
+                if size(systems + group) <= budget:
+                    break
         if size(systems + group + selected) > budget:
             if not selected:
                 raise ValueError('当前需求或设计批次超过聊天上下文预算，请拆分批次或增大 CHAT_CONTEXT_CHARS；原始记录已保留。')
