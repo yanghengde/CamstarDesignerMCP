@@ -666,8 +666,8 @@ public static class DesignerVendorBridge {
       }
      } else {
       var record=Record(obj); if(obj is CDODefinition) {
-       var fields=Values(((CDODefinition)obj).AllFields); record["fields"]=fields.Take(100).Select(Record).ToArray();
-       record["total_fields"]=fields.Count; record["fields_truncated"]=fields.Count>100;
+       var fields=Values(((CDODefinition)obj).AllFields); record["fields"]=fields.Select(Record).ToArray();
+       record["total_fields"]=fields.Count; record["fields_truncated"]=false;
        record["events"]=Values(((CDODefinition)obj).Events).Select(Record).ToArray();
       }
       if(obj is CDOField) record["events"]=Values(((CDOField)obj).Events).Select(Record).ToArray();

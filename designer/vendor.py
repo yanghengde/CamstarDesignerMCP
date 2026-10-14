@@ -132,8 +132,8 @@ def _validate_type_shape(values: dict, *, required=False) -> None:
 
 
 def validate_operations(operations: list[dict]) -> None:
-    if not isinstance(operations, list) or not 1 <= len(operations) <= 50:
-        raise ValueError("operations 必须包含 1～50 条设计操作")
+    if not isinstance(operations, list) or not operations:
+        raise ValueError("operations 必须为非空设计操作列表")
     for op in operations:
         if not isinstance(op, dict) or op.get("action") not in DESIGN_ACTIONS:
             raise ValueError("未知设计操作；请查询 get_designer_capabilities")

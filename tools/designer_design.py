@@ -157,14 +157,14 @@ async def prepare_designer_publish_plan(manifest_file: str) -> dict:
 async def list_designer_entities(mdb_file: str, kind: str, search: str = "", owner: str = "", offset: int = 0, limit: int = 20) -> dict:
     """经官方元数据模型读取有效定义，包括 CDO/field/field_type/CLF/function/event/query/table/column/index/map/label/workspace。
 
-    kind 使用 get_designer_capabilities 的 entity_kinds。field 必须指定 owner CDO；最多100条，返回来源SHA256。
+    kind 使用 get_designer_capabilities 的 entity_kinds。field 必须指定 owner CDO；支持 offset/limit 分页，limit 为正整数，无固定条数上限，返回来源SHA256。
     """
     return await asyncio.to_thread(vendor.query, mdb_file, "list", kind, "", owner, search, offset, limit)
 
 
 @mcp.tool
 async def get_designer_entity(mdb_file: str, kind: str, name: str, owner: str = "") -> dict:
-    """读取官方模型中的有效定义和属性；CDO含继承字段，CLF含有序函数，Query含SQL与参数。field必须指定owner。"""
+    """读取官方模型中的有效定义和属性；CDO含全部有效字段（包括继承字段），CLF含有序函数，Query含SQL与参数。field必须指定owner。"""
     return await asyncio.to_thread(vendor.query, mdb_file, "get", kind, name, owner)
 
 
@@ -200,7 +200,7 @@ async def generate_designer_design_package(mdb_file: str, expected_sha256: str, 
     发布后的下一轮首次修改前自动备份上一版，最多保留10个版本；后续批次不重复备份。
     files['modified.mdb']与working_mdb返回固定工作路径；清单与核验快照单独留存。
 
-    operations（顺序执行，最多50条，每项必须有 action，不使用 op 或操作名作包装键）：
+    operations（非空列表，顺序执行，无固定条数上限，每项必须有 action，不使用 op 或操作名作包装键）：
     示例：[{"action":"create_cdo","name":"ExExample","parent":"NamedDataObject","create_table":true,"table_name":"ExExample","table_description":"示例主表"}]
     create_cdo: name,parent,description,create_table,table_name,table_description,create_revision_base,create_maintenance。建表时必须提供非空 table_description。
     create_field_type: name,data_type,String需max_length；数值可precision/scale。
@@ -239,7 +239,7 @@ async def generate_designer_cdo_package(
 ) -> dict:
     """创建继承CDO和字段并更新固定工作MDB，生成官方XML，不需要现有XML模板。例如ExProduct继承Product，ExDescription为String/max_length=200。
 
-    fields每项{name,data_type,max_length,precision,scale,field_type,persistent,is_list,description}。
+    fields为非空列表，无固定字段数上限，每项{name,data_type,max_length,precision,scale,field_type,persistent,is_list,description}。
     String必须指定max_length；省略field_type时创建对象名前缀的专用类型，长名称带稳定摘要且不超过30字符，避免跨对象重名。
     使用已有field_type时只引用它，不能同时指定max_length；data_type/precision/scale若填写则作为预期属性逐项核对，不一致拒绝创建。
     persistent默认true，厂商创建存储列；可明确指定false。字段名称大小写重复、未知参数和非整数精度均在调用后端前拒绝。

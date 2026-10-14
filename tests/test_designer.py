@@ -244,8 +244,8 @@ def test_mdb_catalog_refuses_unverified_schema(monkeypatch):
         catalog.check_schema(object())
 
 
-@pytest.mark.parametrize("offset,limit", [(-1, 20), (0, 101), (True, 20)])
-def test_mdb_catalog_rejects_unbounded_pagination(offset, limit):
+@pytest.mark.parametrize("offset,limit", [(-1, 20), (0, 0), (0, -1), (0, True), (0, 1.5), (0, "300"), (True, 20)])
+def test_mdb_catalog_rejects_invalid_pagination(offset, limit):
     with pytest.raises(ValueError):
         catalog.bounds(offset, limit)
 

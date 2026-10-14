@@ -29,8 +29,8 @@ def cdo_operations(cdo_name, parent_cdo, fields, description='', *, create_table
     options = {'create_table': create_table, 'table_name': table_name, 'table_description': table_description,
                'create_revision_base': create_revision_base, 'create_maintenance': create_maintenance}
     operations[0].update({key: value for key, value in options.items() if value})
-    if not isinstance(fields, list) or not 1 <= len(fields) <= 20:
-        raise ValueError('fields 必须为1～20个字段定义')
+    if not isinstance(fields, list) or not fields:
+        raise ValueError('fields 必须为非空字段定义列表')
     seen = set()
     for field in fields:
         if not isinstance(field, dict) or not field.get('name'):

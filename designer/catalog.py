@@ -34,8 +34,8 @@ def rows(cursor):
 def bounds(offset: int, limit: int):
     if isinstance(offset, bool) or not isinstance(offset, int) or not 0 <= offset <= 10000:
         raise ValueError("offset 必须为 0～10000")
-    if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
-        raise ValueError("limit 必须为 1～100")
+    if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1:
+        raise ValueError("limit 必须为正整数")
 
 
 def list_cdos(path: Path, search: str, offset: int, limit: int) -> dict:
