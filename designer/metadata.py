@@ -128,7 +128,7 @@ def validate(root: ET.Element) -> dict:
 
 
 def identifier(value: str) -> str:
-    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", value):
+    if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", value):
         raise ValueError("标识符必须以字母或下划线开头，只能包含英文字母、数字和下划线")
     if value.casefold() in RESERVED_WORDS or value.casefold().startswith("sys_"):
         raise ValueError(f"{value} 是 Designer 手册附录 A 中的保留字")

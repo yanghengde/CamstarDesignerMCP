@@ -110,6 +110,66 @@ def test_completed_write_call_is_not_repeated_after_reconnect(isolated):
     assert len(store.operations('user', sid)) == 1
 
 
+@pytest.mark.parametrize('output', ['created successfully', '', None, {}, False, 0,
+                                    {'status': 'saved', 'files': {'manifest.json': 'saved.json'}}])
+def test_completed_call_replays_falsy_and_scalar_results_from_durable_receipt(isolated, output):
+    sid = memory.create_session('user')
+    calls = []
+    async def tool():
+        calls.append(1)
+        return output
+    async def execute():
+        assert await store.run_tool('user', sid, 'write', {}, 'durable-output', tool) == output
+        # The first asyncio task has been discarded; only SQLite can answer.
+        await asyncio.sleep(0)
+        assert not store.background_running('user', sid)
+        assert await store.run_tool('user', sid, 'write', {}, 'durable-output', tool) == output
+    asyncio.run(execute())
+    assert calls == [1]
+    receipt, = store.operations('user', sid)
+    assert receipt['status'] == 'done'
+    assert 'replay_result' not in receipt
+    messages = memory.get_user_messages('user', sid)
+    store.recover_chat_results('user', sid, messages)
+    store.recover_chat_results('user', sid, messages)
+    assert [item['content'] for item in messages if item.get('role') == 'tool'] == [str(output)]
+
+
+def test_completed_legacy_receipt_without_saved_output_never_repeats_write(isolated):
+    sid = memory.create_session('user')
+    identity, _ = store.begin('user', sid, 'write', {}, call_id='legacy-completed')
+    store.finish(identity)
+    with store.connection() as conn:
+        conn.execute('UPDATE operations SET replay_result=NULL WHERE id=?', (identity,))
+    async def tool():
+        pytest.fail('A completed legacy write must not execute again')
+    assert asyncio.run(store.run_tool('user', sid, 'write', {}, 'legacy-completed', tool)) is None
+    assert len(store.operations('user', sid)) == 1
+
+
+def test_scalar_replay_is_redacted_bounded_and_excluded_from_public_receipts(isolated, monkeypatch):
+    sid = memory.create_session('user')
+    monkeypatch.setattr(config, 'DESIGNER_DB_PASSWORD', 'private-test-password')
+    output = 'private-test-password\n' + 'x' * (store.MAX_RECEIPT_TEXT_CHARS + 50)
+    calls = []
+    async def tool():
+        calls.append(1)
+        return output
+    async def execute():
+        assert await store.run_tool('user', sid, 'write', {}, 'bounded-output', tool) == output
+        await asyncio.sleep(0)
+        return await store.run_tool('user', sid, 'write', {}, 'bounded-output', tool)
+    replay = asyncio.run(execute())
+    assert calls == [1]
+    assert 'private-test-password' not in replay
+    assert replay.startswith('[REDACTED]')
+    assert '已截断' in replay
+    assert len(replay) < store.MAX_RECEIPT_TEXT_CHARS + 100
+    receipt, = store.operations('user', sid)
+    assert receipt['result'] is None
+    assert 'replay_result' not in receipt
+
+
 def test_runtime_counts_repeated_and_mixed_design_mutations(isolated, monkeypatch):
     monkeypatch.setattr(runtime, 'get_stream_writer', lambda: lambda value: None)
     monkeypatch.setattr(runtime, 'record_perf', lambda *args: None)

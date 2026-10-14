@@ -201,10 +201,10 @@ async def generate_designer_design_package(mdb_file: str, expected_sha256: str, 
     files['modified.mdb']与working_mdb返回固定工作路径；清单与核验快照单独留存。
 
     operations（顺序执行，最多50条，每项必须有 action，不使用 op 或操作名作包装键）：
-    示例：[{"action":"create_cdo","name":"ExExample","parent":"NamedDataObject","create_table":true,"table_name":"ExExample"}]
-    create_cdo: name,parent,description,create_table,table_name,create_revision_base,create_maintenance。
+    示例：[{"action":"create_cdo","name":"ExExample","parent":"NamedDataObject","create_table":true,"table_name":"ExExample","table_description":"示例主表"}]
+    create_cdo: name,parent,description,create_table,table_name,table_description,create_revision_base,create_maintenance。建表时必须提供非空 table_description。
     create_field_type: name,data_type,String需max_length；数值可precision/scale。
-    add_field: name,owner,field_type,persistent(默认false),is_list(默认false),description。
+    add_field: name,owner,field_type,persistent(默认false),is_list(默认false),description；expected_type可核对data_type/precision/scale，引用不符拒绝创建。创建参数未知键会拒绝，不能使用拼错的属性。
     copy_clf: name,template；create_query: name,query_type,db_type_id,text,description。
     create_map: owner源CDO,target目标CDO，由官方生成映射名称。
     create_clf: name,clf_type；add_clf_function: owner,function,sequence。
@@ -239,11 +239,12 @@ async def generate_designer_cdo_package(
 ) -> dict:
     """创建继承CDO和字段并更新固定工作MDB，生成官方XML，不需要现有XML模板。例如ExProduct继承Product，ExDescription为String/max_length=200。
 
-    fields每项{name,data_type,max_length,field_type,persistent,is_list,description}。
-    String必须指定max_length；省略field_type时创建专用类型，避免改变共享类型。
-    使用已有field_type时只引用它，不能同时更改长度。persistent默认true，厂商创建存储列；可明确指定false。
+    fields每项{name,data_type,max_length,precision,scale,field_type,persistent,is_list,description}。
+    String必须指定max_length；省略field_type时创建对象名前缀的专用类型，长名称带稳定摘要且不超过30字符，避免跨对象重名。
+    使用已有field_type时只引用它，不能同时指定max_length；data_type/precision/scale若填写则作为预期属性逐项核对，不一致拒绝创建。
+    persistent默认true，厂商创建存储列；可明确指定false。字段名称大小写重复、未知参数和非整数精度均在调用后端前拒绝。
     create_table/table_name/table_description、create_revision_base、create_maintenance 明确控制厂商派生结构，默认均不启用。
-    创建前执行官方只读预检，继承字段或派生名称冲突会拒绝保存。
+    create_table=true必须提供非空table_description。创建前执行官方只读预检，继承字段或派生名称冲突会拒绝保存。
     """
     from designer.design_contract import cdo_operations
     operations = cdo_operations(cdo_name, parent_cdo, fields, description, create_table=create_table,

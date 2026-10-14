@@ -118,6 +118,19 @@ def select_workspace(source: Path, workspace: str) -> str:
     return site[0]["WorkspaceCode"]
 
 
+def _validate_type_shape(values: dict, *, required=False) -> None:
+    if required or 'data_type' in values:
+        value = values.get('data_type')
+        if not isinstance(value, str) or not value.strip() or value != value.strip():
+            raise ValueError('data_type 必须是实际读取的非空数据类型名称')
+    for key in ('precision', 'scale'):
+        if key in values and (isinstance(values[key], bool) or not isinstance(values[key], int)
+                              or not 0 <= values[key] <= 2147483647):
+            raise ValueError(f'{key} 必须为非负整数，不能使用布尔值、小数或字符串')
+    if 'precision' in values and 'scale' in values and values['scale'] > values['precision']:
+        raise ValueError('scale 不能大于 precision')
+
+
 def validate_operations(operations: list[dict]) -> None:
     if not isinstance(operations, list) or not 1 <= len(operations) <= 50:
         raise ValueError("operations 必须包含 1～50 条设计操作")
@@ -125,20 +138,55 @@ def validate_operations(operations: list[dict]) -> None:
         if not isinstance(op, dict) or op.get("action") not in DESIGN_ACTIONS:
             raise ValueError("未知设计操作；请查询 get_designer_capabilities")
         action = op["action"]
+        creation_keys = {
+            'create_cdo': {'name', 'parent', 'description', 'create_table', 'table_name', 'table_description',
+                           'create_revision_base', 'create_maintenance'},
+            'create_field_type': {'name', 'data_type', 'max_length', 'precision', 'scale', 'description'},
+            'add_field': {'name', 'owner', 'field_type', 'persistent', 'is_list', 'description', 'expected_type'},
+        }
+        if action in creation_keys:
+            unknown = set(op) - creation_keys[action] - {'action'}
+            if unknown:
+                raise ValueError(f"{action} 包含未知参数：{', '.join(sorted(unknown))}；请检查拼写")
+            if 'description' in op and not isinstance(op['description'], str):
+                raise ValueError('description 必须是字符串')
         if action in CREATE_ACTIONS - {"create_map", "add_clf_function", "add_query_text", "add_field_map", "bind_event"}:
             identifier(op.get("name", ""))
             if len(op["name"]) > 30:
                 raise ValueError("新定义名超过手册规定的 30 字符")
-        if action == "create_cdo" and not op.get("parent"):
-            raise ValueError("新 CDO 必须指定父对象")
-        if action == "add_field" and (not op.get("owner") or not op.get("field_type")):
-            raise ValueError("新增字段必须指定 owner 和 field_type")
-        if action == "create_field_type" and op.get("data_type") == "String":
-            value = op.get("max_length")
-            if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= 1000000:
-                raise ValueError("String max_length 必须为 1～1000000 的整数")
-            if "precision" in op or "scale" in op:
-                raise ValueError("String类型仅用max_length指定长度，不能同时指定precision/scale")
+        if action == 'create_cdo':
+            if not isinstance(op.get('parent'), str) or not op['parent'].strip():
+                raise ValueError('新 CDO 必须指定父对象')
+            for key in ('table_name', 'table_description'):
+                if key in op and not isinstance(op[key], str):
+                    raise ValueError(f'{key} 必须是字符串')
+            if 'table_name' in op and op['table_name']:
+                identifier(op['table_name'])
+                if len(op['table_name']) > 30:
+                    raise ValueError('新表名不能超过 30 字符')
+            if op.get('create_table') is True:
+                if not isinstance(op.get('table_description'), str) or not op['table_description'].strip():
+                    raise ValueError('创建表必须提供非空 table_description，避免 Designer 保存时拒绝空表描述')
+            elif op.get('table_name') or op.get('table_description'):
+                raise ValueError('指定 table_name/table_description 时必须明确 create_table=true')
+        if action == 'add_field':
+            if any(not isinstance(op.get(key), str) or not op[key].strip() for key in ('owner', 'field_type')):
+                raise ValueError('新增字段必须指定 owner 和 field_type')
+            if 'expected_type' in op:
+                shape = op['expected_type']
+                if not isinstance(shape, dict) or set(shape) - {'data_type', 'precision', 'scale'}:
+                    raise ValueError('expected_type 只支持 data_type/precision/scale 属性核对')
+                _validate_type_shape(shape)
+        if action == 'create_field_type':
+            _validate_type_shape(op, required=True)
+            if op['data_type'] == 'String':
+                value = op.get('max_length')
+                if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= 1000000:
+                    raise ValueError('String max_length 必须为 1～1000000 的整数')
+                if 'precision' in op or 'scale' in op:
+                    raise ValueError('String类型仅用max_length指定长度，不能同时指定precision/scale')
+            elif 'max_length' in op:
+                raise ValueError('max_length 仅用于 String；数值类型请使用 precision/scale')
         for key in ("persistent", "is_list", "create_table", "create_revision_base", "create_maintenance"):
             if key in op and not isinstance(op[key], bool):
                 raise ValueError(f"{key} 必须是布尔值")
@@ -249,6 +297,13 @@ def preflight_error(result: dict) -> str:
             detail += (f"；请求 {requested['field_type']} ({requested['data_type']})，长度/精度 {requested['precision']}，"
                        f"小数位 {requested['scale']}，持久化 {'是' if requested['persistent'] else '否'}，"
                        f"列表 {'是' if requested['is_list'] else '否'}。")
+        if conflict.get('existing_type'):
+            shape = conflict['existing_type']
+            detail = (f"已有字段类型 {shape['field_type']} ({shape['data_type']})，长度/精度 {shape['precision']}，"
+                      f"小数位 {shape['scale']}，工作区 {shape['workspace']}。")
+            requested = conflict.get('requested_type') or {}
+            if requested:
+                detail += f"请求 {requested['data_type']}，长度/精度 {requested.get('precision')}，小数位 {requested.get('scale')}。"
         lines.append(f"{label}：{detail}{conflict['message']}")
     return '创建预检未通过，尚未保存 Designer：' + '\n'.join(lines)
 
@@ -284,7 +339,7 @@ def _design(mdb_file: str, expected_sha256: str, workspace: str, operations: lis
     before = digest(source)
     if before != expected_sha256:
         raise ValueError("来源 MDB SHA256 不匹配，请重新读取设计定义")
-    if any(op['action'] in {'create_cdo', 'add_field'} for op in operations):
+    if any(op['action'] in {'create_cdo', 'create_field_type', 'add_field'} for op in operations):
         inspected = preflight(mdb_file, expected_sha256, operations, workspace)
         if not inspected['ready']:
             raise ValueError(preflight_error(inspected))

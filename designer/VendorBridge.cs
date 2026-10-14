@@ -173,6 +173,20 @@ public static class DesignerVendorBridge {
  static void CheckName(MDBMetadataSet set,string kind,string name,string owner) {
   if(Objects(set,kind,owner).Any(x=>String.Equals(Name(x),name,StringComparison.OrdinalIgnoreCase))) throw new ArgumentException("Name already exists: "+name);
  }
+ static Dictionary<string,object> TypeProfile(FieldDefinition type) {
+  return Dict("field_type",type.FieldDefName,"data_type",type.CPPDataType,
+   "precision",type.PrecisionValue,"scale",type.Scale,"workspace",type.WorkspaceCode);
+ }
+ static void CheckExpectedType(FieldDefinition type,Dictionary<string,object> op) {
+  if(!op.ContainsKey("expected_type")) return;
+  var expected=Map(op["expected_type"]);
+  if(expected.ContainsKey("data_type") && !String.Equals(type.CPPDataType,Text(expected,"data_type"),StringComparison.OrdinalIgnoreCase))
+   throw new ArgumentException("引用字段类型 "+type.FieldDefName+" 的数据类型不符：期望 "+Text(expected,"data_type")+"，实际 "+type.CPPDataType);
+  if(expected.ContainsKey("precision") && type.PrecisionValue!=Number(expected,"precision"))
+   throw new ArgumentException("引用字段类型 "+type.FieldDefName+" 的长度/精度不符：期望 "+Number(expected,"precision")+"，实际 "+type.PrecisionValue);
+  if(expected.ContainsKey("scale") && type.Scale!=Number(expected,"scale"))
+   throw new ArgumentException("引用字段类型 "+type.FieldDefName+" 的小数位不符：期望 "+Number(expected,"scale")+"，实际 "+type.Scale);
+ }
  static Dictionary<string,object> FieldProfile(CDOField field) {
   var origin=field; var seen=new HashSet<int>();
   while(origin.InheritedID!=0 && seen.Add(origin.FieldID) && origin.InheritedField!=null) origin=origin.InheritedField;
@@ -222,6 +236,23 @@ public static class DesignerVendorBridge {
   foreach(var item in (object[])request["operations"]) {
    index++; var op=Map(item); string action=Text(op,"action"),name=Text(op,"name"),owner=Text(op,"owner");
    try {
+    if(action=="create_field_type") {
+     var existingTypes=set.FieldDefinitions.Values.Where(t=>t.FieldDefName.Equals(name,StringComparison.OrdinalIgnoreCase)).ToArray();
+     if(existingTypes.Length==1) {
+      var existing=existingTypes[0]; string dataType=Text(op,"data_type");
+      string precisionKey=dataType=="String" ? "max_length" : "precision";
+      var requested=Dict("field_type",name,"data_type",dataType,
+       "precision",op.ContainsKey(precisionKey) ? (object)Number(op,precisionKey) : null,
+       "scale",op.ContainsKey("scale") ? (object)Number(op,"scale") : null,"workspace",set.WorkSpace);
+      bool compatible=String.Equals(existing.CPPDataType,dataType,StringComparison.OrdinalIgnoreCase) &&
+       (!op.ContainsKey(precisionKey) || existing.PrecisionValue==Number(op,precisionKey)) &&
+       (!op.ContainsKey("scale") || existing.Scale==Number(op,"scale"));
+      conflicts.Add(Dict("operation",index,"kind","field_type_name","owner",owner,"name",name,
+       "existing_type",TypeProfile(existing),"requested_type",requested,"compatible_shape",compatible,
+       "message",compatible ? "已有同名字段类型，已指定的类型与精度相符；请核对其他语义后明确引用现有 field_type，并移除新增类型操作。" : "已有同名字段类型，但请求的类型或精度不符；请明确使用其他类型名或核对现有类型，不能重复创建或修改共享类型。"));
+      continue;
+     }
+    }
     if(action=="add_field") {
      var cdo=(CDODefinition)Find(set,"cdo",owner,"");
      var existing=cdo.AllFields.Values.FirstOrDefault(f=>f.FieldName.Equals(name,StringComparison.OrdinalIgnoreCase));
@@ -313,6 +344,8 @@ public static class DesignerVendorBridge {
     return obj;
   }
   if(action=="create_cdo") {
+   if(Flag(op,"create_table") && String.IsNullOrWhiteSpace(Text(op,"table_description")))
+    throw new ArgumentException("create_table=true 时必须指定非空 table_description；Designer 保存不接受空表描述");
    CheckName(set,"cdo",name,""); var parent=(CDODefinition)Find(set,"cdo",Text(op,"parent"),"");
    var cdo=new CDODefinition(); cdo.Metadata=set;
    cdo=cdo.CreateNewCDO(name,parent,Text(op,"description"),parent.CDOUsageMaskId,name,Flag(op,"create_table"),parent.StorageCategoryId,
@@ -416,8 +449,9 @@ public static class DesignerVendorBridge {
   }
   if(action=="add_field") {
    CheckName(set,"field",name,owner); var cdo=(CDODefinition)Find(set,"cdo",owner,"");
-   if(cdo.WorkspaceCode!=set.WorkSpace) cdo.CreateWorkspaceOverride(set.WorkSpace,ModifiedStatusEnum.Modified);
    var type=(FieldDefinition)Find(set,"field_type",Text(op,"field_type"),"");
+   CheckExpectedType(type,op);
+   if(cdo.WorkspaceCode!=set.WorkSpace) cdo.CreateWorkspaceOverride(set.WorkSpace,ModifiedStatusEnum.Modified);
    var f=cdo.AddField(type,Flag(op,"is_list"),name,Text(op,"description"),0,0,Flag(op,"persistent"));
    f.IsNonPersistent=!Flag(op,"persistent");
    return (f);

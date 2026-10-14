@@ -58,11 +58,14 @@ def build(calls, attachments, creation_checks=None):
         if target not in targets:
             targets.append(target)
         if function['name'] == 'generate_designer_cdo_package':
+            from designer.design_contract import cdo_operations
             owner = args.get('cdo_name', '')
             objects.append({'name': owner, 'parent': args.get('parent_cdo', '')})
             row('新增对象', name=owner, parent=args.get('parent_cdo', ''), values=args)
+            fields = {op['name']: op for op in cdo_operations(owner, args['parent_cdo'], args['fields'])
+                      if op['action'] == 'add_field'}
             for field in args.get('fields', []):
-                row('新增字段', owner, field.get('name', ''), values=field)
+                row('新增字段', owner, field.get('name', ''), values={**field, **fields[field['name']]})
         elif function['name'] == 'generate_designer_design_package':
             types = {op['name']: op for op in args.get('operations', []) if op.get('action') == 'create_field_type'}
             for op in args.get('operations', []):

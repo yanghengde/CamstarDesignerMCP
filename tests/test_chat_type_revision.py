@@ -79,7 +79,8 @@ def test_integer_field_revision_produces_new_preview_without_write(api, revision
                   {'name': 'ComplaintCode', 'data_type': 'String', 'max_length': 24}]
         args = {'mdb_file': 'base.mdb', 'expected_sha256': 'a' * 64, 'workspace': '200',
                 'cdo_name': 'CustomerComplaint', 'parent_cdo': 'NamedDataObject',
-                'fields': fields, 'create_table': True, 'table_name': 'T_CustomerComplaint'}
+                'fields': fields, 'create_table': True, 'table_name': 'T_CustomerComplaint',
+                'table_description': 'Customer complaint'}
         return text_stream(calls=[SimpleNamespace(index=0, id=f'plan-{len(requests)}',
             function=SimpleNamespace(name='generate_designer_cdo_package', arguments=json.dumps(args)))])
     monkeypatch.setattr(runtime._client.chat.completions, 'create', model)

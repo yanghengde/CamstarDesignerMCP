@@ -10,6 +10,7 @@ from uuid import uuid4
 import config
 
 LEASE_SECONDS = 30
+MAX_RECEIPT_TEXT_CHARS = 16000
 _tool_tasks = {}
 _tool_requests = {}
 
@@ -34,8 +35,12 @@ def recover_chat_results(username, session_id, messages):
         call_id = event['call_id']
         if not call_id or call_id in seen or event['status'] not in {'done', 'failed'}:
             continue
-        result = event.get('result') or ('Error: ' + event['error'] if event['error'] else None)
-        if result is None:
+        result = event.get('result')
+        if event['status'] == 'done' and result is None:
+            result = (previous_call(username, session_id, call_id) or {}).get('result')
+        if event['status'] == 'failed' and event['error']:
+            result = result or 'Error: ' + event['error']
+        if event['status'] == 'failed' and result is None:
             continue
         if call_id not in calls:
             messages.append({'role': 'assistant', 'content': None, 'tool_calls': [{
@@ -61,8 +66,10 @@ async def run_tool(username, session_id, tool, arguments, call_id, function):
             if previous:
                 if previous['tool'] != tool or previous['arguments'] != arguments:
                     raise ValueError('工具调用标识已用于另一项操作')
-                if previous['status'] == 'done' and previous.get('result'):
-                    return previous['result']
+                # Completion is authoritative even when a tool returned no
+                # output, or an older receipt did not retain that output.
+                if previous['status'] == 'done':
+                    return previous.get('result')
                 if previous['status'] in {'failed', 'interrupted'}:
                     raise ValueError(previous['error'] or '上次操作未完成，请核对后使用新的调用重试')
                 if previous['status'] == 'running':
@@ -105,6 +112,8 @@ def connection():
             username TEXT, session_id TEXT, package_id TEXT, stage INTEGER,
             status TEXT, updated REAL, PRIMARY KEY(username, session_id, package_id, stage))''')
         conn.execute('CREATE INDEX IF NOT EXISTS operation_calls ON operations(username,session_id,call_id,started)')
+        if 'replay_result' not in {row[1] for row in conn.execute('PRAGMA table_info(operations)')}:
+            conn.execute('ALTER TABLE operations ADD COLUMN replay_result TEXT')
         if 'workflow_version' not in {row[1] for row in conn.execute('PRAGMA table_info(confirmations)')}:
             conn.execute('ALTER TABLE confirmations ADD COLUMN workflow_version INTEGER DEFAULT 1')
         if conn.execute('SELECT 1 FROM confirmations WHERE workflow_version=1 LIMIT 1').fetchone():
@@ -131,6 +140,7 @@ def operations(username, session_id):
     result = []
     for row in rows:
         item = dict(row)
+        item.pop('replay_result', None)
         item['arguments'] = json.loads(item['arguments'])
         item['result'] = json.loads(item['result']) if item['result'] else None
         result.append(item)
@@ -146,6 +156,9 @@ def previous_call(username, session_id, call_id):
     event = dict(row)
     event['arguments'] = json.loads(event['arguments'])
     event['result'] = json.loads(event['result']) if event['result'] else None
+    replay = event.pop('replay_result', None)
+    if replay is not None:
+        event['result'] = json.loads(replay)
     return event
 
 
@@ -158,7 +171,9 @@ def begin(username, session_id, tool, arguments, *, package_id='', action='', ca
             if existing:
                 return existing['id'], False
         identity = uuid4().hex
-        conn.execute('INSERT INTO operations VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+        conn.execute('''INSERT INTO operations
+                     (id,username,session_id,package_id,tool,action,call_id,status,started,updated,finished,arguments,result,error)
+                     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
                      (identity, username, session_id, package_id, tool, action, call_id, 'running', now, now, None,
                       json.dumps(arguments, ensure_ascii=False), None, ''))
         return identity, True
@@ -177,13 +192,20 @@ def finish(identity, result=None, error='', status='done'):
                'files_sha256', 'client_assembly', 'service_assembly', 'service_scope', 'fields_verified',
                'method', 'database_modified'}
     saved = {key: value for key, value in result.items() if key in allowed} if isinstance(result, dict) else None
+    replay = saved
+    if isinstance(result, str):
+        replay = redact(result)
+        if len(replay) > MAX_RECEIPT_TEXT_CHARS:
+            replay = replay[:MAX_RECEIPT_TEXT_CHARS] + '\n[回执输出已截断；原操作已完成，请勿重复执行。]'
+    elif result is None or isinstance(result, (bool, int, float)):
+        replay = result
     if isinstance(result, str) and result.startswith('Error'):
         error, status = result, 'failed'
     now = time.time()
     with connection() as conn:
-        conn.execute('UPDATE operations SET status=?, result=?, error=?, updated=?, finished=? WHERE id=?',
+        conn.execute('UPDATE operations SET status=?, result=?, replay_result=?, error=?, updated=?, finished=? WHERE id=?',
                      (status, json.dumps(saved, ensure_ascii=False) if saved is not None else None,
-                      redact(error)[:1200], now, now, identity))
+                      json.dumps(replay, ensure_ascii=False), redact(error)[:1200], now, now, identity))
 
 
 async def heartbeat(identity):

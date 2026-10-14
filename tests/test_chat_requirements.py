@@ -37,7 +37,9 @@ def live_runtime(isolated_store, monkeypatch):
     state = {'phase': 'inference', 'started': [], 'saved': [], 'inferences': 0, 'model_inputs': []}
 
     def call(name, identity):
-        args = {'mdb_file': 'private-test.mdb', 'expected_sha256': 'a' * 64, 'workspace': '200',
+        # These tests need independently executable saves so that input can
+        # arrive between them. Two writes to one MDB must now be combined.
+        args = {'mdb_file': f'private-test-{name}.mdb', 'expected_sha256': 'a' * 64, 'workspace': '200',
                 'cdo_name': name, 'parent_cdo': 'NamedDataObject',
                 'fields': [{'name': 'Description', 'data_type': 'String', 'max_length': 200}]}
         return SimpleNamespace(index=identity, id=f'{name}-{identity}',

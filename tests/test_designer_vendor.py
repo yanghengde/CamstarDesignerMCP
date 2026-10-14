@@ -45,8 +45,8 @@ def test_cdo_workflow_uses_private_string_type_and_persistent_field(monkeypatch)
                 [{"name":"ExDescription","data_type":"String","max_length":200}]))
     assert captured["operations"]==[
         {"action":"create_cdo","name":"ExProduct","parent":"Product","description":""},
-        {"action":"create_field_type","name":"ExDescription200","data_type":"String","max_length":200},
-        {"action":"add_field","name":"ExDescription","owner":"ExProduct","field_type":"ExDescription200","persistent":True,"is_list":False,"description":""},
+        {"action":"create_field_type","name":"ExProduct_ExDescription_200","data_type":"String","max_length":200},
+        {"action":"add_field","name":"ExDescription","owner":"ExProduct","field_type":"ExProduct_ExDescription_200","persistent":True,"is_list":False,"description":""},
     ]
 
 

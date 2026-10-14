@@ -104,7 +104,7 @@ def test_plan_inspection_and_preview_bind_profile_to_call_source_and_options(mon
     monkeypatch.setattr(vendor,'preflight',inspect)
     call={'id':'call-1','function':{'name':'generate_designer_cdo_package','arguments':json.dumps({
         'mdb_file':'source.mdb','expected_sha256':'a'*64,'cdo_name':'ExObject','parent_cdo':'Product',
-        'fields':[{'name':'Code','field_type':'Name'}],'create_table':True,'table_name':'T_ExObject'})}}
+        'fields':[{'name':'Code','field_type':'Name'}],'create_table':True,'table_name':'T_ExObject','table_description':'Object'})}}
     checks=inspect_calls([call]); preview=excel_preview.build([call],[],checks)
     assert captured[0][0]['create_table'] is True
     assert preview['creation_checks'][0]['call_id']=='call-1'
@@ -177,7 +177,7 @@ def test_installed_sdk_rejects_generated_structure_collisions(installed_sdk, col
                    {'action':'create_cdo','name':'ExDerivedProbe','parent':'NamedDataObject','create_maintenance':True}]
                   if collision == 'maintenance' else
                   [{'action':'create_cdo','name':'ExTableProbe','parent':'NamedDataObject',
-                    'create_table':True,'table_name':'Product'}])
+                    'create_table':True,'table_name':'Product','table_description':'Collision probe'}])
     result = vendor.preflight(str(installed_sdk), vendor.digest(installed_sdk), operations)
     assert not result['ready'] and result['conflicts']
     if collision == 'maintenance':
@@ -188,7 +188,7 @@ def test_installed_sdk_rejects_generated_structure_collisions(installed_sdk, col
 def test_installed_sdk_allows_same_field_name_on_different_objects(installed_sdk):
     operations = []
     for name, table in (('ExOwnerOneProbe','T_ExOwnerProbe'), ('ExOwnerTwoProbe','T_ExOwnerProbe_1')):
-        operations += [{'action':'create_cdo','name':name,'parent':'NamedDataObject','create_table':True,'table_name':table},
+        operations += [{'action':'create_cdo','name':name,'parent':'NamedDataObject','create_table':True,'table_name':table,'table_description':'Owner probe'},
                        {'action':'add_field','owner':name,'name':'ExOwnerCode','field_type':'Name','persistent':True}]
     result = vendor.preflight(str(installed_sdk), vendor.digest(installed_sdk), operations)
     assert result['ready'] and not result['conflicts']
