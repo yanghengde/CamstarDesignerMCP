@@ -113,6 +113,25 @@
         .agent-bubble table { border-collapse: collapse; font-size: 12px; width: 100%; background: white; }
         .agent-bubble th, .agent-bubble td { border: 1px solid var(--border); padding: 8px 12px; text-align: left; }
         .agent-bubble th { background: #f0f3f4; font-weight: 550; }
+        .field-catalog-filter { display:block; width:100%; margin:12px 0 8px; padding:10px 12px; border:1px solid var(--border); border-radius:8px; background:white; color:var(--text); font:inherit; font-size:13px; outline:none; }
+        .field-catalog-filter:focus { border-color:var(--teal); box-shadow:0 0 0 2px var(--teal-soft); }
+        .field-catalog-scroll { max-height:560px; overflow:auto; position:relative; border:1px solid var(--border); border-radius:9px; scrollbar-gutter:stable; scrollbar-color:#aab8bf #eef2f4; overscroll-behavior:contain; }
+        .field-catalog-scroll:focus-visible { outline:2px solid var(--teal); outline-offset:2px; }
+        .agent-bubble .field-catalog-table { width:max-content; min-width:100%; border-collapse:separate; border-spacing:0; font-size:13px; line-height:1.6; }
+        .field-catalog-table th, .field-catalog-table td { white-space:nowrap; overflow-wrap:normal; word-break:normal; vertical-align:top; padding:10px 14px; border:0; border-right:1px solid var(--border); border-bottom:1px solid var(--border); background:white; }
+        .field-catalog-table th { position:sticky; top:0; z-index:3; background:#eef3f4; font-weight:600; }
+        .field-catalog-table tbody tr:nth-child(even) td { background:#f8fafb; }
+        .field-catalog-table tbody tr:hover td { background:#edf6f3; }
+        .field-catalog-table .field-col-index { width:64px; min-width:64px; max-width:64px; text-align:center; position:sticky; left:0; z-index:2; }
+        .field-catalog-table .field-col-name { min-width:260px; position:sticky; left:64px; z-index:2; box-shadow:2px 0 3px #25343c0a; }
+        .field-catalog-table th.field-col-index, .field-catalog-table th.field-col-name { z-index:4; }
+        .field-catalog-table .field-col-field_type { min-width:180px; }
+        .field-catalog-table .field-col-data_type { min-width:120px; }
+        .field-catalog-table .field-col-precision, .field-catalog-table .field-col-scale { min-width:100px; }
+        .field-catalog-table .field-col-persistent, .field-catalog-table .field-col-is_list { min-width:80px; }
+        .field-catalog-table .field-col-origin { min-width:170px; }
+        .field-catalog-table .field-col-description { width:440px; min-width:360px; max-width:440px; white-space:normal; overflow-wrap:break-word; }
+        .field-catalog-note { display:block; color:var(--secondary); font-size:12px; margin-top:8px; }
         .agent-bubble blockquote { border-left: 2px solid #b3ccc4; color: var(--secondary); padding-left: 14px; margin: 12px 0; }
         .typing { color: var(--secondary); font-size: 12px; display: flex; align-items: center; gap: 9px; padding: 4px 0 18px 39px; }
         .typing-dots { display: flex; gap: 3px; }
@@ -625,33 +644,38 @@
             bubble.appendChild(title);
             const filter = document.createElement('input'); filter.type = 'search';
             filter.placeholder = '筛选字段名、类型或描述'; filter.setAttribute('aria-label', '筛选字段清单');
-            filter.style.cssText = 'display:block;width:100%;margin:12px 0;padding:8px;box-sizing:border-box';
+            filter.className = 'field-catalog-filter';
             bubble.appendChild(filter);
             const labels = {name:'字段名',field_type:'字段类型',data_type:'数据类型',precision:'长度/精度',scale:'小数位',persistent:'持久化',is_list:'列表',origin:'定义来源',description:'描述'};
             const table = document.createElement('table'), head = document.createElement('thead'), body = document.createElement('tbody');
+            table.className = 'field-catalog-table';
             const header = document.createElement('tr');
-            for (const label of ['序号', ...result.columns.map(column => labels[column] || column)]) {
-                const cell = document.createElement('th'); cell.textContent = label; header.appendChild(cell);
+            const columns = ['index', ...result.columns];
+            for (const column of columns) {
+                const cell = document.createElement('th'); cell.className = `field-col-${column}`;
+                cell.setAttribute('scope', 'col'); cell.textContent = column === 'index' ? '序号' : labels[column] || column; header.appendChild(cell);
             }
             head.appendChild(header); table.appendChild(head); table.appendChild(body);
             const rows = result.rows.map((values, index) => {
                 const row = document.createElement('tr');
-                for (const value of [index + 1, ...values]) {
+                for (const [columnIndex, value] of [index + 1, ...values].entries()) {
                     const cell = document.createElement('td');
+                    cell.className = `field-col-${columns[columnIndex]}`;
                     cell.textContent = value === true ? '是' : value === false ? '否' : value == null ? '—' : String(value);
                     row.appendChild(cell);
                 }
                 body.appendChild(row); return {row, text: values.join(' ').toLowerCase()};
             });
-            const scroll = document.createElement('div'); scroll.className = 'table-scroll';
-            scroll.style.cssText = 'max-height:560px;overflow:auto'; scroll.appendChild(table); bubble.appendChild(scroll);
-            const note = document.createElement('small');
-            note.textContent = `已完整加载 ${result.rows.length} 个字段 · 只读查询`;
+            const scroll = document.createElement('div'); scroll.className = 'table-scroll field-catalog-scroll';
+            scroll.setAttribute('tabindex', '0'); scroll.setAttribute('role', 'region'); scroll.setAttribute('aria-label', `${result.owner} 字段表格，可横向滚动查看所有列`);
+            scroll.appendChild(table); bubble.appendChild(scroll);
+            const note = document.createElement('small'); note.className = 'field-catalog-note';
+            note.textContent = `已完整加载 ${result.rows.length} 个字段 · 左右滚动查看所有列，字段名保持固定`;
             bubble.appendChild(note);
             filter.addEventListener('input', () => {
                 const query = filter.value.trim().toLowerCase(); let count = 0;
                 rows.forEach(item => {item.row.hidden = !item.text.includes(query); if (!item.row.hidden) count++;});
-                note.textContent = `显示 ${count} / ${result.rows.length} 个字段 · 已完整加载，无需继续查询`;
+                note.textContent = `显示 ${count} / ${result.rows.length} 个字段 · 左右滚动查看所有列，字段名保持固定`;
             });
             const source = document.createElement('div'); source.style.fontSize = '12px';
             source.textContent = `来源：${result.source_file || ''} · SHA256：${result.source_sha256 || ''}`;
