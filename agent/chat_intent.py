@@ -51,7 +51,7 @@ def read_only_tool(name: str) -> bool:
     # Exact registered read operations, including evidence paging. Do not allow
     # check/prepare/publish tools based merely on a description from the model.
     return name.startswith(('get_', 'list_', 'inspect_', 'analyze_')) or name in {
-        'check_designer_package', 'compare_designer_xml', 'query_designer_mdb',
+        'check_designer_package', 'compare_designer_xml', 'query_designer_mdb', 'query_designer_batch',
     }
 
 
@@ -64,6 +64,7 @@ def metadata_lookup(text: str) -> bool:
 
 
 METADATA_LOOKUP_TOOLS = {
+    'query_designer_batch',
     'get_designer_environment', 'get_designer_capabilities', 'get_designer_catalog',
     'list_designer_entities', 'get_designer_entity', 'get_designer_fields',
     'get_designer_inheritance', 'get_designer_entity_schema', 'analyze_designer_where_used',

@@ -94,6 +94,19 @@ def compact_tool(message, index):
         return result
     # Field catalogs use positional rows to keep all fields and their types together.
     if isinstance(data, dict):
+        if message.get('name') == 'query_designer_batch' and isinstance(data.get('results'), list):
+            names = {'get': 'get_designer_entity', 'list': 'list_designer_entities',
+                     'fields': 'get_designer_fields', 'inheritance': 'get_designer_inheritance'}
+            projected = {key: value for key, value in data.items() if key != 'results'}
+            projected['results'] = []
+            for entry in data['results']:
+                child = compact_tool({**message, 'name': names.get(entry['query']['mode'], 'get_designer_entity_schema'),
+                                      'content': json.dumps(entry['result'], ensure_ascii=False)}, index)
+                projected['results'].append({'query': entry['query'], 'result': json.loads(child['content'])})
+            encoded = json.dumps(projected, ensure_ascii=False, separators=(',', ':'))
+            if len(encoded) <= min(60000, config.CHAT_CONTEXT_CHARS // 2):
+                result['content'] = encoded
+                return result
         if message.get('name') in {'list_designer_entities', 'get_designer_inheritance'} and isinstance(data.get('records'), list):
             # Preserve every returned name and useful relationship, instead of
             # eight verbose reflection records that force evidence-page loops.

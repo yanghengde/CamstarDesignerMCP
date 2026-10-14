@@ -136,6 +136,62 @@ def query(mdb_file: str, mode: str, kind: str, name: str = "", owner: str = "",
             pass
 
 
+def query_batch(mdb_file: str, queries: list[dict]) -> dict:
+    """Independent reads share one isolated SDK load; never accept mutations."""
+    from designer import working, read_cache
+    if not isinstance(queries, list) or not 1 <= len(queries) <= 20:
+        raise ValueError('批量查询需包含 1～20 项')
+    requests = []
+    for item in queries:
+        if not isinstance(item, dict) or set(item) - {'mode', 'kind', 'name', 'owner', 'search', 'offset', 'limit'}:
+            raise ValueError('批量查询包含未知参数')
+        request = dict(mode='get', kind='cdo', name='', owner='', search='', offset=0, limit=20)
+        request.update(item)
+        if request['mode'] not in {'catalog', 'list', 'get', 'schema', 'impact', 'fields', 'inheritance'} or request['kind'] not in KINDS:
+            raise ValueError('批量查询只允许元数据只读操作')
+        if request['mode'] in {'fields', 'inheritance'} and request['kind'] != 'cdo':
+            raise ValueError('字段目录和继承关系查询必须指定 cdo')
+        if any(not isinstance(request[key], str) for key in ('name', 'owner', 'search')):
+            raise ValueError('name/owner/search 必须为字符串')
+        bounds(request['offset'], request['limit'])
+        requests.append(request)
+    source = working.resolve(mdb_file)
+    before = digest(source)
+    dll = assembly()
+    keys = [read_cache.identity(source, before, dll, request) for request in requests]
+    results = [read_cache.load(key) for key in keys]
+    missing = [i for i, result in enumerate(results) if result is None]
+    if missing:
+        folder = artifact_dir()
+        copy = folder / 'read.mdb'
+        try:
+            shutil.copyfile(source, copy)
+            if digest(copy) != before or digest(source) != before:
+                raise ValueError('复制过程中来源 MDB 发生变化，请重试')
+            batch = run(folder, {'mode': 'read_batch', 'mdb': str(copy),
+                                 'requests': [requests[i] for i in missing]})
+            if digest(source) != before:
+                raise ValueError('查询期间来源 MDB 发生变化，请重试')
+            if len(batch['results']) != len(missing):
+                raise ValueError('批量查询回执数量不完整')
+            for i, receipt in zip(missing, batch['results']):
+                if receipt.get('ok'):
+                    results[i] = {'source_sha256': before, 'source_file': str(source), 'read_only': True,
+                                  'workspace_resolution': 'vendor_metadata_model', **receipt['result']}
+                    read_cache.save(keys[i], results[i])
+                else:
+                    results[i] = {'status': 'failed', 'error': receipt.get('error', '')[:3000]}
+        finally:
+            try:
+                copy.unlink(missing_ok=True)
+            except OSError:
+                pass
+    if digest(source) != before:
+        raise ValueError('查询期间来源 MDB 发生变化，请重试')
+    return {'source_file': str(source), 'source_sha256': before, 'read_only': True,
+            'results': [{'query': query, 'result': result} for query, result in zip(requests, results)]}
+
+
 def select_workspace(source: Path, workspace: str) -> str:
     with connect(source) as conn:
         workspaces = rows(conn.cursor().execute("SELECT WorkspaceCode, WorkspaceDescription, IsActive FROM Workspace"))

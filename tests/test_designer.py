@@ -212,7 +212,7 @@ def test_registry_contains_only_designer_and_scoped_chat_tools_in_clean_process(
         "inspect_designer_installation",
         "prepare_designer_review",
         "sync_designer_working_file", "restore_designer_mdb_backup",
-        "get_chat_evidence",
+        "get_chat_evidence", "query_designer_batch",
     }
 
 

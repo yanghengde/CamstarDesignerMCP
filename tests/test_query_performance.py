@@ -106,3 +106,63 @@ def test_overflow_never_shortens_write_receipts_or_user_requirements(monkeypatch
     with pytest.raises(ValueError, match='上下文预算'):
         chat_context.build_messages(messages)
 
+
+
+def test_batch_reuses_results_invalidates_source_and_rejects_writes(isolated, monkeypatch):
+    root, _ = isolated
+    source = root / 'source.mdb'; source.write_bytes(b'v1')
+    calls = []
+    def run(folder, request):
+        calls.append(request)
+        return {'results': [{'ok': True, 'result': {'name': q['name']}} for q in request['requests']]}
+    monkeypatch.setattr(vendor, 'run', run)
+    queries = [{'mode': 'get', 'kind': 'cdo', 'name': 'Workflow'},
+               {'mode': 'get', 'kind': 'field_type', 'name': '[String]'}]
+    result = vendor.query_batch(str(source), queries)
+    assert len(calls) == 1 and calls[0]['mode'] == 'read_batch'
+    assert [r['result']['name'] for r in result['results']] == ['Workflow', '[String]']
+    assert vendor.query_batch(str(source), queries) == result
+    assert vendor.query(str(source), 'get', 'cdo', 'Workflow')['name'] == 'Workflow'
+    assert len(calls) == 1
+    source.write_bytes(b'v2'); vendor.query_batch(str(source), queries)
+    assert len(calls) == 2
+    with pytest.raises(ValueError):
+        vendor.query_batch(str(source), [{'mode': 'apply'}])
+    with pytest.raises(ValueError):
+        vendor.query_batch(str(source), [{'mode': 'get', 'mdb': 'other.mdb'}])
+    assert not list(root.rglob('read.mdb'))
+
+
+def test_batch_errors_are_not_cached_and_source_drift_rejected(isolated, monkeypatch):
+    root, _ = isolated
+    source = root / 'source.mdb'; source.write_bytes(b'v1')
+    calls = []
+    def run(folder, request):
+        calls.append(request)
+        return {'results': [{'ok': False, 'error': 'missing'}]}
+    monkeypatch.setattr(vendor, 'run', run)
+    queries = [{'mode': 'get', 'name': 'Missing'}]
+    assert vendor.query_batch(str(source), queries)['results'][0]['result']['status'] == 'failed'
+    vendor.query_batch(str(source), queries)
+    assert len(calls) == 2
+    def drift(folder, request):
+        source.write_bytes(b'v2')
+        return {'results': [{'ok': True, 'result': {}}]}
+    monkeypatch.setattr(vendor, 'run', drift)
+    with pytest.raises(ValueError, match='MDB'):
+        vendor.query_batch(str(source), queries)
+    assert not list(root.rglob('read.mdb'))
+
+
+def test_batch_context_preserves_each_query_and_error():
+    data = {'source_sha256': 'abc', 'results': [
+        {'query': {'mode': 'list', 'kind': 'cdo'}, 'result': {'total': 30,
+         'records': [{'name': f'Object{i}', 'large': 'x' * 1000} for i in range(30)]}},
+        {'query': {'mode': 'get', 'kind': 'cdo', 'name': 'Missing'},
+         'result': {'status': 'failed', 'error': 'missing'}}]}
+    result = json.loads(chat_context.compact_tool({'role': 'tool', 'name': 'query_designer_batch',
+                        'tool_call_id': 'batch', 'content': json.dumps(data)}, 0)['content'])
+    assert len(result['results'][0]['result']['records']) == 30
+    assert result['results'][0]['result']['evidence_id'] == 'batch'
+    assert result['results'][1]['result']['status'] == 'failed'
+    assert result['source_sha256'] == 'abc'

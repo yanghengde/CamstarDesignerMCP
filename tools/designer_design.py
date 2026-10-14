@@ -163,6 +163,18 @@ async def list_designer_entities(mdb_file: str, kind: str, search: str = "", own
 
 
 @mcp.tool
+async def query_designer_batch(mdb_file: str, queries: list[dict]) -> dict:
+    """批量执行独立只读查询，共享一次 MDB 加载，优先用于设计前的多项核对。最多20项。
+
+    每项参数：mode=get/list/schema/impact/fields/inheritance/catalog，kind=cdo/field/field_type等，
+    name、owner、search、offset、limit 同单项查询。例如同时查目标对象与字段类型：
+    [{"mode":"get","kind":"cdo","name":"Workflow"},{"mode":"get","kind":"field_type","name":"[String]"}]。
+    返回逐项结果与错误，失败项不可当作不存在；不允许写入或依赖前一项输出的查询。
+    """
+    return await asyncio.to_thread(vendor.query_batch, mdb_file, queries)
+
+
+@mcp.tool
 async def get_designer_inheritance(mdb_file: str, cdo_name: str) -> dict:
     """一次读取某 CDO 的全部派生/继承模型，返回名称、直接父对象与继承深度。depth=1 为直接子类。
 

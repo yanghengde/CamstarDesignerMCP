@@ -10,6 +10,8 @@ using Camstar.Metadata;
 using Camstar.Metadata.Objects;
 
 public static class DesignerVendorBridge {
+ static MDBMetadataSet BatchSet;
+ static readonly HashSet<string> ReadModes=new HashSet<string>(new[]{"catalog","list","get","schema","impact","fields","inheritance"});
  static JavaScriptSerializer Json = new JavaScriptSerializer { MaxJsonLength=20971520, RecursionLimit=64 };
  static Dictionary<string,object> Map(object value) { return (Dictionary<string,object>)value; }
  static string Text(Dictionary<string,object> d, string k, string fallback="") { return d.ContainsKey(k) ? Convert.ToString(d[k]) : fallback; }
@@ -620,7 +622,22 @@ public static class DesignerVendorBridge {
   try {
    var req=Map(Json.DeserializeObject(File.ReadAllText(requestFile))); string mode=Text(req,"mode");
    string folder=Path.GetDirectoryName(resultFile); object result;
-   if(mode=="export") {
+   if(mode=="read_batch") {
+    var requests=(object[])req["requests"];
+    if(requests.Length<1 || requests.Length>20) throw new ArgumentException("Read batch requires 1-20 queries");
+    foreach(var item in requests) if(!ReadModes.Contains(Text(Map(item),"mode"))) throw new ArgumentException("Read-only batch required");
+    var results=new List<object>();
+    try {
+     BatchSet=Load(Text(req,"mdb"),folder,"");
+     foreach(var item in requests) {
+      var child=Map(item); child["mdb"]=Text(req,"mdb");
+      string input=Path.Combine(folder,"batch-request.json"),output=Path.Combine(folder,"batch-result.json");
+      File.WriteAllText(input,Json.Serialize(child)); Run(input,output);
+      results.Add(Json.DeserializeObject(File.ReadAllText(output)));
+     }
+    } finally {BatchSet=null;}
+    result=Dict("results",results);
+   } else if(mode=="export") {
     // Vendor HTML conversion shows a modal dialog if its UI stylesheet is absent.
     // XML export itself is headless. Python renders a separate escaped report.
     new Camstar.Metadata.Comparison.CompareAndExport(Text(req,"base"),Text(req,"mdb"),Path.Combine(folder,"changes.xml"),"",false,false,true).Go();
@@ -631,7 +648,7 @@ public static class DesignerVendorBridge {
     if(error!="" || !File.Exists(target)) throw new InvalidOperationException("Metadata compile failed: "+error);
     result=Dict("status","compiled_test_copy","compiled_mdb",target);
    } else {
-    var set=Load(Text(req,"mdb"),folder,Text(req,"workspace"));
+    var set=BatchSet ?? Load(Text(req,"mdb"),folder,Text(req,"workspace"));
     string kind=Text(req,"kind"),owner=Text(req,"owner"),name=Text(req,"name");
     if(mode=="preflight") {
      result=Preflight(set,req);
