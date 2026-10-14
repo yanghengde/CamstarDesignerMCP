@@ -10,6 +10,7 @@
 | inspect_designer_installation | 授权共享中Designer界面、MDB路径、原生导入程序和组件版本，只读 |
 | get_designer_catalog | 官方定义数量、全部工作区 |
 | list_designer_entities / get_designer_entity | 有效定义与字段、CLF、查询文本和参数 |
+| get_designer_fields | 一次读取全部有效字段及类型、精度、持久化和继承来源；聊天直接展示完整可筛选表格 |
 | get_designer_entity_schema | 实际属性、类型、枚举、可编辑标记 |
 | analyze_designer_where_used | 厂商引用追踪；不支持的类型明确拒绝 |
 | inspect_designer_creation_plan | 按来源 SHA256 和实际工作区进行只读创建预检；完整基础字段、类别、派生结构和重名冲突；空 operations 查询常用类别 |

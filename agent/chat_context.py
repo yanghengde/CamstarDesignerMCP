@@ -86,6 +86,28 @@ def compact_tool(message, index):
                 data = ast.literal_eval(content)
             except (ValueError, SyntaxError, RecursionError, MemoryError):
                 pass
+    # Explicit evidence pages must not be shortened again into 1200-char samples.
+    if (message.get('name') == 'get_chat_evidence' and isinstance(data, dict)
+            and data.get('scope') == 'current_chat_original_receipt'
+            and isinstance(data.get('content'), str) and len(data['content']) <= 12000):
+        result['content'] = json.dumps(data, ensure_ascii=False)
+        return result
+    # Field catalogs use positional rows to keep all fields and their types together.
+    if isinstance(data, dict):
+        catalog = data if data.get('format') == 'designer_field_catalog_v1' else data.get('field_catalog')
+        if isinstance(catalog, dict) and catalog.get('complete') is True:
+            if catalog is data:
+                projected = data
+            else:
+                projected = {'object_summary': _brief({key: value for key, value in data.items()
+                                                       if key not in {'fields', 'field_catalog'}}),
+                             'field_catalog': catalog,
+                             'evidence_id': message.get('tool_call_id') or f'message-{index}',
+                             'notice': 'field_catalog 是完整字段目录；对象其余属性为摘要。'}
+            encoded = json.dumps(projected, ensure_ascii=False, separators=(',', ':'))
+            if len(encoded) <= min(60000, config.CHAT_CONTEXT_CHARS // 2):
+                result['content'] = encoded
+                return result
     summary = json.dumps(_brief(data), ensure_ascii=False, default=str)
     if len(summary) > limit - 600:
         summary = summary[:limit - 600] + '…[摘要节选，非完整 JSON]'

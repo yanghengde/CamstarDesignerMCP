@@ -616,6 +616,48 @@
             return bubble;
         }
 
+        function showFieldCatalog(id, result) {
+            if (!result || result.format !== 'designer_field_catalog_v1') return;
+            if (Array.from(messagesDiv.querySelectorAll('[data-field-catalog]')).some(node => node.dataset.fieldCatalog === id)) return;
+            const bubble = createBubble('agent'); bubble.dataset.fieldCatalog = id;
+            const title = document.createElement('strong');
+            title.textContent = `${result.owner} 字段清单 · 共 ${result.total_fields} 个（含继承字段）`;
+            bubble.appendChild(title);
+            const filter = document.createElement('input'); filter.type = 'search';
+            filter.placeholder = '筛选字段名、类型或描述'; filter.setAttribute('aria-label', '筛选字段清单');
+            filter.style.cssText = 'display:block;width:100%;margin:12px 0;padding:8px;box-sizing:border-box';
+            bubble.appendChild(filter);
+            const labels = {name:'字段名',field_type:'字段类型',data_type:'数据类型',precision:'长度/精度',scale:'小数位',persistent:'持久化',is_list:'列表',origin:'定义来源',description:'描述'};
+            const table = document.createElement('table'), head = document.createElement('thead'), body = document.createElement('tbody');
+            const header = document.createElement('tr');
+            for (const label of ['序号', ...result.columns.map(column => labels[column] || column)]) {
+                const cell = document.createElement('th'); cell.textContent = label; header.appendChild(cell);
+            }
+            head.appendChild(header); table.appendChild(head); table.appendChild(body);
+            const rows = result.rows.map((values, index) => {
+                const row = document.createElement('tr');
+                for (const value of [index + 1, ...values]) {
+                    const cell = document.createElement('td');
+                    cell.textContent = value === true ? '是' : value === false ? '否' : value == null ? '—' : String(value);
+                    row.appendChild(cell);
+                }
+                body.appendChild(row); return {row, text: values.join(' ').toLowerCase()};
+            });
+            const scroll = document.createElement('div'); scroll.className = 'table-scroll';
+            scroll.style.cssText = 'max-height:560px;overflow:auto'; scroll.appendChild(table); bubble.appendChild(scroll);
+            const note = document.createElement('small');
+            note.textContent = `已完整加载 ${result.rows.length} 个字段 · 只读查询`;
+            bubble.appendChild(note);
+            filter.addEventListener('input', () => {
+                const query = filter.value.trim().toLowerCase(); let count = 0;
+                rows.forEach(item => {item.row.hidden = !item.text.includes(query); if (!item.row.hidden) count++;});
+                note.textContent = `显示 ${count} / ${result.rows.length} 个字段 · 已完整加载，无需继续查询`;
+            });
+            const source = document.createElement('div'); source.style.fontSize = '12px';
+            source.textContent = `来源：${result.source_file || ''} · SHA256：${result.source_sha256 || ''}`;
+            bubble.appendChild(source); scrollToBottom();
+        }
+
         function showRequirement(item) {
             let bubble = Array.from(messagesDiv.querySelectorAll('[data-requirement-id]')).find(node => node.dataset.requirementId === item.id);
             if (!bubble) { bubble = appendMessage('user', item.content); bubble.dataset.requirementId = item.id; }
@@ -870,6 +912,7 @@
                 (data.messages || []).forEach(message => {
                     if (message.role === 'user') {const bubble=appendMessage('user', message.content, message.attachments || []);if(message.requirement_id)bubble.dataset.requirementId=message.requirement_id;hasVisible = true; }
                     else if (message.role === 'assistant') {if(message.content){appendMessage('agent',message.content);hasVisible=true;}if(message.excel_preview){showExcelPreview(message.excel_preview);hasVisible=true;}}
+                    else if(message.role==='tool'&&message.field_catalog){showFieldCatalog(message.tool_call_id,message.field_catalog);hasVisible=true;}
                     else if(message.role==='tool'&&result&&!resultShown&&String(message.content).includes(result.id)){showDesignerResult(result);resultShown=true;}
                 });
                 if(data.pending_excel_preview){showExcelPreview(data.pending_excel_preview);hasVisible=true;}
@@ -973,9 +1016,11 @@
                     refreshSessionsList().catch(() => showNotice('最近对话刷新失败，可稍后刷新页面。'));
                 } else if (data.type === 'designer_result') {
                     showDesignerResult(data.result);
+                } else if (data.type === 'field_catalog') {
+                    showFieldCatalog(data.id, data.result);
                 } else if (data.type === 'step') {
                     typingIndicator.hidden = false;
-                    typingText.textContent = '正在查询与核对设计定义…';
+                    typingText.textContent = data.func === 'get_designer_fields' ? '正在一次读取完整字段清单…' : '正在查询与核对设计定义…';
                     scrollToBottom();
                 } else if (data.type === 'title_update') {
                     const session = sessions.find(item => item.id === data.session_id);

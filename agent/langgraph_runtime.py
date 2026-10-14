@@ -638,6 +638,11 @@ async def _execute_tool_node(state: AgentState) -> dict[str, Any]:
         "name": func_name,
         "content": str(result),
     }
+    if (func_name == 'get_designer_fields' and isinstance(result, dict)
+            and result.get('format') == 'designer_field_catalog_v1' and result.get('complete') is True):
+        tool_message['field_catalog'] = result
+        tool_message['content'] = str({**result, 'displayed_as_table': True})
+        writer({'type': 'field_catalog', 'id': tool_message['tool_call_id'], 'result': result})
     messages = state.get('messages', []) + [tool_message]
     response = state.get('excel_confirmation_response', '')
     if not pending and response:

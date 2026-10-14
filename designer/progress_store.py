@@ -46,7 +46,12 @@ def recover_chat_results(username, session_id, messages):
             messages.append({'role': 'assistant', 'content': None, 'tool_calls': [{
                 'id': call_id, 'type': 'function', 'function': {'name': event['tool'],
                 'arguments': json.dumps(event['arguments'], ensure_ascii=False)}}]})
-        messages.append({'role': 'tool', 'tool_call_id': call_id, 'name': event['tool'], 'content': str(result)})
+        message = {'role': 'tool', 'tool_call_id': call_id, 'name': event['tool'], 'content': str(result)}
+        if (event['tool'] == 'get_designer_fields' and isinstance(result, dict)
+                and result.get('format') == 'designer_field_catalog_v1' and result.get('complete') is True):
+            message['field_catalog'] = result
+            message['content'] = str({**result, 'displayed_as_table': True})
+        messages.append(message)
         seen.add(call_id)
         changed = True
     if changed:
@@ -192,6 +197,9 @@ def finish(identity, result=None, error='', status='done'):
                'files_sha256', 'client_assembly', 'service_assembly', 'service_scope', 'fields_verified',
                'method', 'database_modified'}
     saved = {key: value for key, value in result.items() if key in allowed} if isinstance(result, dict) else None
+    if isinstance(result, dict) and result.get('format') == 'designer_field_catalog_v1':
+        saved.update({key: result[key] for key in
+                      ('format', 'owner', 'total_fields', 'complete', 'columns', 'rows', 'source_file') if key in result})
     replay = saved
     if isinstance(result, str):
         replay = redact(result)

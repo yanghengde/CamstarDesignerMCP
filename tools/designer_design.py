@@ -157,9 +157,19 @@ async def prepare_designer_publish_plan(manifest_file: str) -> dict:
 async def list_designer_entities(mdb_file: str, kind: str, search: str = "", owner: str = "", offset: int = 0, limit: int = 20) -> dict:
     """经官方元数据模型读取有效定义，包括 CDO/field/field_type/CLF/function/event/query/table/column/index/map/label/workspace。
 
-    kind 使用 get_designer_capabilities 的 entity_kinds。field 必须指定 owner CDO；支持 offset/limit 分页，limit 为正整数，无固定条数上限，返回来源SHA256。
+    kind 使用 get_designer_capabilities 的 entity_kinds。field 必须指定 owner CDO；支持 offset/limit 分页，limit 为正整数，无固定条数上限，返回来源SHA256。用户要字段清单时优先 get_designer_fields，一次返回完整精简表格，不逐字段补查。
     """
     return await asyncio.to_thread(vendor.query, mdb_file, "list", kind, "", owner, search, offset, limit)
+
+
+@mcp.tool
+async def get_designer_fields(mdb_file: str, cdo_name: str) -> dict:
+    """只读一次获取 CDO 的全部有效字段（含继承），用于完整列表展示。无需分页或逐字段查询。
+
+    返回 columns/rows 表格：字段名、真实字段类型、数据类型、长度/精度、小数位、持久化、列表、来源对象、描述，含总数与来源 SHA256。
+    浏览器聊天会直接显示完整表格；返回 displayed_as_table=true 时简短说明总数即可，不重复生成表格或要求用户输入继续。
+    """
+    return await asyncio.to_thread(vendor.query, mdb_file, 'fields', 'cdo', cdo_name)
 
 
 @mcp.tool

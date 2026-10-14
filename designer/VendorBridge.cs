@@ -196,6 +196,14 @@ public static class DesignerVendorBridge {
    "is_list",field.IsListType,"origin",origin.CDODefinition.Name,"field_usage",field.CDOFieldUsageName,
    "system_field",field.CDOFieldUsageId!=0,"description",field.FieldDescription);
  }
+ static Dictionary<string,object> FieldCatalog(CDODefinition cdo) {
+  var columns=new[]{"name","field_type","data_type","precision","scale","persistent","is_list","origin","description"};
+  var rows=Values(cdo.AllFields).Cast<CDOField>().OrderBy(x=>x.FieldName).Select(field=>{
+   var profile=FieldProfile(field); return columns.Select(column=>profile[column]).ToArray();
+  }).ToArray();
+  return Dict("format","designer_field_catalog_v1","owner",cdo.Name,"total_fields",rows.Length,
+              "complete",true,"columns",columns,"rows",rows);
+ }
  static string Category(CDODefinition cdo) {
   var ancestors=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
   for(var item=cdo;item!=null && ancestors.Add(item.Name);item=item.ParentCDO) {}
@@ -627,6 +635,8 @@ public static class DesignerVendorBridge {
     string kind=Text(req,"kind"),owner=Text(req,"owner"),name=Text(req,"name");
     if(mode=="preflight") {
      result=Preflight(set,req);
+    } else if(mode=="fields") {
+     result=FieldCatalog((CDODefinition)Find(set,"cdo",name,""));
     } else if(mode=="catalog") {
      var inventory=new Dictionary<string,object>(); foreach(var k in Collections.Keys) inventory[k]=Objects(set,k,"").Count;
      result=Dict("counts",inventory,"workspaces",set.GetWorkspaces().Select(Record).ToArray());
@@ -668,6 +678,7 @@ public static class DesignerVendorBridge {
       var record=Record(obj); if(obj is CDODefinition) {
        var fields=Values(((CDODefinition)obj).AllFields); record["fields"]=fields.Select(Record).ToArray();
        record["total_fields"]=fields.Count; record["fields_truncated"]=false;
+       record["field_catalog"]=FieldCatalog((CDODefinition)obj);
        record["events"]=Values(((CDODefinition)obj).Events).Select(Record).ToArray();
       }
       if(obj is CDOField) record["events"]=Values(((CDOField)obj).Events).Select(Record).ToArray();

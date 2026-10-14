@@ -67,8 +67,10 @@ def query(mdb_file: str, mode: str, kind: str, name: str = "", owner: str = "",
     if kind not in KINDS:
         raise ValueError(f"kind 必须为 {', '.join(KINDS)}")
     bounds(offset, limit)
-    if mode not in {'catalog', 'list', 'get', 'schema', 'impact'}:
+    if mode not in {'catalog', 'list', 'get', 'schema', 'impact', 'fields'}:
         raise ValueError('查询只支持只读元数据模式')
+    if mode == 'fields' and kind != 'cdo':
+        raise ValueError('完整字段目录必须指定 CDO')
     from designer import working
     from designer import read_cache
     source = working.resolve(mdb_file)
@@ -76,12 +78,29 @@ def query(mdb_file: str, mode: str, kind: str, name: str = "", owner: str = "",
     dll = assembly()  # Fail before creating a copy if the backend is not configured.
     request = {'mode': mode, 'kind': kind, 'name': name, 'owner': owner,
                'search': search, 'offset': offset, 'limit': limit}
+    # Load the field collection once; later pages/searches use the same version.
+    field_page = mode == 'list' and kind == 'field'
+    if field_page:
+        request.update(search='', offset=0, limit=2147483647)
+
+    def page(result):
+        if not field_page:
+            return result
+        records = [row for row in result['records'] if search.casefold() in row['name'].casefold()]
+        return {**result, 'total': len(records), 'records': records[offset:offset + limit]}
+
     key = read_cache.identity(source, before, dll, request)
     result = read_cache.load(key)
+    if result is None and mode == 'fields':
+        detail_request = {**request, 'mode': 'get'}
+        detail = read_cache.load(read_cache.identity(source, before, dll, detail_request))
+        if detail and isinstance(detail.get('field_catalog'), dict):
+            result = {**detail['field_catalog'], **{key: detail[key] for key in
+                      ('source_sha256', 'source_file', 'read_only', 'workspace_resolution')}}
     if result is not None:
         if digest(source) != before:
             raise ValueError('查询期间来源 MDB 发生变化，请重试')
-        return result
+        return page(result)
     folder = artifact_dir()
     copy = folder / "read.mdb"
     try:
@@ -94,7 +113,7 @@ def query(mdb_file: str, mode: str, kind: str, name: str = "", owner: str = "",
         result = {"source_sha256": before, "source_file": str(source), "read_only": True,
                   "workspace_resolution": "vendor_metadata_model", **result}
         read_cache.save(key, result)
-        return result
+        return page(result)
     finally:
         # The bridge owns an isolated copy. Release it after the process exits;
         # design snapshots and fixed work files are never touched here.
