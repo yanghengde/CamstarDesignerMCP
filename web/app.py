@@ -54,6 +54,9 @@ async def lifespan(app: FastAPI):
             import asyncio
             await asyncio.gather(*list(progress._tasks), return_exceptions=True)
         await close_langgraph_runtime()
+        from designer import read_worker
+        import asyncio
+        await asyncio.to_thread(read_worker.close)
 
 
 

@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import time
 
 import config
 from designer.catalog import bounds, rows
@@ -40,6 +41,8 @@ def assembly() -> Path:
 
 def run(folder: Path, request: dict) -> dict:
     dll = assembly()
+    worker_identity = request.get('_read_identity')
+    request = {key: value for key, value in request.items() if key != '_read_identity'}
     request_file, result_file = folder / "request.json", folder / "result.json"
     request_file.write_text(json.dumps(request, ensure_ascii=False), encoding="utf-8")
     shell = Path(os.environ.get("SystemRoot", "C:/Windows")) / "System32/WindowsPowerShell/v1.0/powershell.exe"
@@ -47,6 +50,17 @@ def run(folder: Path, request: dict) -> dict:
         raise ValueError("官方元数据桥需要 Windows PowerShell 5.1 和匹配位数的 ACE OLEDB 驱动")
     args = [str(shell), "-NoProfile", "-NonInteractive", "-File", str(Path(__file__).with_name("vendor_bridge.ps1")),
             "-AssemblyPath", str(dll), "-RequestFile", str(request_file), "-ResultFile", str(result_file)]
+    if worker_identity and request.get('mode') in {'catalog', 'list', 'get', 'schema', 'impact', 'fields', 'inheritance', 'read_batch'}:
+        from designer import read_worker
+        started = time.perf_counter()
+        reused = read_worker.execute(args[:args.index('-RequestFile')] + ['-ReadWorker'],
+                                     folder, worker_identity, config.DESIGNER_BRIDGE_TIMEOUT)
+        (folder / 'bridge-timing.json').write_text(json.dumps({'worker_reused': reused,
+            'duration_ms': round((time.perf_counter() - started) * 1000, 2), 'mode': request['mode']}), encoding='utf-8')
+        result = json.loads(result_file.read_text(encoding='utf-8-sig'))
+        if not result.get('ok'):
+            raise ValueError(f"官方元数据组件拒绝操作：{result.get('error', '')[:3000]}")
+        return result['result']
     with (folder / "bridge.log").open("wb") as log:
         try:
             process = subprocess.run(args, cwd=folder, stdout=log, stderr=subprocess.STDOUT,
@@ -120,7 +134,8 @@ def query(mdb_file: str, mode: str, kind: str, name: str = "", owner: str = "",
         shutil.copyfile(source, copy)
         if digest(copy) != before or digest(source) != before:
             raise ValueError("复制过程中来源 MDB 发生变化，请重试")
-        result = run(folder, {**request, 'mdb': str(copy)})
+        result = run(folder, {**request, 'mdb': str(copy),
+                             '_read_identity': read_cache.identity(source, before, dll, {})})
         if digest(source) != before:
             raise ValueError('查询期间来源 MDB 发生变化，请重试')
         result = {"source_sha256": before, "source_file": str(source), "read_only": True,
@@ -169,6 +184,7 @@ def query_batch(mdb_file: str, queries: list[dict]) -> dict:
             if digest(copy) != before or digest(source) != before:
                 raise ValueError('复制过程中来源 MDB 发生变化，请重试')
             batch = run(folder, {'mode': 'read_batch', 'mdb': str(copy),
+                                 '_read_identity': read_cache.identity(source, before, dll, {}),
                                  'requests': [requests[i] for i in missing]})
             if digest(source) != before:
                 raise ValueError('查询期间来源 MDB 发生变化，请重试')

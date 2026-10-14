@@ -10,6 +10,33 @@ using Camstar.Metadata;
 using Camstar.Metadata.Objects;
 
 public static class DesignerVendorBridge {
+ public static void Serve() {
+  string line,identity=null;
+  while((line=Console.ReadLine())!=null) {
+   string completion=null;
+   try {
+    var command=Map(Json.DeserializeObject(line));
+    string input=Text(command,"input"),output=Text(command,"output"),key=Text(command,"identity");
+    completion=output+".done";
+    var request=Map(Json.DeserializeObject(File.ReadAllText(input)));
+    string mode=Text(request,"mode");
+    if(!ReadModes.Contains(mode) && mode!="read_batch") throw new ArgumentException("Worker accepts read-only queries only");
+    if(mode=="read_batch") foreach(var item in (object[])request["requests"])
+     if(!ReadModes.Contains(Text(Map(item),"mode"))) throw new ArgumentException("Worker accepts read-only queries only");
+    if(identity!=key || BatchSet==null) {
+     BatchSet=null; identity=null;
+     BatchSet=Load(Text(request,"mdb"),Path.GetDirectoryName(output),""); identity=key;
+    }
+    Run(input,output);
+    File.WriteAllText(completion+".tmp","ok"); File.Move(completion+".tmp",completion);
+    Console.WriteLine("__DESIGNER_READ_DONE__"); Console.Out.Flush();
+   } catch(Exception e) {
+    if(completion!=null && !File.Exists(completion)) {File.WriteAllText(completion+".tmp",e.Message);File.Move(completion+".tmp",completion);}
+    Console.WriteLine("__DESIGNER_READ_ERROR__"+e.Message);Console.Out.Flush();
+   }
+  }
+  BatchSet=null;
+ }
  static MDBMetadataSet BatchSet;
  static readonly HashSet<string> ReadModes=new HashSet<string>(new[]{"catalog","list","get","schema","impact","fields","inheritance"});
  static JavaScriptSerializer Json = new JavaScriptSerializer { MaxJsonLength=20971520, RecursionLimit=64 };
@@ -627,15 +654,16 @@ public static class DesignerVendorBridge {
     if(requests.Length<1 || requests.Length>20) throw new ArgumentException("Read batch requires 1-20 queries");
     foreach(var item in requests) if(!ReadModes.Contains(Text(Map(item),"mode"))) throw new ArgumentException("Read-only batch required");
     var results=new List<object>();
+    bool ownsSet=BatchSet==null;
     try {
-     BatchSet=Load(Text(req,"mdb"),folder,"");
+     if(ownsSet) BatchSet=Load(Text(req,"mdb"),folder,"");
      foreach(var item in requests) {
       var child=Map(item); child["mdb"]=Text(req,"mdb");
       string input=Path.Combine(folder,"batch-request.json"),output=Path.Combine(folder,"batch-result.json");
       File.WriteAllText(input,Json.Serialize(child)); Run(input,output);
       results.Add(Json.DeserializeObject(File.ReadAllText(output)));
      }
-    } finally {BatchSet=null;}
+    } finally {if(ownsSet) BatchSet=null;}
     result=Dict("results",results);
    } else if(mode=="export") {
     // Vendor HTML conversion shows a modal dialog if its UI stylesheet is absent.
