@@ -163,6 +163,16 @@ async def list_designer_entities(mdb_file: str, kind: str, search: str = "", own
 
 
 @mcp.tool
+async def get_designer_inheritance(mdb_file: str, cdo_name: str) -> dict:
+    """一次读取某 CDO 的全部派生/继承模型，返回名称、直接父对象与继承深度。depth=1 为直接子类。
+
+    查询“Product 下有哪些继承模型/子类”时使用本工具，不扫描字段、不查 schema 或 where-used。
+    基于官方有效元数据，含完整总数、来源 SHA256；不修改工作文件。
+    """
+    return await asyncio.to_thread(vendor.query, mdb_file, 'inheritance', 'cdo', cdo_name)
+
+
+@mcp.tool
 async def get_designer_fields(mdb_file: str, cdo_name: str) -> dict:
     """只读一次获取 CDO 的全部有效字段（含继承），用于完整列表展示。无需分页或逐字段查询。
 

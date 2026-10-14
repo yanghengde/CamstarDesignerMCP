@@ -67,7 +67,7 @@ def query(mdb_file: str, mode: str, kind: str, name: str = "", owner: str = "",
     if kind not in KINDS:
         raise ValueError(f"kind 必须为 {', '.join(KINDS)}")
     bounds(offset, limit)
-    if mode not in {'catalog', 'list', 'get', 'schema', 'impact', 'fields'}:
+    if mode not in {'catalog', 'list', 'get', 'schema', 'impact', 'fields', 'inheritance'}:
         raise ValueError('查询只支持只读元数据模式')
     if mode == 'fields' and kind != 'cdo':
         raise ValueError('完整字段目录必须指定 CDO')
@@ -79,15 +79,28 @@ def query(mdb_file: str, mode: str, kind: str, name: str = "", owner: str = "",
     request = {'mode': mode, 'kind': kind, 'name': name, 'owner': owner,
                'search': search, 'offset': offset, 'limit': limit}
     # Load the field collection once; later pages/searches use the same version.
-    field_page = mode == 'list' and kind == 'field'
-    if field_page:
-        request.update(search='', offset=0, limit=2147483647)
+    list_page = mode == 'list'
+    shared_search = kind in {'field', 'data_type', 'sql_type', 'db_type', 'storage_category',
+                            'cdo_usage', 'query_type', 'clf_type', 'workspace'}
+    if list_page:
+        if shared_search:
+            request.update(search='', offset=0, limit=2147483647)
+        else:
+            # Bounded read-ahead shares neighbouring pages without serializing
+            # the entire SDK graph for a broad CDO/label search.
+            start = offset // 300 * 300
+            request.update(offset=start, limit=((offset + limit - start + 299) // 300) * 300)
 
     def page(result):
-        if not field_page:
+        if not list_page or 'records' not in result:
             return result
-        records = [row for row in result['records'] if search.casefold() in row['name'].casefold()]
-        return {**result, 'total': len(records), 'records': records[offset:offset + limit]}
+        records = result['records']
+        if shared_search:
+            records = [row for row in records if search.casefold() in row['name'].casefold()]
+        total = len(records) if shared_search else result['total']
+        start = offset - request['offset']
+        return {**result, 'total': total, 'offset': offset, 'limit': limit,
+                'has_more': offset + limit < total, 'records': records[start:start + limit]}
 
     key = read_cache.identity(source, before, dll, request)
     result = read_cache.load(key)

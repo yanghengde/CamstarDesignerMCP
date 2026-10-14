@@ -53,3 +53,19 @@ def read_only_tool(name: str) -> bool:
     return name.startswith(('get_', 'list_', 'inspect_', 'analyze_')) or name in {
         'check_designer_package', 'compare_designer_xml', 'query_designer_mdb',
     }
+
+
+def metadata_lookup(text: str) -> bool:
+    """Narrow schema selection only for explicit metadata lookups, never edits."""
+    value = (text or '').strip()
+    return bool(re.match(r'^(?:请|帮我)?(?:查询|查一下|查看|展示|显示|列出|列一下)', value)
+                and re.search(r'字段|继承|子类|类型|定义|模型|CDO', value, re.I)
+                and not re.search(r'创建|新建|新增|添加|增加|修改|改为|改成|换成|更新|删除|移除|写入|导入|生成|发布|保存|执行|设计|补充', value))
+
+
+METADATA_LOOKUP_TOOLS = {
+    'get_designer_environment', 'get_designer_capabilities', 'get_designer_catalog',
+    'list_designer_entities', 'get_designer_entity', 'get_designer_fields',
+    'get_designer_inheritance', 'get_designer_entity_schema', 'analyze_designer_where_used',
+    'get_chat_evidence', 'inspect_designer_mdb', 'list_designer_mdb_cdos', 'get_designer_mdb_cdo',
+}

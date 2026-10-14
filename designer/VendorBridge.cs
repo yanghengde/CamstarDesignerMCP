@@ -635,6 +635,21 @@ public static class DesignerVendorBridge {
     string kind=Text(req,"kind"),owner=Text(req,"owner"),name=Text(req,"name");
     if(mode=="preflight") {
      result=Preflight(set,req);
+    } else if(mode=="inheritance") {
+     var root=(CDODefinition)Find(set,"cdo",name,"");
+     var descendants=new List<object>();
+     foreach(var candidate in set.CDODefinitions.Values.OrderBy(x=>x.Name,StringComparer.OrdinalIgnoreCase)) {
+      if(candidate.ModifiedStatus==ModifiedStatusEnum.Deleted || candidate==root) continue;
+      var seen=new HashSet<CDODefinition>(); int depth=0;
+      for(var parent=candidate.ParentCDO;parent!=null && seen.Add(parent);parent=parent.ParentCDO) {
+       depth++;
+       if(parent==root) {
+        descendants.Add(Dict("name",candidate.Name,"parent",candidate.ParentCDO.Name,"depth",depth)); break;
+       }
+      }
+     }
+     result=Dict("root",root.Name,"parent",root.ParentCDO==null?null:root.ParentCDO.Name,
+      "total",descendants.Count,"records",descendants,"complete",true);
     } else if(mode=="fields") {
      result=FieldCatalog((CDODefinition)Find(set,"cdo",name,""));
     } else if(mode=="catalog") {

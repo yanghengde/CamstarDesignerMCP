@@ -94,6 +94,23 @@ def compact_tool(message, index):
         return result
     # Field catalogs use positional rows to keep all fields and their types together.
     if isinstance(data, dict):
+        if message.get('name') in {'list_designer_entities', 'get_designer_inheritance'} and isinstance(data.get('records'), list):
+            # Preserve every returned name and useful relationship, instead of
+            # eight verbose reflection records that force evidence-page loops.
+            keys = {'name', 'object_type', 'parent', 'depth', 'ParentCDO', 'ParentCDOName',
+                    'Description', 'FieldDefinition', 'FieldDefName', 'DataType', 'CPPDataType',
+                    'Precision', 'Scale', 'IsPersistent', 'IsList', 'StorageCategoryName',
+                    'CDOUsageMask', 'IsAbstract', 'CDODefId', 'FieldID', 'FieldDefID'}
+            projected = {key: value for key, value in data.items() if key != 'records'}
+            projected['records'] = [{key: value for key, value in row.items() if key in keys}
+                                    for row in data['records']]
+            projected['record_properties_partial'] = True
+            projected['evidence_id'] = message.get('tool_call_id') or f'message-{index}'
+            projected['notice'] = '保留本页全部记录；属性为精选。是否还有记录依据 total/offset/has_more；其他属性按需读取原始回执。'
+            encoded = json.dumps(projected, ensure_ascii=False, separators=(',', ':'))
+            if len(encoded) <= min(60000, config.CHAT_CONTEXT_CHARS // 2):
+                result['content'] = encoded
+                return result
         catalog = data if data.get('format') == 'designer_field_catalog_v1' else data.get('field_catalog')
         if isinstance(catalog, dict) and catalog.get('complete') is True:
             if catalog is data:

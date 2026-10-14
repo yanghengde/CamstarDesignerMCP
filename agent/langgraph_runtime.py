@@ -258,6 +258,9 @@ async def _agent_node(state: AgentState) -> dict[str, Any]:
         )
         available_tools = [tool for tool in _openai_tools if not state.get('read_only')
                            or chat_intent.read_only_tool(tool.get('function', {}).get('name', ''))]
+        if chat_intent.metadata_lookup(state.get('request_message', '')):
+            available_tools = [tool for tool in available_tools
+                               if tool.get('function', {}).get('name') in chat_intent.METADATA_LOOKUP_TOOLS]
 
         response_stream = await _client.chat.completions.create(
             model=LLM_MODEL,
@@ -270,10 +273,13 @@ async def _agent_node(state: AgentState) -> dict[str, Any]:
         tool_calls: dict[int, dict[str, Any]] = {}
         full_content = ""
         stream_started = False
+        first_delta_ms = None
         async for chunk in response_stream:
             if not chunk.choices:
                 continue
             delta = chunk.choices[0].delta
+            if first_delta_ms is None and (delta.content or delta.tool_calls):
+                first_delta_ms = round((time.time() - started) * 1000, 2)
             if delta.content:
                 if not stream_started:
                     writer({"type": "stream_start"})
@@ -319,6 +325,12 @@ async def _agent_node(state: AgentState) -> dict[str, Any]:
             "prompt": state.get("request_message", ""),
             "streamed": True,
             "engine": "langgraph",
+            "first_delta_ms": first_delta_ms,
+            "context_chars": len(json.dumps(model_messages, ensure_ascii=False)),
+            "tool_schema_chars": len(json.dumps(available_tools, ensure_ascii=False)),
+            "tool_count": len(available_tools),
+            "output_chars": len(full_content),
+            "round": loops,
         },
     )
 
