@@ -89,7 +89,7 @@ async def restore_designer_mdb_backup(mdb_file: str, backup_id: str, expected_sh
 @mcp.tool
 async def generate_designer_wcf_package(compiled_mdb: str, expected_sha256: str, verify_types: list[str], service_names: list[str] | None = None,
                                         expected_fields: list[dict] | None = None) -> dict:
-    """在已配置的测试服务器隔离生成官方WCF程序集，核对非零计数与指定类型；不部署运行目录。需要Windows共享凭据与SQL Agent。省略service_names为全量，指定时仅生成部分服务，不能替代完整运行包。当前安装版本适配仍在验收，失败返回日志位置，不能据作业退出码宣称成功。"""
+    """在已配置的测试服务器隔离生成官方 WCF 程序集，核对计数、指定对象及 expected_fields 的客户端/服务端类型与列表形态，不部署运行目录。需要 Windows 共享凭据与 SQL Agent。省略 service_names 为全量；指定时仅生成部分服务，不能作为完整验收。进度页面自动覆盖本轮全部对象，只有字段、契约与产物均通过才标记完成；不能据作业退出码宣称成功。"""
     from designer.services import generate_wcf
     return await asyncio.to_thread(generate_wcf,compiled_mdb,expected_sha256,verify_types,service_names,expected_fields)
 
@@ -238,6 +238,8 @@ async def generate_designer_design_package(mdb_file: str, expected_sha256: str, 
     create_cdo: name,parent,description,create_table,table_name,table_description,create_revision_base,create_maintenance。建表时必须提供非空 table_description。
     create_field_type: name,data_type,String需max_length；数值可precision/scale。
     add_field: name,owner,field_type,persistent(默认false),is_list(默认false),description。持久化命名/版本化主数据字段若有匹配自身的维护服务，默认按真实 ObjectChanges 关系配套创建可读写维护字段，并列入预览，不复制数据库列；portal_editable=false 明确选择仅存储字段，true 强制要求维护配套，缺少或冲突的维护关系会阻断。expected_type可核对data_type/precision/scale，引用不符拒绝创建。创建参数未知键会拒绝，不能使用拼错的属性。
+    已配套字段的改名、change_field_type、删除、列表与客户端读写属性会联动维护字段，预览和清单记录双方；portal_editable=false 不能拆散已有配对。继承字段、共享维护字段或在用引用不能安全联动时会在保存前拒绝，需先在 Designer 明确迁移。最终 MDB 的双向维护契约还会在 Update Database 前重新检查。
+    被字段引用的 field_type 禁止通过 patch 全局修改长度、精度、Scale 或 CPPDataType；请新建专用类型，再用 change_field_type 对目标字段及其维护字段一并迁移。
     copy_clf: name,template；create_query: name,query_type,db_type_id,text,description。
     create_map: owner源CDO,target目标CDO，由官方生成映射名称。
     create_clf: name,clf_type；add_clf_function: owner,function,sequence。

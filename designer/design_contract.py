@@ -140,8 +140,6 @@ def inspect_calls(calls):
             operations = args['operations']
         else:
             continue
-        if not any(op['action'] in {'create_cdo', 'create_field_type', 'add_field'} for op in operations):
-            continue
         report = vendor.preflight(args['mdb_file'], args['expected_sha256'], operations, args.get('workspace', ''))
         reports.append({**report, 'call_id': call.get('id')})
     return reports

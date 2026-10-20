@@ -464,10 +464,14 @@ def _publish_database(manifest_file, expected_manifest_sha256, backup_receipt, s
         input_copy=compiled_folder/"input.mdb"
         shutil.copyfile(path.parent/"modified.mdb",input_copy)
         compiled=vendor.run(compiled_folder,{"mode":"compile","mdb":str(input_copy)})
+        from designer.operations import final_fields
+        from designer.progress_actions import compiled_field_contracts
+        compiled_path = source_path(compiled['compiled_mdb'], '.mdb')
         from designer import column_contract
         root, _ = load_xml(path.parent / 'changes.xml')
         contract = column_contract.resolve(compiled['compiled_mdb'], root)
         report['physical_column_contract'] = contract
+        report['field_contracts'] = compiled_field_contracts(str(compiled_path), vendor.digest(compiled_path), final_fields(manifest['operations']))
         dll_dir=publication_assembly_directory()
         report['publication_assembly_directory'] = str(dll_dir)
         env=os.environ.copy()

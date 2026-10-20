@@ -11,10 +11,10 @@ sys.stdout.reconfigure(encoding='utf-8')
 
 import uvicorn
 from web.app import create_app
-from config import SERVER_PORT
+from config import SERVER_PORT, SERVER_HOST
 
 app = create_app()
 
 if __name__ == "__main__":
-    print(f"启动服务器于 http://0.0.0.0:{SERVER_PORT}")
-    uvicorn.run("main:app", host="0.0.0.0", port=SERVER_PORT, reload=False)
+    print(f"启动服务器于 http://{SERVER_HOST}:{SERVER_PORT}")
+    uvicorn.run("main:app", host=SERVER_HOST, port=SERVER_PORT, reload=False)

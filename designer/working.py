@@ -2,6 +2,7 @@
 from datetime import datetime, timezone
 from hashlib import sha256
 import json
+import os
 from pathlib import Path
 import re
 import shutil
@@ -15,15 +16,49 @@ from designer.files import root_dir, source_path
 BACKUP_LIMIT = 10
 _locks = {}
 _locks_guard = threading.Lock()
+_held = threading.local()
 
 
 @contextmanager
 def project_lock(project_id):
-    project_dir(project_id)
+    folder = project_dir(project_id)
+    key = os.path.normcase(str(folder))
     with _locks_guard:
-        lock = _locks.setdefault(project_id, threading.RLock())
+        lock = _locks.setdefault(key, threading.RLock())
     with lock:
-        yield
+        held = getattr(_held, 'projects', {})
+        if key in held:
+            yield
+            return
+        lock_dir = root_dir() / '.locks'
+        lock_dir.mkdir(parents=True, exist_ok=True)
+        with (lock_dir / (project_id + '.lock')).open('a+b') as file:
+            file.seek(0, 2)
+            if file.tell() == 0:
+                file.write(b'0'); file.flush()
+            deadline = time.monotonic() + 60
+            while True:
+                try:
+                    if os.name == 'nt':
+                        import msvcrt
+                        file.seek(0); msvcrt.locking(file.fileno(), msvcrt.LK_NBLCK, 1)
+                    else:
+                        import fcntl
+                        fcntl.flock(file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except OSError:
+                    if time.monotonic() >= deadline:
+                        raise TimeoutError('设计项目正在由另一进程处理，请稍后重试')
+                    time.sleep(.05)
+            _held.projects = {**held, key: True}
+            try:
+                yield
+            finally:
+                _held.projects = held
+                if os.name == 'nt':
+                    file.seek(0); msvcrt.locking(file.fileno(), msvcrt.LK_UNLCK, 1)
+                else:
+                    fcntl.flock(file, fcntl.LOCK_UN)
 
 
 def project_dir(project_id):
@@ -60,15 +95,25 @@ def backups_dir(project_id):
 
 
 def load(project_id):
+    with project_lock(project_id):
+        return _load(project_id)
+
+
+def _load(project_id):
     from designer.vendor import digest
     folder = project_dir(project_id)
     journal = folder / 'pending.json'
     if journal.is_file():
         pending = json.loads(journal.read_text(encoding='utf-8'))
         current = folder / 'InSite.mdb'
-        if current.is_file() and digest(current) == pending['sha256']:
+        state_file = folder / 'state.json'
+        previous = json.loads(state_file.read_text(encoding='utf-8')) if state_file.is_file() else {}
+        actual = digest(current) if current.is_file() else None
+        if actual == pending['sha256']:
             write_json(folder / 'state.json', pending)
-        journal.unlink()
+        elif actual != previous.get('sha256'):
+            raise ValueError('工作 MDB 与提交日志均不匹配；已保留 pending.json，请核对后恢复')
+        journal.unlink(missing_ok=True)
     file = folder / 'state.json'
     return json.loads(file.read_text(encoding='utf-8')) if file.is_file() else None
 
@@ -156,6 +201,12 @@ def backups(project_id):
 
 def commit(project_id, state, manifest_file, before):
     """Replace the fixed file only after vendor save/export and release backup pass."""
+    with project_lock(project_id):
+        _load(project_id)
+        return _commit(project_id, state, manifest_file, before)
+
+
+def _commit(project_id, state, manifest_file, before):
     from designer.vendor import digest
     folder = project_dir(project_id)
     folder.mkdir(parents=True, exist_ok=True)
@@ -205,6 +256,14 @@ def check_current(manifest):
 
 
 def mark_published(manifest_file, *, method='automatic', siteinfo_file=''):
+    path = source_path(str(manifest_file), '.json')
+    project_id = json.loads(path.read_text(encoding='utf-8')).get('working_project_id')
+    if project_id:
+        with project_lock(project_id):
+            return _mark_published(manifest_file, method=method, siteinfo_file=siteinfo_file)
+
+
+def _mark_published(manifest_file, *, method='automatic', siteinfo_file=''):
     from designer.vendor import digest
     path = source_path(str(manifest_file), '.json')
     manifest = json.loads(path.read_text(encoding='utf-8'))

@@ -223,7 +223,7 @@ def snapshot(username, session_id):
             elif tool in {'publish_designer_test_database', 'confirm_designer_manual_publish'} and result.get('status') == 'database_published':
                 mark(8, detail='手动发布已核验' if tool == 'confirm_designer_manual_publish' else 'Update Database 完成')
             elif tool == 'generate_designer_wcf_package' and result.get('status') == 'services_generated':
-                if not result.get('partial_package') and result.get('fields_verified'):
+                if progress_actions.complete_wcf_receipt(result, package, change_summary['field_expectations']):
                     mark(9, detail=f"{result.get('service_count', 0)} 个服务 · {result.get('data_contract_count', 0)} 个数据契约")
                 else:
                     mark(9, 'waiting', '生成产物需完整核对')
@@ -295,7 +295,7 @@ def snapshot(username, session_id):
     recent_job = next((item for item in reversed(events) if item.get('action') and package
                        and (item.get('package_id') == package['id'] or any(receipt.get('id') == item['id'] for receipt in relevant))), None)
     wcf = next((item['result'] for item in reversed(relevant) if item['tool'] == 'generate_designer_wcf_package'
-                and item.get('result') and item['result'].get('fields_verified') and item['result'].get('status') == 'services_generated'), None)
+                and item.get('result') and progress_actions.complete_wcf_receipt(item['result'], package, change_summary['field_expectations'])), None)
     return {'session_id': session_id, 'stages': stages, 'current': current,
             'completed': sum(item['status'] in DONE for item in stages), 'package': package,
             'requirements': [item.get('display_content', item.get('content', ''))[:10000] for item in users],
@@ -366,11 +366,16 @@ async def execute(identity, username, session_id, package, manifests, action, op
                         raise ValueError('WCF 编译期间设计发生变化，请重新核对')
                     final_fields = await asyncio.to_thread(progress_actions.final_wcf_fields,
                         compiled['compiled_mdb'], compiled['compiled_sha256'], fresh['field_expectations'], names)
+                    final_fields = await asyncio.to_thread(progress_actions.compiled_field_contracts,
+                        compiled['compiled_mdb'], compiled['compiled_sha256'], final_fields)
                     from tools.designer_design import generate_designer_wcf_package
                     result = await generate_designer_wcf_package(compiled['compiled_mdb'], compiled['compiled_sha256'], names,
                                                                  expected_fields=final_fields)
                     progress_actions.verify_wcf_fields(result, {**fresh, 'field_expectations': final_fields}, names)
                     result['fields_verified'] = True
+                    result['verification_version'] = 2
+                    result['verified_types'] = names
+                    result['verified_fields'] = final_fields
             elif action == 'verify':
                 from designer.cycle import final_manifest
                 final = (await asyncio.to_thread(final_manifest, package['manifest_file']) if package.get('working')

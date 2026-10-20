@@ -17,6 +17,8 @@ from config import LLM_API_KEY, LLM_BASE_URL, LLM_MODEL
 from agent.prompts import SYSTEM_PROMPT
 from agent.llm_client import register_tools, openai_tools
 from tools import get_tool_func
+from agent.safety import MutationCounts, count_tool_calls, evaluate_mutations, approval_prompt, approval_details, is_explicit_confirmation
+from config import MAX_TOOL_LOOPS
 
 
 async def main():
@@ -53,9 +55,15 @@ async def main():
             continue
 
         messages.append({"role": "user", "content": user_input})
+        completed = MutationCounts()
+        loops = 0
 
         # 循环，直到大模型不再调用工具为止
         while True:
+            loops += 1
+            if loops > MAX_TOOL_LOOPS:
+                print('[STOP] 已达到本轮工具调用上限，请核对执行结果。')
+                break
             try:
                 response = await client.chat.completions.create(
                     model=LLM_MODEL,
@@ -86,10 +94,20 @@ async def main():
                     func_args = {}
 
                 try:
+                    call = {'id': tool_call.id, 'function': {'name': func_name, 'arguments': func_args_str}}
+                    decision = evaluate_mutations(completed, [call])
+                    if decision.requires_approval:
+                        print(approval_prompt(decision))
+                        print(approval_details([call]))
+                        print(json.dumps({'tool': func_name, 'arguments': func_args}, ensure_ascii=False, indent=2))
+                        answer = input('确认当前操作: ')
+                        if not is_explicit_confirmation(answer):
+                            raise ValueError('用户未确认当前操作，本调用未执行')
                     tool_func = get_tool_func(func_name)
                     if tool_func is None:
                         result = f"Error: tool '{func_name}' not found"
                     else:
+                        completed += count_tool_calls([call])
                         result = await tool_func(**func_args)
                 except Exception as e:
                     result = f"Error executing {func_name}: {e}"

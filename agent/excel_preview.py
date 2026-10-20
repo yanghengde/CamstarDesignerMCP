@@ -78,8 +78,12 @@ def build(calls, attachments, creation_checks=None):
         else:
             row('新增字段', args.get('target_cdo', ''), args.get('field_name', ''), values={**args, 'persistent': False})
     for check in creation_checks or []:
-        for field in check.get('maintenance_fields', []):
-            row('新增维护字段', field['owner'], field['name'], values={**field, 'AllowClientToRead': True, 'AllowClientToUpdate': True})
+        if check.get('associated_operations'):
+            for op in check['associated_operations']:
+                row('联动维护字段：' + actions.get(op['action'], op['action']), op['owner'], op['name'], values=op)
+        else:
+            for field in check.get('maintenance_fields', []):
+                row('新增维护字段', field['owner'], field['name'], values={**field, 'AllowClientToRead': True, 'AllowClientToUpdate': True})
     payload = {'rows': rows, 'objects': objects, 'targets': targets,
                'creation_checks': creation_checks or [],
                'attachments': [{'id': item['id'], 'name': item['name'], 'sha256': item['sha256']} for item in attachments],

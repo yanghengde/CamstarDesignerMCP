@@ -292,6 +292,7 @@ def test_wcf_checks_final_field_names_and_presence(operations, properties):
                               {'name': 'ObjectStack.ExAChanges', 'properties': properties}],
               'data_contract_count': 2, 'service_count': 1,
               'files_sha256': {'client/Camstar.WCFClient.dll': 'hash', 'server/bin/Camstar.WCFService.dll': 'hash'}}
+    result['server_type_checks'] = list(result['type_checks'])
     assert progress_actions.verify_wcf_fields(result, state, ['ExA']) == result
     unexpected = set(properties) ^ {state['field_expectations'][-1]['name']}
     result['type_checks'] = [{'name': 'ObjectStack.ExA', 'properties': list(unexpected)}]

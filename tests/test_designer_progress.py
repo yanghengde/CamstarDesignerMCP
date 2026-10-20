@@ -442,16 +442,21 @@ def test_wcf_generation_verifies_fields_and_provides_owned_download(workflow,mon
     monkeypatch.setattr(progress.review,'sync_file',lambda path:{'unchanged':True})
     monkeypatch.setattr(designer_design,'compile_designer_mdb',compile)
     monkeypatch.setattr(vendor, 'query', lambda *args, **kwargs: {'total': 1, 'records': [{'name': 'Code'}]})
+    monkeypatch.setattr(progress_actions, 'compiled_field_contracts', lambda path, checksum, fields: [
+        {**row, 'data_type': 'String', 'is_list': False} for row in fields])
     output=folder/'client';output.mkdir();(output/'Camstar.WCFClient.dll').write_bytes(b'valid-dll')
     server=folder/'server'/'bin';server.mkdir(parents=True);(server/'Camstar.WCFService.dll').write_bytes(b'service-dll')
     (output/'App.config').write_text('private server settings')
     result={'status':'services_generated','deployed':False,'partial_package':False,'source_unchanged':True,
             'data_contract_count':10,'service_count':2,'type_checks':[{'name':'Camstar.WCF.ObjectStack.ExSampleChanges','properties':['Code']}],
             'files_sha256':{str(file.relative_to(folder)):vendor.digest(file) for file in [output/'Camstar.WCFClient.dll',server/'Camstar.WCFService.dll',output/'App.config']},'result_file':str(folder/'generation_result.json')}
+    schema = {'Code': {'type': 'Primitive<System.String>', 'value_type': 'System.String', 'is_list': False}}
+    result['type_checks'][0]['field_schemas'] = schema
+    result['server_type_checks'] = [{**result['type_checks'][0]}]
     (folder/'generation_result.json').write_text(json.dumps(result))
     async def generate(mdb,checksum,names,service_names=None,expected_fields=None):
         assert names==['ExSample'];assert service_names is None
-        assert expected_fields == [{'owner': 'ExSample', 'name': 'Code', 'present': True}]
+        assert expected_fields == [{'owner': 'ExSample', 'name': 'Code', 'present': True, 'data_type': 'String', 'is_list': False}]
         return dict(result)
     monkeypatch.setattr(designer_design,'generate_designer_wcf_package',generate)
     async def scenario():
@@ -479,7 +484,7 @@ def test_wcf_generation_verifies_fields_and_provides_owned_download(workflow,mon
 def test_wcf_rejects_missing_fields_partial_output_and_foreign_objects(workflow):
     sid,folder=workflow
     state=progress.snapshot('user',sid)
-    with pytest.raises(ValueError,match='1～20'):
+    with pytest.raises(ValueError,match='至少一个'):
         progress_actions.wcf_types(state['package'],[])
     with pytest.raises(ValueError,match='来自当前设计'):
         progress_actions.wcf_types(state['package'],['OtherUserObject'])
@@ -505,6 +510,7 @@ def test_wcf_verifies_data_and_maintenance_object_names(contracts):
                                'server/bin/Camstar.WCFService.dll': 'server'}}
     state = {'field_expectations': [{'owner': owner, 'name': 'ExCode', 'present': True}
                                    for owner in ('Product', 'ProductChanges')]}
+    result['server_type_checks'] = result['type_checks']
     assert progress_actions.verify_wcf_fields(result, state, ['Product', 'ProductChanges']) == result
     state['field_expectations'][-1]['name'] = 'Missing'
     with pytest.raises(ValueError, match='ProductChanges.Missing'):
@@ -521,6 +527,7 @@ def test_wcf_windows_output_path_case_does_not_hide_existing_assembly(server_pat
               'type_checks': [{'name': 'Camstar.WCF.ObjectStack.ProductChanges', 'properties': ['ExCode']}],
               'files_sha256': {r'client\Camstar.WCFClient.dll': 'client', server_path: 'server'}}
     state = {'field_expectations': [{'owner': 'Product', 'name': 'ExCode', 'present': True}]}
+    result['server_type_checks'] = result['type_checks']
     assert progress_actions.verify_wcf_fields(result, state, ['Product']) == result
     del result['files_sha256'][server_path]
     with pytest.raises(ValueError, match='程序集缺失'):
@@ -557,6 +564,7 @@ def test_old_service_and_acceptance_confirmations_migrate_without_loss(workflow)
 
 
 def test_catalog_drift_stops_update_before_official_processor(workflow,monkeypatch):
+    monkeypatch.setattr(progress_actions, 'compiled_field_contracts', lambda path, checksum, fields: fields)
     from contextlib import contextmanager
     sid,folder=workflow
     plan,backup=ready_for_publish(sid,folder,monkeypatch)
@@ -589,6 +597,7 @@ def test_catalog_drift_stops_update_before_official_processor(workflow,monkeypat
 
 @pytest.mark.parametrize('verification_status', ['verified', 'verification_failed', 'partial_verification'])
 def test_official_update_without_backup_never_executes_backup_sql(workflow, monkeypatch, verification_status):
+    monkeypatch.setattr(progress_actions, 'compiled_field_contracts', lambda path, checksum, fields: fields)
     from contextlib import contextmanager
     from types import SimpleNamespace
     sid, folder = workflow

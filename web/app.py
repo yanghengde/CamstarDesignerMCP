@@ -15,6 +15,7 @@ from config import (
     MCP_ALLOWED_ORIGINS,
     MCP_API_KEY,
     MCP_HTTP_PATH,
+    SERVER_HOST,
 )
 from agent.memory import init_memory
 from agent.llm_client import oai_client, openai_tools, register_tools
@@ -62,6 +63,8 @@ async def lifespan(app: FastAPI):
 
 def create_app() -> FastAPI:
     """创建并返回配置完毕的 FastAPI 实例。"""
+    if SERVER_HOST not in {'127.0.0.1', '::1', 'localhost'}:
+        raise RuntimeError('管理界面仅支持本机访问：SERVER_HOST 必须为 127.0.0.1、::1 或 localhost。远程 MCP 请使用经过认证的独立代理。')
     app = FastAPI(
         title="Siemens Opcenter Designer AI Agent",
         lifespan=lifespan
@@ -74,6 +77,8 @@ def create_app() -> FastAPI:
 
     # 注册路由
     app.include_router(router)
+    from web.local_access import LocalAccessMiddleware
+    app.add_middleware(LocalAccessMiddleware, mcp_path=MCP_HTTP_PATH if ENABLE_MCP_HTTP else None)
 
     if ENABLE_MCP_HTTP:
         if not MCP_API_KEY:

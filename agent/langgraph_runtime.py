@@ -40,6 +40,10 @@ from agent.safety import (
     evaluate_mutations,
     is_explicit_confirmation,
     is_explicit_rejection,
+    approved_call,
+    approval_key,
+    grant_calls,
+    approval_details,
 )
 from config import (
     LANGGRAPH_CHECKPOINT_DB,
@@ -68,6 +72,7 @@ class AgentState(TypedDict, total=False):
     update_count: int
     delete_count: int
     approval_granted: bool
+    approval_grants: list[dict]
     pending_tool_calls: list[dict[str, Any]]
     final_reply: str
     stop_reason: str
@@ -199,7 +204,7 @@ def _adopt_requirements(state):
     return {'messages': messages, 'pending_tool_calls': [], 'loop_count': 0,
             'request_message': '\n'.join(item['content'] for item in items),
             'task_context': task, 'excel_sources': sources,
-            'approval_granted': False, 'excel_approved_calls': [], 'excel_confirmation_response': '',
+            'approval_granted': False, 'approval_grants': [], 'excel_approved_calls': [], 'excel_confirmation_response': '',
             'read_only': not bool(revisions), 'validation_failures': 0,
             'final_reply': '', 'stop_reason': 'replan'}
 
@@ -415,22 +420,23 @@ def _policy_node(state: AgentState) -> dict[str, Any]:
     design_calls = [call for call in pending if (call.get('function') or {}).get('name') in excel_preview.DESIGN_TOOLS
                     and excel_preview.fingerprint(call) not in state.get('excel_approved_calls', [])]
     needs_preview = bool((state.get('excel_sources') or state.get('task_context', {}).get('live_revision')) and design_calls)
-    if state.get("approval_granted") and not needs_preview:
-        return {'task_context': state.get('task_context', {})}
     decision = evaluate_mutations(_completed_counts(state), pending)
-    if design_calls and any(report.get('objects') for report in creation_checks) and (
+    scoped_approval = bool(pending) and all(approved_call(call, state) for call in pending)
+    if design_calls and any(report.get('objects') or report.get('associated_operations') for report in creation_checks) and (
             decision.requires_approval or state.get('validation_failures', 0)):
         needs_preview = True
-    if not decision.requires_approval and not needs_preview:
+    if (not decision.requires_approval or scoped_approval) and not needs_preview:
         return {'task_context': state.get('task_context', {})}
     preview = excel_preview.build(design_calls, state.get('excel_sources', []), creation_checks) if needs_preview else None
     approval = interrupt(
         {
             "type": "approval_required",
-            "message": preview['message'] if preview else approval_prompt(decision),
+            "message": (preview['message'] if preview else approval_prompt(decision)) + '\n' + approval_details(pending),
             "excel_preview": preview,
             "counts": decision.totals.as_dict(),
             "categories": list(decision.categories),
+            "operations": [{'name': (call.get('function') or {}).get('name'),
+                            'arguments': (call.get('function') or {}).get('arguments')} for call in pending],
         }
     )
     notes = _notes(state['username'], state['session_id'], state)
@@ -462,7 +468,7 @@ def _policy_node(state: AgentState) -> dict[str, Any]:
         return {
             "messages": messages, "request_message": response, "loop_count": 0,
             "pending_tool_calls": [], "final_reply": "", "stop_reason": "replan",
-            "approval_granted": False, "excel_approved_calls": [], "excel_confirmation_response": '',
+            "approval_granted": False, "approval_grants": [], "excel_approved_calls": [], "excel_confirmation_response": '',
             "task_context": chat_context.update_task(revised_task, response, [], reset=chat_intent.new_task(response)),
             "excel_sources": [] if chat_intent.new_task(response) else state.get('excel_sources', []),
             "validation_failures": 0,
@@ -470,7 +476,9 @@ def _policy_node(state: AgentState) -> dict[str, Any]:
     if isinstance(approval, dict) and approval.get("approved") is True:
         if preview and approval.get('preview_id') and approval['preview_id'] != preview['id']:
             return _reject_plan(state, '创建预检的来源、SDK 或字段规则已变化，原预览已失效；请重新核对并生成预览后确认。')
-        update = {"approval_granted": state.get('approval_granted', False) or decision.requires_approval,
+        if not is_explicit_confirmation(approval.get('response', '')):
+            raise ValueError('需要人员明确确认当前操作')
+        update = {"approval_grants": grant_calls(pending, state),
                   "excel_confirmation_response": approval.get('response', ''), 'messages': state.get('messages', []),
                   'task_context': state.get('task_context', {})}
         if preview:
@@ -530,7 +538,7 @@ def _reject_plan(state, reason):
     if reply:
         messages.append({'role': 'assistant', 'content': reply})
     return {'messages': messages, 'pending_tool_calls': [], 'validation_failures': attempts,
-            'approval_granted': False, 'excel_approved_calls': [], 'excel_confirmation_response': '',
+            'approval_granted': False, 'approval_grants': [], 'excel_approved_calls': [], 'excel_confirmation_response': '',
             'final_reply': reply, 'stop_reason': 'validation_failed' if reply else 'replan',
             'task_context': state.get('task_context', {})}
 
@@ -583,6 +591,9 @@ async def _execute_tool_node(state: AgentState) -> dict[str, Any]:
             revised = _adopt_requirements(state)
             if revised:
                 return revised
+            if (evaluate_mutations(_completed_counts(state), [tool_call]).requires_approval
+                    and not chat_intent.read_only_tool(func_name) and not approved_call(tool_call, state)):
+                raise ValueError('当前操作的确认缺失或已失效，请重新核对后确认')
             tool_func = get_tool_func(func_name)
             if tool_func is None:
                 result = f"Error: tool '{func_name}' not found"
@@ -662,6 +673,8 @@ async def _execute_tool_node(state: AgentState) -> dict[str, Any]:
     return {
         "messages": messages,
         "pending_tool_calls": pending,
+        "approval_grants": [grant for grant in state.get('approval_grants', [])
+                            if grant.get('key') != approval_key(tool_call, state.get('username', ''), state.get('session_id', ''))],
         "excel_approved_calls": [item for item in state.get('excel_approved_calls', []) if item != excel_preview.fingerprint(tool_call)],
         "excel_confirmation_response": response if pending else '',
         "create_count": creates,
@@ -798,7 +811,7 @@ async def _pending_question(username, session_id, message, snapshot, user_record
     inquiry_state: AgentState = {
         'messages': base, 'username': username, 'session_id': session_id, 'request_message': message,
         'read_only': True, 'loop_count': 0, 'pending_tool_calls': [], 'excel_sources': [],
-        'excel_approved_calls': [], 'approval_granted': False, 'validation_failures': 0,
+        'excel_approved_calls': [], 'approval_granted': False, 'approval_grants': [], 'validation_failures': 0,
         'task_context': state.get('task_context', {}), 'final_reply': '', 'stop_reason': '',
         'inquiry': True,
     }
@@ -977,7 +990,7 @@ async def _chat_stream(username, message, session_id=None, attachments=None):
             "create_count": 0,
             "update_count": 0,
             "delete_count": 0,
-            "approval_granted": False,
+            "approval_granted": False, "approval_grants": [],
             "pending_tool_calls": [],
             "final_reply": "",
             "stop_reason": "",

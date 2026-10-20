@@ -195,6 +195,7 @@ def finish(identity, result=None, error='', status='done'):
                'design_sha256', 'receipt_file', 'receipt_sha256', 'created_utc', 'restore_verifyonly',
                'server_backup_file', 'data_contract_count', 'service_count', 'type_checks',
                'files_sha256', 'client_assembly', 'service_assembly', 'service_scope', 'fields_verified',
+               'server_type_checks', 'verification_version', 'verified_types', 'verified_fields',
                'method', 'database_modified'}
     saved = {key: value for key, value in result.items() if key in allowed} if isinstance(result, dict) else None
     if isinstance(result, dict) and result.get('format') == 'designer_field_catalog_v1':

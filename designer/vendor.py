@@ -443,7 +443,7 @@ def _design(mdb_file: str, expected_sha256: str, workspace: str, operations: lis
     before = digest(source)
     if before != expected_sha256:
         raise ValueError("来源 MDB SHA256 不匹配，请重新读取设计定义")
-    if any(op['action'] in {'create_cdo', 'create_field_type', 'add_field'} for op in operations):
+    if operations:
         inspected = preflight(mdb_file, expected_sha256, operations, workspace)
         if not inspected['ready']:
             raise ValueError(preflight_error(inspected))
@@ -477,7 +477,8 @@ def _design(mdb_file: str, expected_sha256: str, workspace: str, operations: lis
         "source_file": str(baseline), "source_sha256": before, "source_suffix": ".mdb",
         "working_project_id": project_id, "input_file": str(source),
         "parent_manifest_file": work_state['latest_manifest'] if not work_state.get('backup_pending') else '',
-        "workspace": workspace, "workspace_applied_to_mdb": True, "operations": operations,
+        "workspace": workspace, "workspace_applied_to_mdb": True,
+        "operations": operations + applied.get('associated_operations', []),
         "artifacts": {"baseline.mdb": digest(baseline), "modified.mdb": digest(modified), "changes.xml": digest(xml_target)},
         "vendor_assembly_sha256": digest(assembly()), "validation": exported["validation"],
         "execution": applied,

@@ -47,7 +47,7 @@ def generate_wcf(compiled_mdb: str, expected_sha256: str, verify_types: list[str
                  expected_fields: list[dict] | None = None) -> dict:
     source=source_path(compiled_mdb,".mdb")
     if digest(source)!=expected_sha256: raise ValueError("编译MDB的SHA256不匹配")
-    if not isinstance(verify_types,list) or not 1<=len(verify_types)<=20: raise ValueError("必须提供1～20个验收对象名")
+    if not isinstance(verify_types,list) or not verify_types or len(set(verify_types)) != len(verify_types): raise ValueError("必须提供不重复的验收对象名")
     for name in verify_types: identifier(name)
     if expected_fields is not None:
         if not isinstance(expected_fields, list): raise ValueError('expected_fields 必须为字段验收列表')

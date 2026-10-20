@@ -39,6 +39,45 @@ public static class DesignerVendorBridge {
  }
  static MDBMetadataSet BatchSet;
  static readonly List<CDOField> AssociatedFields=new List<CDOField>();
+ static readonly List<object> AssociatedOperations=new List<object>();
+ static CDODefinition MaintenanceChanges(MDBMetadataSet set,CDODefinition cdo) {
+  if(!(cdo.IsNamed || cdo.IsRevisioned) || cdo.MaintenanceCDOID==0) return null;
+  var maint=set.CDODefinitions[cdo.MaintenanceCDOID];
+  var target=maint.GetFieldByName("ObjectToChange",true); var link=maint.GetFieldByName("ObjectChanges",true);
+  return target!=null && link!=null && target.FieldDefinition.CDODefId==cdo.CDODefId
+   ? set.CDODefinitions[link.FieldDefinition.CDODefId] : null;
+ }
+ static void PairMutation(MDBMetadataSet set,CDOField source,Dictionary<string,object> op) {
+  var owner=(CDODefinition)Find(set,"cdo",Text(op,"owner"),"");
+  var changes=MaintenanceChanges(set,owner);
+  if(changes==null) return;
+  var field=changes.AllFields.Values.FirstOrDefault(f=>f.ModifiedStatus!=ModifiedStatusEnum.Deleted && f.FieldName.Equals(source.FieldName,StringComparison.OrdinalIgnoreCase));
+  if(field==null) {
+   if(source.IsNonPersistent || (op.ContainsKey("portal_editable") && !Flag(op,"portal_editable"))) return;
+   throw new ArgumentException("Missing maintenance field; repair or explicitly use portal_editable=false: "+changes.Name+"."+source.FieldName);
+  }
+  if(source.CDODefinition.CDODefId!=owner.CDODefId) throw new ArgumentException("Paired changes to inherited data fields require an explicit Designer migration");
+  if(field.FieldDefId!=source.FieldDefId || field.IsListType!=source.IsListType)
+   throw new ArgumentException("Maintenance field type/list conflict: "+changes.Name+"."+source.FieldName);
+  if(field.CDODefinition.CDODefId!=changes.CDODefId || field.WorkspaceCode!=set.WorkSpace || field.InheritedID!=0)
+   throw new ArgumentException("Paired mutation requires a customer-owned maintenance field without inheritance: "+changes.Name+"."+source.FieldName);
+  var paired=new Dictionary<string,object>(op); paired["owner"]=changes.Name; paired.Remove("portal_editable");
+  string action=Text(op,"action");
+  if(action=="patch") {
+   var values=Map(op["changes"]); var copy=new Dictionary<string,object>(); var expected=new Dictionary<string,object>();
+   foreach(var item in values) {
+    if(new[]{"DBColumnID","FieldDefId","CDODefId","InheritedID","IsNonPersistent"}.Contains(item.Key,StringComparer.OrdinalIgnoreCase))
+     throw new ArgumentException("Paired structural property requires an explicit migration: "+item.Key);
+    if(new[]{"Name","FieldName","FieldDescription","IsListType","AllowClientToRead","AllowClientToUpdate"}.Contains(item.Key)) {
+     copy[item.Key]=item.Value; expected[item.Key]=Scalar(field.GetType().GetProperty(item.Key).GetValue(field,null));
+    }
+   }
+   if(copy.Count==0) return;
+   paired["changes"]=copy; paired["expected"]=expected;
+  }
+  if(action=="remove_field_override") throw new ArgumentException("Restore the paired field overrides explicitly in Designer before continuing");
+  var target=(CDOField)Apply(set,paired); AssociatedFields.Add(target); AssociatedOperations.Add(paired);
+ }
  static readonly HashSet<string> ReadModes=new HashSet<string>(new[]{"catalog","list","get","schema","impact","fields","inheritance"});
  static JavaScriptSerializer Json = new JavaScriptSerializer { MaxJsonLength=20971520, RecursionLimit=64 };
  static Dictionary<string,object> Map(object value) { return (Dictionary<string,object>)value; }
@@ -136,7 +175,7 @@ public static class DesignerVendorBridge {
  }
  static string[] CoreProperties(BaseMetadataObject obj) {
   if(obj is CDODefinition) return new[]{"Name","ParentCDOID","StorageCategoryId"};
-  if(obj is CDOField) return new[]{"Name","FieldName","FieldDefId","IsListType","IsNonPersistent","AllowClientToRead","AllowClientToUpdate"};
+  if(obj is CDOField) return new[]{"Name","FieldName","FieldDescription","FieldDefId","IsListType","IsNonPersistent","AllowClientToRead","AllowClientToUpdate"};
   if(obj is FieldDefinition) return new[]{"FieldDefName","PrecisionValue","Scale","CPPDataTypeID"};
   if(obj is CLFFunction) return new[]{"FunctionID","Sequence","CLFID"};
   if(obj is CLFFunParm) return new[]{"ValueExpression"};
@@ -290,6 +329,7 @@ public static class DesignerVendorBridge {
   var field=changes.AddField(source.FieldDefinition,source.IsListType,source.FieldName,source.FieldDescription,0,0,false);
   field.AllowClientToRead=true;field.AllowClientToUpdate=true;
   AssociatedFields.Add(field);
+  AssociatedOperations.Add(Dict("action","add_field","owner",changes.Name,"name",field.FieldName,"field_type",field.FieldDefinition.FieldDefName,"persistent",false,"is_list",field.IsListType));
   return field;
  }
  static object Preflight(MDBMetadataSet set,Dictionary<string,object> request) {
@@ -300,7 +340,7 @@ public static class DesignerVendorBridge {
    if(candidate!=null) categories.Add(Dict("category",Category(candidate),"parent",candidate.Name,
     "usage",candidate.CDOUsageMask,"total_fields",candidate.AllFields.Count));
   }
-  Aliases.Clear(); RemovedIdentities.Clear(); AssociatedFields.Clear();
+  Aliases.Clear(); RemovedIdentities.Clear(); AssociatedFields.Clear(); AssociatedOperations.Clear();
   int index=0;
   foreach(var item in (object[])request["operations"]) {
    index++; var op=Map(item); string action=Text(op,"action"),name=Text(op,"name"),owner=Text(op,"owner");
@@ -377,16 +417,69 @@ public static class DesignerVendorBridge {
   }
   // Factories and setters above affect only this isolated in-memory graph.
   // Deliberately do not call SaveAll or export/compile in preflight mode.
+  try {FieldContracts(set,Dict("fields",ChangedContractFields(request)));}
+  catch(Exception error) {conflicts.Add(Dict("kind","maintenance_contract","message",error.Message));}
   return Dict("ready",conflicts.Count==0,"objects",profiles,"conflicts",conflicts,"categories",categories,
+   "associated_operations",AssociatedOperations.ToArray(),
    "maintenance_fields",AssociatedFields.Select(f=>Dict("owner",f.CDODefinition.Name,"name",f.FieldName,"field_type",f.FieldDefinition.FieldDefName)).ToArray(),
    "usage_definition_count",set.CDOUsages.Count,
    "workspace",set.WorkSpace,"complete",true,"read_only",true,"method","Camstar.Metadata.CreateNewCDO/AllFields (no SaveAll)");
+ }
+ static object[] ChangedContractFields(Dictionary<string,object> request) {
+  var fields=new Dictionary<string,object>();
+  foreach(var raw in (object[])request["operations"]) {
+   var op=Map(raw); string action=Text(op,"action"),owner=Text(op,"owner"),name=Text(op,"name");
+   if(owner=="" || !(Text(op,"kind")=="field" || action=="add_field" || action=="change_field_type" || action=="remove_field_override")) continue;
+   fields[owner+"."+name]=Dict("owner",owner,"name",name,"present",false);
+   if(action=="patch") {
+    var changes=Map(op["changes"]); string renamed=Text(changes,"FieldName",Text(changes,"Name",name));
+    fields[owner+"."+renamed]=Dict("owner",owner,"name",renamed,"present",false);
+   }
+  }
+  return fields.Values.ToArray();
+ }
+ static object FieldContracts(MDBMetadataSet set,Dictionary<string,object> request) {
+  var result=new List<object>();
+  foreach(var raw in (object[])request["fields"]) {
+   var row=Map(raw); string owner=Text(row,"owner"),name=Text(row,"name");
+   var cdo=(CDODefinition)Find(set,"cdo",owner,"");
+   var field=cdo.AllFields.Values.FirstOrDefault(f=>f.ModifiedStatus!=ModifiedStatusEnum.Deleted && f.FieldName==name);
+   if(Flag(row,"present") && field==null) throw new ArgumentException("Final MDB missing expected field: "+owner+"."+name);
+   var changes=MaintenanceChanges(set,cdo);
+   var paired=changes==null ? null : changes.AllFields.Values.FirstOrDefault(f=>f.ModifiedStatus!=ModifiedStatusEnum.Deleted && f.FieldName==name);
+   if(paired!=null && (field==null || paired.FieldDefId!=field.FieldDefId || paired.IsListType!=field.IsListType))
+    throw new ArgumentException("Final MDB maintenance field mismatch: "+owner+"."+name);
+   if(paired!=null && (!paired.AllowClientToRead || !paired.AllowClientToUpdate))
+    throw new ArgumentException("Portal maintenance field requires client read/update access: "+changes.Name+"."+name);
+   // Direct edits to ObjectChanges must obey the same relationship as edits
+   // initiated from the data object. Never accept two different field shapes.
+   foreach(var data in set.CDODefinitions.Values.Where(c=>c.IsNamed || c.IsRevisioned)) {
+    var linked=MaintenanceChanges(set,data);
+    if(linked==null || linked.CDODefId!=cdo.CDODefId) continue;
+    var source=data.AllFields.Values.FirstOrDefault(f=>f.ModifiedStatus!=ModifiedStatusEnum.Deleted && f.FieldName==name);
+    if(source!=null && (field==null || source.FieldDefId!=field.FieldDefId || source.IsListType!=field.IsListType))
+     throw new ArgumentException("Final MDB reverse maintenance field mismatch: "+owner+"."+name+" -> "+data.Name);
+    if(source!=null && field!=null && (!field.AllowClientToRead || !field.AllowClientToUpdate))
+     throw new ArgumentException("Portal maintenance field requires client read/update access: "+owner+"."+name);
+   }
+   var output=new Dictionary<string,object>(row); output["present"]=field!=null;
+   if(field!=null) {
+    var type=field.FieldDefinition;
+    output["data_type"]=type.CPPDataType;output["precision"]=type.PrecisionValue;output["scale"]=type.Scale;
+    output["is_list"]=field.IsListType;output["field_type"]=type.FieldDefName;
+   }
+   result.Add(output);
+  }
+  return Dict("fields",result.ToArray(),"complete",true);
  }
  static object Apply(MDBMetadataSet set,Dictionary<string,object> op) {
   string action=Text(op,"action"), kind=Text(op,"kind"), name=Text(op,"name"), owner=Text(op,"owner");
   if(action=="patch") {
    if(ReadOnlyKinds.Contains(kind)) throw new ArgumentException("This definition category is read-only");
    var obj=Find(set,kind,name,owner); var changes=Map(op["changes"]); var expected=Map(op["expected"]);
+   if(obj is FieldDefinition && changes.Keys.Any(key=>new[]{"PrecisionValue","Scale","CPPDataTypeID","CPPDataType"}.Contains(key,StringComparer.OrdinalIgnoreCase)) &&
+      set.AllCDOFields.Values.Any(f=>f.ModifiedStatus!=ModifiedStatusEnum.Deleted && f.FieldDefId==((FieldDefinition)obj).FieldDefID))
+    throw new ArgumentException("Referenced field type shape cannot be patched globally; create a private type and use change_field_type so data/maintenance fields migrate together: "+name);
    foreach(var item in changes) {
     if(!expected.ContainsKey(item.Key)) throw new ArgumentException("Expected value required: "+item.Key);
     var p=obj.GetType().GetProperty(item.Key);
@@ -395,6 +488,7 @@ public static class DesignerVendorBridge {
      CheckName(set,kind,Convert.ToString(item.Value),owner);
     if(Json.Serialize(Scalar(p.GetValue(obj,null)))!=Json.Serialize(expected[item.Key])) throw new ArgumentException("Expected value conflict: "+item.Key);
    }
+   if(obj is CDOField) PairMutation(set,(CDOField)obj,op);
    if(kind=="field" && !String.Equals(((CDOField)obj).CDODefinition.Name,owner,StringComparison.OrdinalIgnoreCase)) {
     var target=(CDODefinition)Find(set,"cdo",owner,"");
     if(target.WorkspaceCode!=set.WorkSpace) target.CreateWorkspaceOverride(set.WorkSpace,ModifiedStatusEnum.Modified);
@@ -462,6 +556,7 @@ public static class DesignerVendorBridge {
    var cdo=(CDODefinition)Find(set,"cdo",owner,""); var field=(CDOField)Find(set,"field",name,owner);
    if(field.WorkspaceCode!=set.WorkSpace || field.CDODefinition.CDODefId!=cdo.CDODefId) throw new ArgumentException("Only a current customer field override can be removed");
    if(field.FieldDefinition.FieldDefName!=Text(op,"expected_field_type")) throw new ArgumentException("Field override precondition failed");
+   PairMutation(set,field,op);
    RememberRemoval(field);
    if(field.InheritedID!=0) cdo.RemoveCDOField(field.FieldName);
    else if(field.ExistsInLowerWorkspace) field.RemoveWorkspaceOverride();
@@ -575,6 +670,7 @@ public static class DesignerVendorBridge {
    if(obj.WorkspaceCode!=set.WorkSpace || ReadOnlyKinds.Contains(kind)) throw new ArgumentException("Only customer-owned definitions can be deleted");
    var inUse=obj.GetType().GetMethod("IsInUse",Type.EmptyTypes);
    if(inUse==null || (bool)inUse.Invoke(obj,null)) throw new ArgumentException("Cannot prove definition is unused");
+   if(obj is CDOField) PairMutation(set,(CDOField)obj,op);
    RememberRemoval(obj); obj.SetModifiedStatus(ModifiedStatusEnum.Deleted); return (obj);
   }
   if(action=="change_field_type") {
@@ -582,6 +678,7 @@ public static class DesignerVendorBridge {
    var field=(CDOField)Find(set,"field",name,owner);
    if(field.FieldDefinition.FieldDefName!=Text(op,"expected_field_type")) throw new ArgumentException("Field type precondition failed");
    var type=(FieldDefinition)Find(set,"field_type",Text(op,"field_type"),"");
+   PairMutation(set,field,op);
    if(cdo.WorkspaceCode!=set.WorkSpace) cdo.CreateWorkspaceOverride(set.WorkSpace,ModifiedStatusEnum.Modified);
    cdo.ChangeCDOFieldDefinition(name,type.FieldDefID);
    return (Find(set,"field",name,owner));
@@ -712,7 +809,9 @@ public static class DesignerVendorBridge {
    } else {
     var set=BatchSet ?? Load(Text(req,"mdb"),folder,Text(req,"workspace"));
     string kind=Text(req,"kind"),owner=Text(req,"owner"),name=Text(req,"name");
-    if(mode=="preflight") {
+    if(mode=="field_contracts") {
+     result=FieldContracts(set,req);
+    } else if(mode=="preflight") {
      result=Preflight(set,req);
     } else if(mode=="inheritance") {
      var root=(CDODefinition)Find(set,"cdo",name,"");
@@ -784,7 +883,7 @@ public static class DesignerVendorBridge {
       result=record;
      }
     } else if(mode=="apply") {
-     Aliases.Clear(); RemovedIdentities.Clear(); AssociatedFields.Clear();
+     Aliases.Clear(); RemovedIdentities.Clear(); AssociatedFields.Clear(); AssociatedOperations.Clear();
      var targets=new List<BaseMetadataObject>(); var properties=new Dictionary<string,HashSet<string>>();
      foreach(var item in (object[])req["operations"]) {
       var op=Map(item); var target=(BaseMetadataObject)Apply(set,op); targets.Add(target);
@@ -795,6 +894,7 @@ public static class DesignerVendorBridge {
      foreach(var associated in AssociatedFields) {
       targets.Add(associated);properties[Identity(associated)]=new HashSet<string>(CoreProperties(associated));
      }
+     FieldContracts(set,Dict("fields",ChangedContractFields(req)));
      var records=targets.Select(Record).ToList();
      set.SaveAll();
      var verify=Load(Text(req,"mdb"),folder,Text(req,"workspace"));
@@ -838,7 +938,7 @@ public static class DesignerVendorBridge {
        }
       }
      }
-     result=Dict("status","saved_to_test_copy","operations",records,"reloaded_definitions",verified,"reloaded_cdo_count",verify.CDODefinitions.Count,"reload_verified",true,"affected_cdos",affected.ToArray());
+     result=Dict("status","saved_to_test_copy","operations",records,"associated_operations",AssociatedOperations.ToArray(),"reloaded_definitions",verified,"reloaded_cdo_count",verify.CDODefinitions.Count,"reload_verified",true,"affected_cdos",affected.ToArray());
     } else throw new ArgumentException("Unknown bridge mode");
    }
    File.WriteAllText(resultFile,Json.Serialize(Dict("ok",true,"result",result)),new System.Text.UTF8Encoding(false));
