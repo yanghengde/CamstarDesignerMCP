@@ -143,7 +143,12 @@
         .file-content { padding:18px 22px; }
         .file-label { font-size:10px; color:var(--muted); display:flex; justify-content:space-between; align-items:center; margin-bottom:7px; }
         .file-path { display:block; font:11px/1.8 Consolas,monospace; color:var(--secondary); overflow-wrap:anywhere; padding:10px; background:#f7f8fa; border-radius:7px; margin-bottom:12px; }
-        .file-note { font-size:11px; color:var(--muted); }
+        .file-note { font-size:11px; color:var(--muted); line-height:1.8; }
+        .designer-file { margin:12px 0; padding:12px; border:1px solid #cce3dc; border-radius:9px; background:#f4faf7; }
+        .designer-file .file-label { color:var(--teal); font-weight:600; }
+        .designer-file .file-path { background:white; margin-bottom:0; }
+        .internal-files { margin-top:18px; }
+        .internal-files summary { cursor:pointer; color:var(--secondary); font-size:11px; margin-bottom:10px; }
         .sync-state { font-size:11px; color:var(--secondary); display:flex; gap:7px; align-items:center; }
         .sync-state i { width:6px; height:6px; background:var(--teal); border-radius:50%; }
         .notice { position:fixed; bottom:24px; left:50%; transform:translateX(-50%); background:#263730; color:white; padding:11px 18px; border-radius:9px; max-width:80vw; font-size:12px; z-index:40; }
@@ -222,7 +227,7 @@
         <section class="overview"><div class="overview-top"><div><h3 id="taskTitle"></h3><div class="metadata" id="taskMeta"></div></div><span class="counter"><b id="completedCount">0</b> / <span id="totalCount">11</span> 完成</span></div><div class="segments" id="segments" aria-label="步骤完成情况"></div></section>
         <div class="workflow-grid"><section class="panel"><div class="panel-heading">完整流程<small>点击查看步骤</small></div><ol class="step-list" id="stepList"></ol></section>
         <div class="right-column"><section class="panel"><div class="panel-heading"><span id="actionHeading">当前步骤</span><a id="conversationLink" class="file-note">查看对话 ↗</a></div><div class="action-content"><div class="stage-kicker" id="stageKicker"></div><h3 id="stageTitle"></h3><p class="stage-detail" id="stageDetail"></p><div class="action-buttons" id="stageActions"></div><div id="runtime" class="runtime" hidden></div></div></section>
-        <section class="panel"><div class="panel-heading">设计文件<button id="syncBtn" class="button small" disabled>同步文件</button></div><div id="fileContent" class="file-content"><p class="file-note">等待设计生成</p></div></section></div></div>
+        <section class="panel"><div class="panel-heading">Designer 文件<button id="syncBtn" class="button small" disabled>同步 Designer 修改</button></div><div id="fileContent" class="file-content"><p class="file-note">等待设计生成</p></div></section></div></div>
     </div>
 </div></section></main></div>
 <div id="notice" class="notice" role="alert" hidden></div>
@@ -338,26 +343,34 @@
             document.getElementById('syncBtn').disabled=!state.package?.review||!!state.active||submitting;
             renderFiles();renderRuntime();
             const latest=state.last_job;
-            if(latest?.status==='failed'||latest?.status==='interrupted') {const note=document.createElement('p');note.className='stage-detail';note.style.marginTop='16px';note.textContent=latest.error;actions.after(note);note.dataset.jobError='true';}
-            document.querySelectorAll('[data-job-error]').forEach((node,index,nodes)=>{if(index<nodes.length-1||!['failed','interrupted'].includes(latest?.status))node.remove();});
+            document.querySelectorAll('[data-job-error]').forEach(node=>node.remove());
+            if(['failed','interrupted'].includes(latest?.status)&&latest.error&&latest.error!==stage.detail) {const note=document.createElement('p');note.className='stage-detail';note.style.marginTop='16px';note.textContent=latest.error;actions.after(note);note.dataset.jobError='true';}
         }
         function renderFiles() {
-            const area=document.getElementById('fileContent');const versionsOpen=area.querySelector('details')?.open;area.replaceChildren();const pkg=state.package;
+            const area=document.getElementById('fileContent');const versionsOpen=area.querySelector('[data-mdb-backups]')?.open;const internalOpen=area.querySelector('[data-internal-files]')?.open;area.replaceChildren();const pkg=state.package;
             if(!pkg){const note=document.createElement('p');note.className='file-note';note.textContent='等待设计生成';area.appendChild(note);return;}
             const review=pkg.review;
-            const explanation=document.createElement('p');explanation.className='file-note';explanation.textContent=review?'以下 Designer 路径来自本次设计的文件交接记录，不代表 Designer 当前已打开的文件。':'项目工作 MDB 由助手维护，准备 Designer 文件后会显示交接副本路径。';area.appendChild(explanation);
-            if(review?.activation_error){const note=document.createElement('p');note.className='file-note';note.textContent='自动设置 Designer 启动文件未成功，请在 Designer 中手动选择下方 MDB 和 SiteInfo。';area.appendChild(note);}
-            if(pkg.working?.server_mdb&&!pkg.working.server_current){const note=document.createElement('p');note.className='file-note';note.textContent='服务器文件尚未更新，请重新准备 Designer 文件。';area.appendChild(note);}
-            const paths=[['项目工作 MDB（助手使用）',pkg.working?.mdb_file||pkg.mdb_file]];
-            if(review)paths.push(['Designer 打开 MDB（交接副本）',review.server_mdb],['Designer 配套 SiteInfo',review.server_siteinfo]);
-            for(const [label,path] of paths) {
+            const explanation=document.createElement('p');explanation.className='file-note';explanation.textContent=review?'在 Designer 中打开下方设计 MDB。手动修改并保存后，点击“同步 Designer 修改”，再继续编译或发布。':'请先到“检查设计”步骤准备 Designer 文件。';area.appendChild(explanation);
+            if(review?.activation_error){const note=document.createElement('p');note.className='file-note';note.textContent='自动设置启动文件未成功，请通过 Designer 的“打开文件”手动选择下方文件。';area.appendChild(note);}
+            if(pkg.working?.server_mdb&&!pkg.working.server_current){const note=document.createElement('p');note.className='file-note';note.textContent='Designer 副本尚未更新，请到“检查设计”重新准备文件。';area.appendChild(note);}
+            function appendPath(container,label,path) {
+                if(!path)return;
                 const heading=document.createElement('div');heading.className='file-label';heading.textContent=label;
-                const copy=button('复制',()=>navigator.clipboard.writeText(path).then(()=>notice('路径已复制')).catch(()=>notice('请复制下方路径')));copy.className='file-note';heading.appendChild(copy);area.appendChild(heading);
-                const code=document.createElement('code');code.className='file-path';code.textContent=path;area.appendChild(code);
+                const copy=button('复制路径',()=>navigator.clipboard.writeText(path).then(()=>notice('路径已复制')).catch(()=>notice('请复制下方路径')));copy.className='file-note';heading.appendChild(copy);container.appendChild(heading);
+                const code=document.createElement('code');code.className='file-path';code.textContent=path;container.appendChild(code);
             }
-            const link=document.createElement('a');link.className='file-note';link.textContent='下载设计 MDB ↗';link.href=`/designer/results/${pkg.id}/mdb?username=${encodeURIComponent(navigationUsername)}&session_id=${encodeURIComponent(currentSession)}`;area.appendChild(link);
+            if(review){
+                const primary=document.createElement('div');primary.className='designer-file';appendPath(primary,'设计 MDB · 在 Designer 中打开',review.server_mdb);area.appendChild(primary);
+                appendPath(area,'配套 SiteInfo · 站点文件',review.server_siteinfo);
+                const note=document.createElement('p');note.className='file-note';note.textContent='以上为本次准备的文件路径，请在 Designer 中核对当前打开的文件。';area.appendChild(note);
+            }
+            const internal=document.createElement('details');internal.className='internal-files';internal.dataset.internalFiles='true';internal.open=!!internalOpen;
+            const internalHeading=document.createElement('summary');internalHeading.textContent='助手工作文件与下载';internal.appendChild(internalHeading);
+            const internalNote=document.createElement('p');internalNote.className='file-note';internalNote.textContent='助手从此工作文件编译和生成 WCF。Designer 中保存的修改需同步回此文件。';internal.appendChild(internalNote);
+            appendPath(internal,'助手工作 MDB',pkg.mdb_file);
+            const link=document.createElement('a');link.className='file-note';link.textContent='下载工作副本 MDB ↗';link.href=`/designer/results/${pkg.id}/mdb?username=${encodeURIComponent(navigationUsername)}&session_id=${encodeURIComponent(currentSession)}`;internal.appendChild(link);area.appendChild(internal);
             if(pkg.working){
-                const versions=document.createElement('details');versions.open=!!versionsOpen;versions.style.marginTop='20px';
+                const versions=document.createElement('details');versions.dataset.mdbBackups='true';versions.open=!!versionsOpen;versions.style.marginTop='20px';
                 const heading=document.createElement('summary');heading.className='file-label';heading.textContent=`MDB 备份 · ${pkg.working.backups.length} / ${pkg.working.backup_limit}`;versions.appendChild(heading);
                 if(!pkg.working.backups.length){const note=document.createElement('p');note.className='file-note';note.textContent='发布成功后，下次设计首次修改前自动备份。';versions.appendChild(note);}
                 for(const version of pkg.working.backups){
