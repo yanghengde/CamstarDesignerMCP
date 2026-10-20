@@ -208,6 +208,8 @@ def snapshot(username, session_id):
         relevant += [item for item in receipts if item not in relevant and item['tool'] == 'generate_designer_wcf_package'
                      and item.get('arguments', {}).get('compiled_mdb') in compiled_paths - {None}]
         publication_info = progress_actions.publication_state(relevant, package)
+        latest_preflight = next((item for item in reversed(relevant)
+                                 if item['tool'] == 'prepare_designer_publish_plan'), None)
         for item in relevant:
             result = item.get('result') or {}
             tool = item['tool']
@@ -215,6 +217,9 @@ def snapshot(username, session_id):
                 mark(5, detail='文件与来源已核验')
             elif tool == 'compile_designer_mdb' and result.get('compiled_mdb'):
                 mark(7, detail='官方编译完成')
+            elif (tool == 'prepare_designer_publish_plan' and item is latest_preflight
+                  and publication_info['ready'] and stages[7]['status'] == 'pending'):
+                mark(8, 'waiting', '发布检查已通过，等待执行 Update Database')
             elif tool in {'publish_designer_test_database', 'confirm_designer_manual_publish'} and result.get('status') == 'database_published':
                 mark(8, detail='手动发布已核验' if tool == 'confirm_designer_manual_publish' else 'Update Database 完成')
             elif tool == 'generate_designer_wcf_package' and result.get('status') == 'services_generated':
@@ -231,6 +236,10 @@ def snapshot(username, session_id):
                 elif result.get('status') == 'partial_verification':
                     mark(11, 'waiting', '部分变更需 Designer 确认')
             if item['status'] in ('failed', 'interrupted') and tool in STAGES:
+                if (tool == 'prepare_designer_publish_plan' and item is not latest_preflight
+                        and latest_preflight['status'] == 'done'
+                        and (latest_preflight.get('result') or {}).get('ready_for_publish')):
+                    continue
                 mark(STAGES[tool], 'failed', item.get('error', '操作未完成'))
         for stage, status in acknowledgements.items():
             if stages[stage-1]['status'] != 'done':

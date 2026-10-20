@@ -148,6 +148,8 @@ def target_connection(database: str = "", update: bool = False):
         raise ValueError("缺少SQL Server ODBC驱动")
     driver = next((d for d in reversed(drivers) if "ODBC Driver" in d), drivers[0])
     values = {"DRIVER": driver, "SERVER": config.DESIGNER_DB_SERVER, "DATABASE": database or config.DESIGNER_DB_NAME,
+              "Encrypt": "yes" if config.DESIGNER_DB_ENCRYPT else "no",
+              "TrustServerCertificate": "yes" if config.DESIGNER_DB_TRUST_SERVER_CERTIFICATE else "no",
               "UID": config.DESIGNER_UPDATE_DB_USER if update else config.DESIGNER_DB_USER,
               "PWD": config.DESIGNER_UPDATE_DB_PASSWORD if update else config.DESIGNER_DB_PASSWORD}
     connection = pyodbc.connect(";".join(k+"="+odbc_value(v) for k,v in values.items()), timeout=8, autocommit=True)
@@ -155,6 +157,17 @@ def target_connection(database: str = "", update: bool = False):
         yield connection
     finally:
         connection.close()
+
+
+def publication_assembly_directory() -> Path:
+    configured = config.DESIGNER_PUBLICATION_ASSEMBLY_DIRECTORY.strip()
+    directory = Path(configured) if configured else vendor.assembly().parent
+    if not directory.is_absolute() or not directory.is_dir():
+        raise ValueError("请配置 DESIGNER_PUBLICATION_ASSEMBLY_DIRECTORY 为本机官方 Update DB 组件的绝对目录")
+    for name in ("Camstar.Data.dll", "OECAdmin.dll", "CIMS.DBUpdate.dll"):
+        if not (directory / name).is_file():
+            raise ValueError(f"缺少官方发布组件：{directory / name}；请核对 DESIGNER_PUBLICATION_ASSEMBLY_DIRECTORY")
+    return directory
 
 
 def inspect_target(table: str = "") -> dict:
@@ -455,9 +468,8 @@ def _publish_database(manifest_file, expected_manifest_sha256, backup_receipt, s
         root, _ = load_xml(path.parent / 'changes.xml')
         contract = column_contract.resolve(compiled['compiled_mdb'], root)
         report['physical_column_contract'] = contract
-        dll_dir=vendor.assembly().parent
-        for name in ("Camstar.Data.dll","OECAdmin.dll","CIMS.DBUpdate.dll"):
-            if not (dll_dir/name).is_file(): raise ValueError(f"缺少官方发布组件：{name}")
+        dll_dir=publication_assembly_directory()
+        report['publication_assembly_directory'] = str(dll_dir)
         env=os.environ.copy()
         env.update(OPCORE_DB_NAME=target["database"],OPCORE_DB_HOST=target["server"],
                    OPCORE_DB_USERNAME=config.DESIGNER_UPDATE_DB_USER,OPCORE_DB_PASSWORD=config.DESIGNER_UPDATE_DB_PASSWORD,OPCORE_DB_TYPE="SQLServer")

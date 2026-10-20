@@ -208,6 +208,7 @@ data/designer/artifacts/<id>/
 | `DESIGNER_TEST_TARGET_CONFIRMED=true` | 明确允许对已确认的测试目标发布 |
 | `DESIGNER_REQUIRE_DATABASE_BACKUP` | 默认 `false`，测试发布无需备份；设为 `true` 时要求校验数据库备份 |
 | `DESIGNER_SERVER_IMPORT_EXE` | 服务器官方 ImportMetaData 程序路径 |
+| `DESIGNER_PUBLICATION_ASSEMBLY_DIRECTORY` | 本机官方 Update DB 组件目录；包含 Camstar.Data.dll、OECAdmin.dll、CIMS.DBUpdate.dll 及配套依赖，留空沿用元数据 DLL 所在目录 |
 | `DESIGNER_WCF_DIRECTORY` | WCF 组件目录 |
 | `DESIGNER_SERVER_WCF_GENERATOR` | 服务器 WCF 生成程序路径 |
 | `DESIGNER_WCF_ADDRESS` | WCF 生成所需地址 |

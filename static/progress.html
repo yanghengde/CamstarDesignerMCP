@@ -345,8 +345,12 @@
             const area=document.getElementById('fileContent');const versionsOpen=area.querySelector('details')?.open;area.replaceChildren();const pkg=state.package;
             if(!pkg){const note=document.createElement('p');note.className='file-note';note.textContent='等待设计生成';area.appendChild(note);return;}
             const review=pkg.review;
+            const explanation=document.createElement('p');explanation.className='file-note';explanation.textContent=review?'以下 Designer 路径来自本次设计的文件交接记录，不代表 Designer 当前已打开的文件。':'项目工作 MDB 由助手维护，准备 Designer 文件后会显示交接副本路径。';area.appendChild(explanation);
+            if(review?.activation_error){const note=document.createElement('p');note.className='file-note';note.textContent='自动设置 Designer 启动文件未成功，请在 Designer 中手动选择下方 MDB 和 SiteInfo。';area.appendChild(note);}
             if(pkg.working?.server_mdb&&!pkg.working.server_current){const note=document.createElement('p');note.className='file-note';note.textContent='服务器文件尚未更新，请重新准备 Designer 文件。';area.appendChild(note);}
-            for(const [label,path] of review?[['工作 MDB',review.server_mdb],['SiteInfo',review.server_siteinfo]]:[['工作 MDB',pkg.working?.server_mdb||pkg.mdb_file]]) {
+            const paths=[['项目工作 MDB（助手使用）',pkg.working?.mdb_file||pkg.mdb_file]];
+            if(review)paths.push(['Designer 打开 MDB（交接副本）',review.server_mdb],['Designer 配套 SiteInfo',review.server_siteinfo]);
+            for(const [label,path] of paths) {
                 const heading=document.createElement('div');heading.className='file-label';heading.textContent=label;
                 const copy=button('复制',()=>navigator.clipboard.writeText(path).then(()=>notice('路径已复制')).catch(()=>notice('请复制下方路径')));copy.className='file-note';heading.appendChild(copy);area.appendChild(heading);
                 const code=document.createElement('code');code.className='file-path';code.textContent=path;area.appendChild(code);

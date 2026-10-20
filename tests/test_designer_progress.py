@@ -16,6 +16,7 @@ from web import routes
 @pytest.fixture
 def workflow(tmp_path, monkeypatch):
     monkeypatch.setattr(config, 'DESIGNER_ROOT', str(tmp_path / 'designer'))
+    monkeypatch.setattr(config, 'DESIGNER_PUBLICATION_ASSEMBLY_DIRECTORY', '')
     monkeypatch.setattr(memory, 'SESSIONS_DIR', str(tmp_path / 'sessions'))
     monkeypatch.setattr(memory, 'user_memories', {})
     monkeypatch.setattr(routes, 'CHAT_USERNAME', 'user')
@@ -326,6 +327,43 @@ def test_test_environment_publish_is_ready_without_backup(workflow, monkeypatch)
         progress_actions.validate_publish(state, {'expected_plan_sha256': 'changed'})
     (folder/'publish_plan.json').write_text('{}')
     assert not progress.snapshot('user', sid)['publication']['ready']
+
+
+@pytest.mark.parametrize('status', ['failed', 'interrupted'])
+def test_successful_preflight_retry_clears_old_error_without_publishing(workflow, monkeypatch, status):
+    sid, folder = workflow
+    identity, _ = store.begin('user', sid, 'prepare_designer_publish_plan',
+                              {'manifest_file': str(folder/'manifest.json')}, package_id=folder.name)
+    store.finish(identity, error='SQL certificate rejected', status=status)
+    ready_for_publish(sid, folder, monkeypatch, require_backup=False)
+    state = progress.snapshot('user', sid)
+    assert state['stages'][7]['status'] == 'waiting'
+    assert state['stages'][7]['detail'] == '发布检查已通过，等待执行 Update Database'
+    assert state['stages'][8]['status'] == 'pending'
+    assert state['publication']['ready']
+    assert next(item for item in store.operations('user', sid) if item['id'] == identity)['error'] == 'SQL certificate rejected'
+
+
+def test_preflight_success_does_not_clear_failed_database_update(workflow, monkeypatch):
+    sid, folder = workflow
+    identity, _ = store.begin('user', sid, 'publish_designer_test_database',
+                              {'manifest_file': str(folder/'manifest.json')}, package_id=folder.name)
+    store.finish(identity, error='Update DB failed after starting', status='failed')
+    ready_for_publish(sid, folder, monkeypatch, require_backup=False)
+    state = progress.snapshot('user', sid)
+    assert state['stages'][7]['status'] == 'failed'
+    assert state['stages'][7]['detail'] == 'Update DB failed after starting'
+
+
+def test_new_preflight_failure_replaces_previous_success(workflow, monkeypatch):
+    sid, folder = workflow
+    ready_for_publish(sid, folder, monkeypatch, require_backup=False)
+    identity, _ = store.begin('user', sid, 'prepare_designer_publish_plan',
+                              {'manifest_file': str(folder/'manifest.json')}, package_id=folder.name)
+    store.finish(identity, error='Current SQL connection failed', status='failed')
+    state = progress.snapshot('user', sid)
+    assert state['stages'][7]['status'] == 'failed'
+    assert state['stages'][7]['detail'] == 'Current SQL connection failed'
 
 
 def test_optional_backup_receipt_cannot_block_test_publish(workflow, monkeypatch):
