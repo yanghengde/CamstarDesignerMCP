@@ -53,11 +53,12 @@ def test_portal_field_option_is_explicit_and_validated():
         vendor.validate_operations(operations)
 
 
-def test_portal_companion_is_visible_in_preview_and_counted_for_confirmation():
+@pytest.mark.parametrize('options', [{'portal_editable': True}, {'persistent': True}])
+def test_portal_companion_is_visible_in_preview_and_counted_for_confirmation(options):
     from agent import safety
     call={'id':'portal','function':{'name':'generate_designer_design_package','arguments':json.dumps({
         'mdb_file':'source.mdb','expected_sha256':'a'*64,'operations':[
-            {'action':'add_field','owner':'Product','name':'ExCode','field_type':'Name','portal_editable':True}]})}}
+            {'action':'add_field','owner':'Product','name':'ExCode','field_type':'Name',**options}]})}}
     preview=excel_preview.build([call],[],[{'maintenance_fields':[{'owner':'ProductChanges','name':'ExCode','field_type':'Name'}]}])
     assert preview['field_count']==2
     assert preview['rows'][-1]['owner']=='ProductChanges'
@@ -184,10 +185,11 @@ def test_installed_sdk_schema_denies_generic_relationship_setters(installed_sdk)
         assert properties[name]['editable'] is False
 
 
-def test_installed_sdk_portal_field_uses_actual_maintenance_relationship(installed_sdk):
+@pytest.mark.parametrize('options', [{}, {'portal_editable': True}])
+def test_installed_sdk_portal_field_uses_actual_maintenance_relationship(installed_sdk, options):
     result=vendor.preflight(str(installed_sdk),vendor.digest(installed_sdk),[
         {'action':'add_field','owner':'Product','name':'ExPortalProbe','field_type':'Name',
-         'persistent':True,'portal_editable':True}])
+         'persistent':True,**options}])
     assert result['ready'] and result['read_only']
     assert result['maintenance_fields']==[{'owner':'ProductChanges','name':'ExPortalProbe','field_type':'Name'}]
 
@@ -199,18 +201,56 @@ def test_installed_sdk_portal_field_does_not_guess_missing_maintenance(installed
     assert 'maintenance' in result['conflicts'][0]['message'].lower()
 
 
-def test_installed_sdk_portal_fields_are_saved_and_reloaded_together(installed_sdk):
+@pytest.mark.parametrize('options', [{}, {'portal_editable': True}])
+def test_installed_sdk_portal_fields_are_saved_and_reloaded_together(installed_sdk, options):
     from designer.files import artifact_dir
     candidate=installed_sdk.with_name('portal_saved_copy.mdb')
     shutil.copyfile(installed_sdk,candidate)
     result=vendor.run(artifact_dir(),{'mode':'apply','mdb':str(candidate),'workspace':'200','operations':[
         {'action':'add_field','owner':'Product','name':'ExPortalSaved','field_type':'Name',
-         'persistent':True,'portal_editable':True}]})
+         'persistent':True,**options}]})
     assert result['reload_verified']
     assert {'Product','ProductChanges'} <= set(result['affected_cdos'])
     field=vendor.query(str(candidate),'get','field',owner='ProductChanges',name='ExPortalSaved')
     assert field['AllowClientToRead'] and field['AllowClientToUpdate']
     assert field['DBColumnID']==0
+
+
+@pytest.mark.parametrize('owner,options', [
+    ('Product', {'persistent': True, 'portal_editable': False}),
+    ('Product', {'persistent': False}), ('ProductMaint', {'persistent': True}),
+])
+def test_installed_sdk_default_maintenance_pairing_has_clear_boundaries(installed_sdk, owner, options):
+    result=vendor.preflight(str(installed_sdk),vendor.digest(installed_sdk),[
+        {'action':'add_field','owner':owner,'name':'ExStorageProbe','field_type':'Name',**options}])
+    assert result['ready']
+    assert result['maintenance_fields']==[]
+
+
+def test_installed_sdk_default_pairing_does_not_modify_parent_maintenance(installed_sdk):
+    result=vendor.preflight(str(installed_sdk),vendor.digest(installed_sdk),[
+        {'action':'create_cdo','name':'ExChildProbe','parent':'Product'},
+        {'action':'add_field','owner':'ExChildProbe','name':'ExChildCode','field_type':'Name','persistent':True}])
+    assert result['ready']
+    assert not any(field['owner']=='ProductChanges' for field in result['maintenance_fields'])
+
+
+def test_installed_sdk_default_pairing_uses_newly_created_own_maintenance(installed_sdk):
+    result=vendor.preflight(str(installed_sdk),vendor.digest(installed_sdk),[
+        {'action':'create_cdo','name':'ExOwnMaintProbe','parent':'NamedDataObject',
+         'create_table':True,'table_name':'T_ExOwnMaintProbe','table_description':'Own maintenance probe',
+         'create_maintenance':True},
+        {'action':'add_field','owner':'ExOwnMaintProbe','name':'ExCode','field_type':'Name','persistent':True}])
+    assert result['ready']
+    assert result['maintenance_fields']==[{'owner':'ExOwnMaintProbeChanges','name':'ExCode','field_type':'Name'}]
+
+
+def test_installed_sdk_default_pairing_rejects_incompatible_maintenance_field(installed_sdk):
+    result=vendor.preflight(str(installed_sdk),vendor.digest(installed_sdk),[
+        {'action':'add_field','owner':'ProductChanges','name':'ExConflictProbe','field_type':'[Integer]'},
+        {'action':'add_field','owner':'Product','name':'ExConflictProbe','field_type':'Name','persistent':True}])
+    assert not result['ready']
+    assert any('Maintenance field conflicts' in conflict['message'] for conflict in result['conflicts'])
 
 
 def test_installed_sdk_where_used_reads_vendor_datatable(installed_sdk):

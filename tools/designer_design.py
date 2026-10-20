@@ -237,7 +237,7 @@ async def generate_designer_design_package(mdb_file: str, expected_sha256: str, 
     示例：[{"action":"create_cdo","name":"ExExample","parent":"NamedDataObject","create_table":true,"table_name":"ExExample","table_description":"示例主表"}]
     create_cdo: name,parent,description,create_table,table_name,table_description,create_revision_base,create_maintenance。建表时必须提供非空 table_description。
     create_field_type: name,data_type,String需max_length；数值可precision/scale。
-    add_field: name,owner,field_type,persistent(默认false),is_list(默认false),description；portal_editable=true 按真实维护服务的 ObjectChanges 关系同时创建可读写维护字段，不复制数据库列，缺少或冲突的维护关系会阻断；默认不自动创建维护字段。expected_type可核对data_type/precision/scale，引用不符拒绝创建。创建参数未知键会拒绝，不能使用拼错的属性。
+    add_field: name,owner,field_type,persistent(默认false),is_list(默认false),description。持久化命名/版本化主数据字段若有匹配自身的维护服务，默认按真实 ObjectChanges 关系配套创建可读写维护字段，并列入预览，不复制数据库列；portal_editable=false 明确选择仅存储字段，true 强制要求维护配套，缺少或冲突的维护关系会阻断。expected_type可核对data_type/precision/scale，引用不符拒绝创建。创建参数未知键会拒绝，不能使用拼错的属性。
     copy_clf: name,template；create_query: name,query_type,db_type_id,text,description。
     create_map: owner源CDO,target目标CDO，由官方生成映射名称。
     create_clf: name,clf_type；add_clf_function: owner,function,sequence。

@@ -39,7 +39,7 @@ operations 为非空有序 JSON 列表，无固定操作数上限；便捷 CDO �
 |---|---|---|
 | create_cdo | name,parent | 父 CDO 类别；可建表、Revision Base、Maintenance |
 | create_field_type | name,data_type | String 需 max_length；数值可 precision/scale |
-| add_field | name,owner,field_type | 可 persistent/is_list；厂商生成存储列；portal_editable=true 按实际维护服务关系配套创建可读写维护字段 |
+| add_field | name,owner,field_type | 可 persistent/is_list；厂商生成存储列；持久化命名/版本化主数据有匹配自身维护服务时默认配套可读写维护字段；portal_editable=false 选择仅存储，true 强制维护配套 |
 | patch | kind,name,changes,expected | schema 允许的简单属性，每个属性须提供原值 |
 | change_field_type | owner,name,field_type,expected_field_type | 厂商字段类型变更方法 |
 | change_parent | name,parent,expected_parent | 客户 CDO 更换相同 Usage 类别的父对象 |

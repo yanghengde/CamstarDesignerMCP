@@ -261,6 +261,15 @@ public static class DesignerVendorBridge {
   }
   return null;
  }
+ static bool NeedsMaintenanceField(MDBMetadataSet set,CDODefinition cdo,Dictionary<string,object> op) {
+  if(op.ContainsKey("portal_editable")) return Flag(op,"portal_editable");
+  if(!Flag(op,"persistent") || !(cdo.IsNamed || cdo.IsRevisioned) || cdo.MaintenanceCDOID==0) return false;
+  // An inherited maintenance service may still target the parent data object.
+  // Default pairing applies only to this object's actual maintenance service.
+  var maint=set.CDODefinitions[cdo.MaintenanceCDOID];
+  var target=maint.GetFieldByName("ObjectToChange",true);
+  return target!=null && target.FieldDefinition.CDODefId==cdo.CDODefId;
+ }
  static CDOField AddMaintenanceField(MDBMetadataSet set,CDODefinition cdo,CDOField source) {
   if(!(cdo.IsNamed || cdo.IsRevisioned) || cdo.MaintenanceCDOID==0)
    throw new ArgumentException("Portal editing requires an existing named/revisioned object's maintenance service: "+cdo.Name);
@@ -515,7 +524,7 @@ public static class DesignerVendorBridge {
    if(cdo.WorkspaceCode!=set.WorkSpace) cdo.CreateWorkspaceOverride(set.WorkSpace,ModifiedStatusEnum.Modified);
    var f=cdo.AddField(type,Flag(op,"is_list"),name,Text(op,"description"),0,0,Flag(op,"persistent"));
    f.IsNonPersistent=!Flag(op,"persistent");
-   if(Flag(op,"portal_editable")) AddMaintenanceField(set,cdo,f);
+   if(NeedsMaintenanceField(set,cdo,op)) AddMaintenanceField(set,cdo,f);
    return (f);
   }
   if(action=="copy_clf") {

@@ -76,10 +76,10 @@ def test_safety_counts_mutations_inside_generic_tool():
     assert (counts.creates,counts.updates,counts.deletes)==(2,2,3)
 
 
-def test_specialized_tool_counts_private_field_types():
+def test_specialized_tool_counts_private_types_and_possible_maintenance_fields():
     calls=[{'function':{'name':'generate_designer_cdo_package','arguments':json.dumps({'fields':[
         {'name':'NewType'}, {'name':'ExistingType','field_type':'String80'}]})}}]
-    assert count_tool_calls(calls).creates==4
+    assert count_tool_calls(calls).creates==6
 
 
 @pytest.mark.parametrize('payload',[{'fields':1},{'operations':1},[],None])
