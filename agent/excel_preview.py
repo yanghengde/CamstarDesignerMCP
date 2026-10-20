@@ -39,6 +39,8 @@ def build(calls, attachments, creation_checks=None):
     def row(action, owner='', name='', parent='', values=None):
         value = values or {}
         rows.append({'action': action, 'owner': owner, 'name': name, 'parent': parent,
+                     'display_action': value.get('display_label') or ('新增业务字段' if action == '新增字段' and value.get('persistent', True) else action),
+                     'display_note': value.get('display_note', ''),
                      'data_type': value.get('data_type') or value.get('field_type', ''),
                      'max_length': value.get('max_length', ''), 'persistent': value.get('persistent', True) if action == '新增字段' else None,
                      'is_list': value.get('is_list', False) if action == '新增字段' else None,
@@ -46,7 +48,8 @@ def build(calls, attachments, creation_checks=None):
                      'details': {key: val for key, val in value.items() if key not in {
                          'action', 'owner', 'name', 'parent', 'data_type', 'max_length',
                          'persistent', 'is_list', 'description', 'fields', 'mdb_file',
-                         'expected_sha256', 'workspace', 'cdo_name', 'parent_cdo'}}})
+                         'expected_sha256', 'workspace', 'cdo_name', 'parent_cdo',
+                         'display_label', 'display_note', 'automatic_maintenance'}}})
     actions = {'create_cdo': '新增对象', 'add_field': '新增字段', 'create_field_type': '新增字段类型',
                'patch': '修改属性', 'delete': '删除定义', 'change_field_type': '修改字段类型'}
     for call in calls:
@@ -78,19 +81,24 @@ def build(calls, attachments, creation_checks=None):
         else:
             row('新增字段', args.get('target_cdo', ''), args.get('field_name', ''), values={**args, 'persistent': False})
     for check in creation_checks or []:
+        from designer.operations import describe_operations
         if check.get('associated_operations'):
-            for op in check['associated_operations']:
-                row('联动维护字段：' + actions.get(op['action'], op['action']), op['owner'], op['name'], values=op)
+            for op in describe_operations(check['associated_operations'], check['associated_operations']):
+                row('自动配套维护字段' if op['action'] == 'add_field' else op['display_label'], op['owner'], op['name'], values=op)
         else:
             for field in check.get('maintenance_fields', []):
-                row('新增维护字段', field['owner'], field['name'], values={**field, 'AllowClientToRead': True, 'AllowClientToUpdate': True})
+                op = {'action': 'add_field', **field}
+                displayed = describe_operations([op], [op])[0]
+                row('自动配套维护字段', field['owner'], field['name'], values={**displayed, 'AllowClientToRead': True, 'AllowClientToUpdate': True})
     payload = {'rows': rows, 'objects': objects, 'targets': targets,
                'creation_checks': creation_checks or [],
                'attachments': [{'id': item['id'], 'name': item['name'], 'sha256': item['sha256']} for item in attachments],
                'call_fingerprints': [fingerprint(call) for call in calls]}
     identity = sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
     return {**payload, 'id': identity, 'status': 'pending',
-            'object_count': len(objects), 'field_count': sum(row['action'] in {'新增字段', '新增维护字段'} for row in rows),
+            'object_count': len(objects), 'field_count': sum(row['action'] in {'新增字段', '自动配套维护字段'} for row in rows),
+            'requested_field_count': sum(row['action'] == '新增字段' for row in rows),
+            'maintenance_field_count': sum(row['action'] == '自动配套维护字段' for row in rows),
             'message': '请核对设计预览，可直接输入修改要求更新预览；输入“确定”或“确认”后开始创建；输入“取消”可停止。'}
 
 

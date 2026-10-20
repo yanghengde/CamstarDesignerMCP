@@ -29,6 +29,38 @@ def kind(op):
     return op.get('kind') or ACTION_KINDS.get(op.get('action'), '')
 
 
+def describe_operations(operations, associated=()):
+    """Add display-only roles using recorded SDK associations, never name suffixes."""
+    import json
+    from collections import Counter
+    def identity(op):
+        return json.dumps(op, sort_keys=True, ensure_ascii=False)
+    remaining = Counter(identity(op) for op in associated)
+    result = []
+    # Associated operations are appended to the manifest after requested ones.
+    for op in reversed(operations):
+        key = identity(op)
+        automatic = remaining[key] > 0
+        if automatic:
+            remaining[key] -= 1
+        label, note = '', ''
+        if automatic:
+            label = {'add_field': '自动配套维护字段', 'delete': '同步删除维护字段',
+                     'change_field_type': '同步维护字段类型'}.get(op.get('action'), '同步修改维护字段')
+            note = ('用于 Portal/WCF 提交同一业务字段的新值，不新增数据库列。'
+                    if op.get('action') == 'add_field' else '随业务字段同步修改，保持维护接口一致。')
+        elif op.get('action') == 'add_field' and op.get('persistent'):
+            label, note = '新增业务字段', '保存实际业务数据。'
+        result.append({**op, 'automatic_maintenance': automatic,
+                       'display_label': label, 'display_note': note})
+    return list(reversed(result))
+
+
+def manifest_operations(manifest):
+    return describe_operations(manifest.get('operations', []),
+                               manifest.get('execution', {}).get('associated_operations', []))
+
+
 def final_fields(operations):
     """Project history onto final names and presence, preserving rename tombstones."""
     fields, owners, aliases = {}, {}, {}
@@ -100,7 +132,9 @@ def summary(operations, affected=()):
             fields.add((owner, final_name))
         rows.append({'owner': owner or op.get('owner') or op.get('map', ''), 'name': name or op.get('event') or op.get('function', ''),
                      'kind': target_kind, 'action': action,
-                     'label': LABELS.get(action, '新增' if action in CREATE_ACTIONS else '修改'),
+                     'label': op.get('display_label') or LABELS.get(action, '新增' if action in CREATE_ACTIONS else '修改'),
+                     'display_note': op.get('display_note', ''),
+                     'automatic_maintenance': op.get('automatic_maintenance', False),
                      'final_name': op.get('changes', {}).get('FieldName') or op.get('changes', {}).get('Name') or name,
                      'field_type': op.get('field_type', ''), 'deleted': action in DELETE_ACTIONS and action != 'remove_field_override'})
     objects.extend(item for item in affected if item and current(item) not in objects)

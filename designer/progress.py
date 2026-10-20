@@ -174,8 +174,8 @@ def snapshot(username, session_id):
                 if explicit_parent:
                     parent = str(Path(explicit_parent).resolve())
                 cursor = parent if (explicit_parent or source.name == 'modified.mdb') and parent in owned else ''
-            operations = [op for _, manifest in reversed(manifests) for op in manifest.get('operations', [])]
-            from designer.operations import summary as summarize
+            from designer.operations import summary as summarize, manifest_operations
+            operations = [op for _, manifest in reversed(manifests) for op in manifest_operations(manifest)]
             affected = [name for _, manifest in manifests for name in manifest.get('execution', {}).get('affected_cdos', [])]
             change_summary = summarize(operations, affected)
             package.update({key: change_summary[key] for key in ('objects', 'service_objects', 'field_count', 'change_count')})
@@ -208,6 +208,12 @@ def snapshot(username, session_id):
         relevant += [item for item in receipts if item not in relevant and item['tool'] == 'generate_designer_wcf_package'
                      and item.get('arguments', {}).get('compiled_mdb') in compiled_paths - {None}]
         publication_info = progress_actions.publication_state(relevant, package)
+        if publication_info.get('plan'):
+            from designer.operations import describe_operations
+            associated = [op for _, manifest in manifests
+                          for op in manifest.get('execution', {}).get('associated_operations', [])]
+            publication_info['plan'] = {**publication_info['plan'], 'display_changes': describe_operations(
+                publication_info['plan'].get('changes', []), associated)}
         latest_preflight = next((item for item in reversed(relevant)
                                  if item['tool'] == 'prepare_designer_publish_plan'), None)
         for item in relevant:
