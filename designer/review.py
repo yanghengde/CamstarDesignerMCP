@@ -169,7 +169,7 @@ def summary(manifest_file: str) -> dict:
         try:
             saved = json.loads(receipt_file.read_text(encoding='utf-8-sig'))
             if saved.get('copied_sha256') == manifest['artifacts']['modified.mdb']:
-                receipt = {key: saved.get(key) for key in ('server_mdb', 'server_siteinfo', 'activated', 'status')}
+                receipt = {key: saved.get(key) for key in ('server_mdb', 'server_siteinfo', 'activated', 'activation_error', 'status')}
         except (ValueError, OSError):
             pass
     work = working.summary(manifest['working_project_id']) if manifest.get('working_project_id') else None

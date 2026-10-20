@@ -830,8 +830,8 @@
             const card = document.createElement('section'); card.className = 'designer-result'; card.dataset.packageId = result.id;
             const title = document.createElement('h3'); title.textContent = '设计已保存 · 在 Designer 中继续'; card.appendChild(title);
             const objects = document.createElement('p'); objects.textContent = `对象：${result.objects.join('、') || '查看变更包'} · 客户工作区：${result.workspace}`; card.appendChild(objects);
-            const caption = document.createElement('p'); caption.textContent = result.working ? (result.is_current?'后续设计继续更新同一个工作 MDB。发布后下一轮设计自动备份上一版，最多保留 10 个版本。':'这是历史设计版本。后续设计请使用当前工作 MDB。') : '准备 Designer 可打开的 MDB 文件。'; card.appendChild(caption);
-            if(result.working){const path=document.createElement('code');path.textContent=`工作 MDB：${result.working.server_mdb||result.working.mdb_file}`;card.appendChild(path);}
+            const caption = document.createElement('p'); caption.textContent = result.working ? (result.is_current?'助手继续更新同一个项目工作 MDB；准备查看时，将副本同步到 Designer 打开路径。发布后下一轮设计自动备份上一版，最多保留 10 个版本。':'这是历史设计版本。后续设计请使用当前工作 MDB。') : '准备 Designer 可打开的 MDB 文件。'; card.appendChild(caption);
+            if(result.working){const path=document.createElement('code');path.textContent=`项目工作 MDB（助手使用）：${result.working.mdb_file}`;card.appendChild(path);}
             if(result.working?.server_mdb&&!result.working.server_current){const note=document.createElement('p');note.textContent='服务器文件尚未更新，请点击“在 Designer 中查看”重新准备。';card.appendChild(note);}
             const actions = document.createElement('div'); actions.className = 'review-actions';
             const button = document.createElement('button'); button.type = 'button'; button.textContent = '在 Designer 中查看'; actions.appendChild(button);
@@ -860,9 +860,10 @@
 
         function renderReviewReceipt(status, receipt, result) {
             const note = document.createElement('p');
-            note.textContent = receipt.activated ? '已设置下次启动文件。请保存并关闭当前 Designer，再重新打开。' : '文件已准备好。请保存当前设计，在 Designer 的打开文件入口选择下面的 MDB。当前账号无法自动修改启动配置。';
+            note.textContent = receipt.activated ? 'Designer 副本已准备好，并已设置为下次启动文件。请保存并关闭当前 Designer，再重新打开。' : 'Designer 副本已准备好。请保存当前设计，在 Designer 的打开文件入口选择下面的 MDB 和 SiteInfo。';
+            if (receipt.activation_error) note.textContent += '自动设置启动文件未成功，请手动选择下面的文件。';
             status.appendChild(note);
-            for (const [label, value] of [['MDB', receipt.server_mdb], ['SiteInfo', receipt.server_siteinfo]]) {
+            for (const [label, value] of [['Designer 打开 MDB', receipt.server_mdb], ['Designer 配套 SiteInfo', receipt.server_siteinfo]]) {
                 const path = document.createElement('code'); path.textContent = `${label}：${value}`; status.appendChild(path);
             }
             const steps = document.createElement('p'); steps.textContent = `选择客户工作区 ${result.workspace}，搜索 ${result.objects.join('、') || '目标对象'}。审核、编译和发布继续在 Designer 中执行。`; status.appendChild(steps);
