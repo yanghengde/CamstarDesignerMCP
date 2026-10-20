@@ -511,6 +511,22 @@ def test_wcf_verifies_data_and_maintenance_object_names(contracts):
         progress_actions.verify_wcf_fields(result, state, ['Product', 'ProductChanges'])
 
 
+@pytest.mark.parametrize('server_path', [
+    r'server\Bin\Camstar.WCFService.dll', 'server/bin/Camstar.WCFService.dll',
+    'SERVER/BIN/CAMSTAR.WCFSERVICE.DLL',
+])
+def test_wcf_windows_output_path_case_does_not_hide_existing_assembly(server_path):
+    result = {'status': 'services_generated', 'source_unchanged': True, 'partial_package': False,
+              'data_contract_count': 1, 'service_count': 1,
+              'type_checks': [{'name': 'Camstar.WCF.ObjectStack.ProductChanges', 'properties': ['ExCode']}],
+              'files_sha256': {r'client\Camstar.WCFClient.dll': 'client', server_path: 'server'}}
+    state = {'field_expectations': [{'owner': 'Product', 'name': 'ExCode', 'present': True}]}
+    assert progress_actions.verify_wcf_fields(result, state, ['Product']) == result
+    del result['files_sha256'][server_path]
+    with pytest.raises(ValueError, match='程序集缺失'):
+        progress_actions.verify_wcf_fields(result, state, ['Product'])
+
+
 def test_new_wcf_generation_clears_previous_deployment_and_acceptance(workflow,monkeypatch):
     from tools import designer
     sid,folder=workflow

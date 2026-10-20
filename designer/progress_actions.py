@@ -238,8 +238,10 @@ def verify_wcf_fields(result, state, names):
         raise ValueError('WCF 缺少验收对象')
     if not result.get('data_contract_count') or not result.get('service_count') or not result.get('files_sha256'):
         raise ValueError('WCF 产物或生成计数不完整')
-    files = {name.replace('\\', '/') for name in result['files_sha256']}
-    if not {'client/Camstar.WCFClient.dll', 'server/bin/Camstar.WCFService.dll'}.issubset(files):
+    # The installed Windows generator emits either Bin or bin. Receipt paths
+    # follow Windows case-insensitive file semantics, including DLL names.
+    files = {name.replace('\\', '/').casefold() for name in result['files_sha256']}
+    if not {'client/camstar.wcfclient.dll', 'server/bin/camstar.wcfservice.dll'}.issubset(files):
         raise ValueError('WCF 客户端或服务端程序集缺失')
     return result
 

@@ -87,3 +87,35 @@ Contract preflight reads internal generator metadata APIs because this installed
 version does not expose the contract cache publicly. Unsupported APIs fail
 explicitly; revalidate this adapter when upgrading the generator. It never
 substitutes for the completed assembly checks or Portal runtime verification.
+
+## Current project correction applied
+
+The user's current project was subsequently repaired through the official
+metadata API, saved/reloaded, exported, and copied to its fixed Designer path.
+The previous published release was backed up. The new manifest is
+`data/designer/artifacts/2f4e53c5f4e24a29b60badeea5271248/manifest.json`.
+It adds ProductChanges.ExProductDescription using ExProductDescString200,
+readable/writable, without a second database column.
+
+Official Update Database completed and verified the maintenance field against
+localhost/CamstarPRD. Publication receipt:
+`data/designer/artifacts/40fcb2aab4c54a5090921d1c6554d3c9/publish_result.json`.
+
+The normal SQL Agent WCF pipeline then generated 798 services and 2592 data
+contracts in 88.87 seconds, including transfer and verification. It exposed a
+second validation bug: Windows output `server\\Bin` was compared case-sensitively
+against `server/bin`. Verification now uses case-insensitive Windows path
+semantics while still requiring both assemblies. Added tests cover backslashes,
+case variants, and actual missing assemblies.
+
+All fetched artifact hashes and both client/server field checks were revalidated
+against the official worker receipt, then a verified DLL archive was prepared.
+The current task has a real successful stage-9 receipt; the failed receipts remain
+in its audit history. Generation receipt:
+`data/designer/artifacts/7549ced979c54407999fe3affe189b0f/generation_result.json`.
+Portal deployment and actual page read/write acceptance remain outstanding.
+
+The attempted restart of the older running API process was rejected by automatic
+approval with `blocked by policy`; the server remained running. Restart the app
+in its original terminal to load the updated Python validation logic for future
+generation attempts. The completed current-task receipt survives the restart.
