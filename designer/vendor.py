@@ -246,7 +246,7 @@ def validate_operations(operations: list[dict]) -> None:
             'create_cdo': {'name', 'parent', 'description', 'create_table', 'table_name', 'table_description',
                            'create_revision_base', 'create_maintenance'},
             'create_field_type': {'name', 'data_type', 'max_length', 'precision', 'scale', 'description'},
-            'add_field': {'name', 'owner', 'field_type', 'persistent', 'is_list', 'description', 'expected_type'},
+            'add_field': {'name', 'owner', 'field_type', 'persistent', 'is_list', 'description', 'expected_type', 'portal_editable'},
         }
         if action in creation_keys:
             unknown = set(op) - creation_keys[action] - {'action'}
@@ -291,7 +291,7 @@ def validate_operations(operations: list[dict]) -> None:
                     raise ValueError('String类型仅用max_length指定长度，不能同时指定precision/scale')
             elif 'max_length' in op:
                 raise ValueError('max_length 仅用于 String；数值类型请使用 precision/scale')
-        for key in ("persistent", "is_list", "create_table", "create_revision_base", "create_maintenance"):
+        for key in ("persistent", "is_list", "create_table", "create_revision_base", "create_maintenance", "portal_editable"):
             if key in op and not isinstance(op[key], bool):
                 raise ValueError(f"{key} 必须是布尔值")
         required = {

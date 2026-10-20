@@ -449,8 +449,9 @@ def test_wcf_generation_verifies_fields_and_provides_owned_download(workflow,mon
             'data_contract_count':10,'service_count':2,'type_checks':[{'name':'Camstar.WCF.ObjectStack.ExSampleChanges','properties':['Code']}],
             'files_sha256':{str(file.relative_to(folder)):vendor.digest(file) for file in [output/'Camstar.WCFClient.dll',server/'Camstar.WCFService.dll',output/'App.config']},'result_file':str(folder/'generation_result.json')}
     (folder/'generation_result.json').write_text(json.dumps(result))
-    async def generate(mdb,checksum,names,service_names=None):
+    async def generate(mdb,checksum,names,service_names=None,expected_fields=None):
         assert names==['ExSample'];assert service_names is None
+        assert expected_fields == [{'owner': 'ExSample', 'name': 'Code', 'present': True}]
         return dict(result)
     monkeypatch.setattr(designer_design,'generate_designer_wcf_package',generate)
     async def scenario():
@@ -488,6 +489,26 @@ def test_wcf_rejects_missing_fields_partial_output_and_foreign_objects(workflow)
     result.update(partial_package=False,type_checks=[{'name':'Camstar.WCF.ObjectStack.ExSampleChanges','properties':[]}])
     with pytest.raises(ValueError,match='当前字段'):
         progress_actions.verify_wcf_fields(result,state,['ExSample'])
+
+
+@pytest.mark.parametrize('contracts', [
+    [{'name': 'ProductChanges', 'properties': ['ExCode']}],
+    [{'name': 'Product', 'properties': ['ExCode']},
+     {'name': 'ProductChanges', 'properties': ['ExCode']}],
+])
+def test_wcf_verifies_data_and_maintenance_object_names(contracts):
+    result = {'status': 'services_generated', 'source_unchanged': True, 'partial_package': False,
+              'data_contract_count': 2, 'service_count': 1,
+              'type_checks': [{'name': 'Camstar.WCF.ObjectStack.' + row['name'],
+                               'properties': row['properties']} for row in contracts],
+              'files_sha256': {'client/Camstar.WCFClient.dll': 'client',
+                               'server/bin/Camstar.WCFService.dll': 'server'}}
+    state = {'field_expectations': [{'owner': owner, 'name': 'ExCode', 'present': True}
+                                   for owner in ('Product', 'ProductChanges')]}
+    assert progress_actions.verify_wcf_fields(result, state, ['Product', 'ProductChanges']) == result
+    state['field_expectations'][-1]['name'] = 'Missing'
+    with pytest.raises(ValueError, match='ProductChanges.Missing'):
+        progress_actions.verify_wcf_fields(result, state, ['Product', 'ProductChanges'])
 
 
 def test_new_wcf_generation_clears_previous_deployment_and_acceptance(workflow,monkeypatch):

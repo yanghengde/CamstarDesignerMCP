@@ -367,7 +367,8 @@ async def execute(identity, username, session_id, package, manifests, action, op
                     final_fields = await asyncio.to_thread(progress_actions.final_wcf_fields,
                         compiled['compiled_mdb'], compiled['compiled_sha256'], fresh['field_expectations'], names)
                     from tools.designer_design import generate_designer_wcf_package
-                    result = await generate_designer_wcf_package(compiled['compiled_mdb'], compiled['compiled_sha256'], names)
+                    result = await generate_designer_wcf_package(compiled['compiled_mdb'], compiled['compiled_sha256'], names,
+                                                                 expected_fields=final_fields)
                     progress_actions.verify_wcf_fields(result, {**fresh, 'field_expectations': final_fields}, names)
                     result['fields_verified'] = True
             elif action == 'verify':

@@ -155,7 +155,7 @@ def test_restore_backup_preserves_current_checkpoint_and_fixed_path(project):
     checkpoint = working.backup_file(second['working_project_id'], restored['recovery_backup_id'], 'mdb')
     assert checkpoint.read_bytes() == before
     assert not restored['database_restored']
-    assert json.loads(manifest(restored).read_text())['parent_manifest_file'] == second['files']['manifest.json']
+    assert json.loads(manifest(restored).read_text(encoding='utf-8'))['parent_manifest_file'] == second['files']['manifest.json']
 
 
 def test_restore_tampered_or_foreign_backup_leaves_work_unchanged(project):

@@ -94,12 +94,14 @@ def count_tool_calls(tool_calls: Iterable[dict]) -> MutationCounts:
                 fields = payload.get('fields') or []
                 if not isinstance(fields, list): fields = []
                 creates += 1 + len(fields) + sum(isinstance(field, dict) and not field.get('field_type') for field in fields)
+                creates += sum(isinstance(field, dict) and field.get('portal_editable') is True for field in fields)
             else:
                 operations = payload.get('operations') or []
                 if not isinstance(operations, list): operations = []
                 for op in operations:
                     action = op.get('action') if isinstance(op, dict) else ''
                     creates += action in CREATE_ACTIONS
+                    creates += action == 'add_field' and op.get('portal_editable') is True
                     updates += action in UPDATE_ACTIONS
                     deletes += action in DELETE_ACTIONS
             continue

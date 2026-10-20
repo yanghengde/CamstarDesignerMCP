@@ -38,6 +38,7 @@ public static class DesignerVendorBridge {
   BatchSet=null;
  }
  static MDBMetadataSet BatchSet;
+ static readonly List<CDOField> AssociatedFields=new List<CDOField>();
  static readonly HashSet<string> ReadModes=new HashSet<string>(new[]{"catalog","list","get","schema","impact","fields","inheritance"});
  static JavaScriptSerializer Json = new JavaScriptSerializer { MaxJsonLength=20971520, RecursionLimit=64 };
  static Dictionary<string,object> Map(object value) { return (Dictionary<string,object>)value; }
@@ -135,7 +136,7 @@ public static class DesignerVendorBridge {
  }
  static string[] CoreProperties(BaseMetadataObject obj) {
   if(obj is CDODefinition) return new[]{"Name","ParentCDOID","StorageCategoryId"};
-  if(obj is CDOField) return new[]{"Name","FieldName","FieldDefId","IsListType","IsNonPersistent"};
+  if(obj is CDOField) return new[]{"Name","FieldName","FieldDefId","IsListType","IsNonPersistent","AllowClientToRead","AllowClientToUpdate"};
   if(obj is FieldDefinition) return new[]{"FieldDefName","PrecisionValue","Scale","CPPDataTypeID"};
   if(obj is CLFFunction) return new[]{"FunctionID","Sequence","CLFID"};
   if(obj is CLFFunParm) return new[]{"ValueExpression"};
@@ -260,6 +261,28 @@ public static class DesignerVendorBridge {
   }
   return null;
  }
+ static CDOField AddMaintenanceField(MDBMetadataSet set,CDODefinition cdo,CDOField source) {
+  if(!(cdo.IsNamed || cdo.IsRevisioned) || cdo.MaintenanceCDOID==0)
+   throw new ArgumentException("Portal editing requires an existing named/revisioned object's maintenance service: "+cdo.Name);
+  var maint=set.CDODefinitions[cdo.MaintenanceCDOID];
+  var target=maint.GetFieldByName("ObjectToChange",true);
+  var link=maint.GetFieldByName("ObjectChanges",true);
+  if(target==null || link==null || target.FieldDefinition.CDODefId!=cdo.CDODefId)
+   throw new ArgumentException("Maintenance ObjectToChange/ObjectChanges links do not match "+cdo.Name);
+  var changes=set.CDODefinitions[link.FieldDefinition.CDODefId];
+  var existing=changes.AllFields.Values.FirstOrDefault(f=>f.FieldName.Equals(source.FieldName,StringComparison.OrdinalIgnoreCase));
+  if(existing!=null) {
+   if(existing.FieldDefId!=source.FieldDefId || existing.IsListType!=source.IsListType ||
+      !existing.AllowClientToRead || !existing.AllowClientToUpdate)
+    throw new ArgumentException("Maintenance field conflicts; inspect before changing: "+changes.Name+"."+source.FieldName);
+   return existing;
+  }
+  if(changes.WorkspaceCode!=set.WorkSpace) changes.CreateWorkspaceOverride(set.WorkSpace,ModifiedStatusEnum.Modified);
+  var field=changes.AddField(source.FieldDefinition,source.IsListType,source.FieldName,source.FieldDescription,0,0,false);
+  field.AllowClientToRead=true;field.AllowClientToUpdate=true;
+  AssociatedFields.Add(field);
+  return field;
+ }
  static object Preflight(MDBMetadataSet set,Dictionary<string,object> request) {
   var profiles=new List<object>(); var conflicts=new List<object>();
   var categories=new List<object>();
@@ -268,7 +291,7 @@ public static class DesignerVendorBridge {
    if(candidate!=null) categories.Add(Dict("category",Category(candidate),"parent",candidate.Name,
     "usage",candidate.CDOUsageMask,"total_fields",candidate.AllFields.Count));
   }
-  Aliases.Clear(); RemovedIdentities.Clear();
+  Aliases.Clear(); RemovedIdentities.Clear(); AssociatedFields.Clear();
   int index=0;
   foreach(var item in (object[])request["operations"]) {
    index++; var op=Map(item); string action=Text(op,"action"),name=Text(op,"name"),owner=Text(op,"owner");
@@ -346,6 +369,7 @@ public static class DesignerVendorBridge {
   // Factories and setters above affect only this isolated in-memory graph.
   // Deliberately do not call SaveAll or export/compile in preflight mode.
   return Dict("ready",conflicts.Count==0,"objects",profiles,"conflicts",conflicts,"categories",categories,
+   "maintenance_fields",AssociatedFields.Select(f=>Dict("owner",f.CDODefinition.Name,"name",f.FieldName,"field_type",f.FieldDefinition.FieldDefName)).ToArray(),
    "usage_definition_count",set.CDOUsages.Count,
    "workspace",set.WorkSpace,"complete",true,"read_only",true,"method","Camstar.Metadata.CreateNewCDO/AllFields (no SaveAll)");
  }
@@ -491,6 +515,7 @@ public static class DesignerVendorBridge {
    if(cdo.WorkspaceCode!=set.WorkSpace) cdo.CreateWorkspaceOverride(set.WorkSpace,ModifiedStatusEnum.Modified);
    var f=cdo.AddField(type,Flag(op,"is_list"),name,Text(op,"description"),0,0,Flag(op,"persistent"));
    f.IsNonPersistent=!Flag(op,"persistent");
+   if(Flag(op,"portal_editable")) AddMaintenanceField(set,cdo,f);
    return (f);
   }
   if(action=="copy_clf") {
@@ -750,13 +775,16 @@ public static class DesignerVendorBridge {
       result=record;
      }
     } else if(mode=="apply") {
-     Aliases.Clear(); RemovedIdentities.Clear();
+     Aliases.Clear(); RemovedIdentities.Clear(); AssociatedFields.Clear();
      var targets=new List<BaseMetadataObject>(); var properties=new Dictionary<string,HashSet<string>>();
      foreach(var item in (object[])req["operations"]) {
       var op=Map(item); var target=(BaseMetadataObject)Apply(set,op); targets.Add(target);
       string identity=Identity(target);
       if(!properties.ContainsKey(identity)) properties[identity]=new HashSet<string>(CoreProperties(target));
       if(Text(op,"action")=="patch") foreach(var key in Map(op["changes"]).Keys) properties[identity].Add(key);
+     }
+     foreach(var associated in AssociatedFields) {
+      targets.Add(associated);properties[Identity(associated)]=new HashSet<string>(CoreProperties(associated));
      }
      var records=targets.Select(Record).ToList();
      set.SaveAll();

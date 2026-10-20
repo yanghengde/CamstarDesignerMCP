@@ -106,6 +106,22 @@ def test_service_generation_rejects_changed_input_without_remote_calls(tmp_path,
     assert not (tmp_path/"artifacts").exists()
 
 
+@pytest.mark.parametrize('fields', [
+    'invalid', [{}], [{'owner': 'OtherObject', 'name': 'Code', 'present': True}],
+    [{'owner': 'Product', 'name': 'Code', 'present': 'true'}],
+    [{'owner': 'Product', 'name': 'Code', 'present': True, 'unknown': True}],
+    [{'owner': 'Product', 'name': '../Code', 'present': True}],
+])
+def test_wcf_field_expectations_rejected_before_remote_calls(tmp_path, monkeypatch, fields):
+    from designer import services
+    monkeypatch.setattr(config, 'DESIGNER_ROOT', str(tmp_path))
+    source = tmp_path / 'compiled.mdb'; source.write_bytes(b'compiled')
+    monkeypatch.setattr(services, 'worker_environment', lambda: pytest.fail('must not contact server'))
+    with pytest.raises(ValueError):
+        services.generate_wcf(str(source), vendor.digest(source), ['Product'], expected_fields=fields)
+    assert not (tmp_path / 'artifacts').exists()
+
+
 def test_restore_rejects_wrong_receipt_hash_before_connection(tmp_path,monkeypatch):
     from designer.publication import restore_test_backup
     monkeypatch.setattr(config,"DESIGNER_ROOT",str(tmp_path))

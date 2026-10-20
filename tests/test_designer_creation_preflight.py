@@ -43,6 +43,27 @@ def test_specialized_cdo_options_are_forwarded_without_changing_defaults():
     assert chosen[0]['create_revision_base'] is True and chosen[0]['create_maintenance'] is True
 
 
+def test_portal_field_option_is_explicit_and_validated():
+    operations = cdo_operations('ExPortal', 'NamedDataObject',
+        [{'name': 'Code', 'field_type': 'Name', 'portal_editable': True}], create_maintenance=True)
+    assert operations[-1]['portal_editable'] is True
+    vendor.validate_operations(operations)
+    operations[-1]['portal_editable'] = 'true'
+    with pytest.raises(ValueError, match='portal_editable'):
+        vendor.validate_operations(operations)
+
+
+def test_portal_companion_is_visible_in_preview_and_counted_for_confirmation():
+    from agent import safety
+    call={'id':'portal','function':{'name':'generate_designer_design_package','arguments':json.dumps({
+        'mdb_file':'source.mdb','expected_sha256':'a'*64,'operations':[
+            {'action':'add_field','owner':'Product','name':'ExCode','field_type':'Name','portal_editable':True}]})}}
+    preview=excel_preview.build([call],[],[{'maintenance_fields':[{'owner':'ProductChanges','name':'ExCode','field_type':'Name'}]}])
+    assert preview['field_count']==2
+    assert preview['rows'][-1]['owner']=='ProductChanges'
+    assert safety.count_tool_calls([call]).creates==2
+
+
 def test_preflight_reuses_exact_plan_but_invalidates_source_sdk_and_parameters(isolated, monkeypatch):
     source,dll=isolated; calls=[]
     def run(folder, request):
@@ -161,6 +182,35 @@ def test_installed_sdk_schema_denies_generic_relationship_setters(installed_sdk)
     properties={p['name']:p for p in result['properties']}
     for name in ('CDOUsageMask','ParentCDOName','StorageCategoryName'):
         assert properties[name]['editable'] is False
+
+
+def test_installed_sdk_portal_field_uses_actual_maintenance_relationship(installed_sdk):
+    result=vendor.preflight(str(installed_sdk),vendor.digest(installed_sdk),[
+        {'action':'add_field','owner':'Product','name':'ExPortalProbe','field_type':'Name',
+         'persistent':True,'portal_editable':True}])
+    assert result['ready'] and result['read_only']
+    assert result['maintenance_fields']==[{'owner':'ProductChanges','name':'ExPortalProbe','field_type':'Name'}]
+
+
+def test_installed_sdk_portal_field_does_not_guess_missing_maintenance(installed_sdk):
+    result=vendor.preflight(str(installed_sdk),vendor.digest(installed_sdk),[
+        {'action':'add_field','owner':'ProductMaint','name':'ExPortalProbe','field_type':'Name','portal_editable':True}])
+    assert not result['ready']
+    assert 'maintenance' in result['conflicts'][0]['message'].lower()
+
+
+def test_installed_sdk_portal_fields_are_saved_and_reloaded_together(installed_sdk):
+    from designer.files import artifact_dir
+    candidate=installed_sdk.with_name('portal_saved_copy.mdb')
+    shutil.copyfile(installed_sdk,candidate)
+    result=vendor.run(artifact_dir(),{'mode':'apply','mdb':str(candidate),'workspace':'200','operations':[
+        {'action':'add_field','owner':'Product','name':'ExPortalSaved','field_type':'Name',
+         'persistent':True,'portal_editable':True}]})
+    assert result['reload_verified']
+    assert {'Product','ProductChanges'} <= set(result['affected_cdos'])
+    field=vendor.query(str(candidate),'get','field',owner='ProductChanges',name='ExPortalSaved')
+    assert field['AllowClientToRead'] and field['AllowClientToUpdate']
+    assert field['DBColumnID']==0
 
 
 def test_installed_sdk_where_used_reads_vendor_datatable(installed_sdk):

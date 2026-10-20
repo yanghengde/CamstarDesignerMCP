@@ -884,6 +884,7 @@
         }
         function creationProfiles(preview) {
             const area=document.createElement('div');area.className='creation-profiles';
+            for(const check of preview.creation_checks||[])for(const field of check.maintenance_fields||[]){const note=document.createElement('p');note.textContent=`同时创建 Portal 维护字段：${field.owner}.${field.name}（${field.field_type}，允许客户端读取和更新）`;area.appendChild(note);}
             for(const check of preview.creation_checks||[])for(const profile of check.objects||[]) {
                 const panel=document.createElement('section');panel.className='creation-profile';
                 const title=document.createElement('strong');title.textContent=`${profile.name} · ${profile.category}`;panel.appendChild(title);

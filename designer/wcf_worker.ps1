@@ -1,6 +1,30 @@
 param([string]$RequestFile)
 $ErrorActionPreference='Stop'
 [Console]::OutputEncoding=[Text.Encoding]::UTF8
+
+function New-DesignerWcfWorkerConfig([string]$GeneratorDirectory,[string]$Destination) {
+ $taskProfile=Join-Path $GeneratorDirectory 'WCFBuilderLauncher.exe.config'
+ if(-not(Test-Path -LiteralPath $taskProfile -PathType Leaf)) {throw 'Missing official WCFBuilderLauncher.exe.config generation profile'}
+ [xml]$taskConfig=Get-Content -LiteralPath $taskProfile -Raw
+ if(-not $taskConfig.SelectSingleNode('/configuration/WCFGenerator/AllServices/add')) {
+  throw 'Official WCF generation profile lacks AllServices exposure rules'
+ }
+ # The official profile controls inherited method exposure even when all
+ # services are generated. Dropping it exposes every inherited method again.
+ $taskAppSettings=$taskConfig.SelectSingleNode('/configuration/appSettings')
+ if(-not $taskAppSettings) {
+  $taskAppSettings=$taskConfig.CreateElement('appSettings')
+  $taskConfig.configuration.AppendChild($taskAppSettings) | Out-Null
+ }
+ $taskLog=$taskAppSettings.SelectSingleNode('add[@key="LogLevel"]')
+ if(-not $taskLog) {
+  $taskLog=$taskConfig.CreateElement('add');$taskLog.SetAttribute('key','LogLevel')
+  $taskAppSettings.AppendChild($taskLog) | Out-Null
+ }
+ $taskLog.SetAttribute('value','0')
+ $taskConfig.Save($Destination)
+}
+
 $taskRequest=Get-Content -LiteralPath $RequestFile -Raw | ConvertFrom-Json
 $taskDllFolder=$taskRequest.generator_directory
 Set-Location -LiteralPath $taskDllFolder
@@ -13,9 +37,9 @@ foreach($taskName in @('Camstar.WCFClientBase.dll','Camstar.WCFServiceBase.dll',
 }
 $taskExe=Join-Path $PSScriptRoot 'WcfWorker.exe'
 Add-Type -Path (Join-Path $PSScriptRoot 'WcfWorker.cs') -ReferencedAssemblies $taskReferences -OutputAssembly $taskExe -OutputType ConsoleApplication
-# A private executable config scopes vendor LogLevel to this worker. Installed
-# registry and machine-wide application settings remain unchanged.
-'<configuration><appSettings><add key="LogLevel" value="0" /></appSettings><startup><supportedRuntime version="v4.0" sku=".NETFramework,Version=v4.8" /></startup></configuration>' | Set-Content -LiteralPath ($taskExe+'.config') -Encoding UTF8
+# Preserve the installed generator's service/method rules in a private copy;
+# scope its log level to this worker without editing installed configuration.
+New-DesignerWcfWorkerConfig $taskDllFolder ($taskExe+'.config')
 foreach($taskName in @('Camstar.WCFClientBase.dll','Camstar.WCFServiceBase.dll','Camstar.Exceptions.dll','Camstar.Utility.dll','Camstar.WCFGenerator.dll','Camstar.Util.dll')) {
  Copy-Item -LiteralPath (Join-Path $taskDllFolder $taskName) -Destination (Join-Path $PSScriptRoot $taskName)
 }

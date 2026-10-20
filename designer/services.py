@@ -43,11 +43,19 @@ def transfer(folder: Path, mode: str, env: dict) -> None:
         raise ValueError("服务器文件传输失败："+redact(run.stderr.decode("utf-8",errors="replace"))[:1500]) from None
 
 
-def generate_wcf(compiled_mdb: str, expected_sha256: str, verify_types: list[str], service_names: list[str] | None = None) -> dict:
+def generate_wcf(compiled_mdb: str, expected_sha256: str, verify_types: list[str], service_names: list[str] | None = None,
+                 expected_fields: list[dict] | None = None) -> dict:
     source=source_path(compiled_mdb,".mdb")
     if digest(source)!=expected_sha256: raise ValueError("编译MDB的SHA256不匹配")
     if not isinstance(verify_types,list) or not 1<=len(verify_types)<=20: raise ValueError("必须提供1～20个验收对象名")
     for name in verify_types: identifier(name)
+    if expected_fields is not None:
+        if not isinstance(expected_fields, list): raise ValueError('expected_fields 必须为字段验收列表')
+        for field in expected_fields:
+            if (not isinstance(field, dict) or set(field) - {'owner', 'name', 'present'}
+                    or not isinstance(field.get('present'), bool) or field.get('owner') not in verify_types):
+                raise ValueError('expected_fields 需要验收对象 owner、字段 name 和布尔值 present')
+            identifier(field.get('name', ''))
     if service_names is not None:
         if not isinstance(service_names,list) or not 1<=len(service_names)<=20 or len(set(service_names))!=len(service_names):
             raise ValueError("service_names必须是1～20个不重复的服务名；省略为全量")
@@ -66,6 +74,7 @@ def generate_wcf(compiled_mdb: str, expected_sha256: str, verify_types: list[str
                  "generator_directory":config.DESIGNER_SERVER_WCF_GENERATOR,"address":config.DESIGNER_WCF_ADDRESS,
                  "server_connection":settings["server_connection"],"verify_types":",".join(verify_types),"timeout_seconds":str(config.DESIGNER_SERVICE_TIMEOUT)}
         if service_names is not None: request["service_names"]=",".join(service_names)
+        if expected_fields is not None: request['expected_fields']=json.dumps(expected_fields)
         (folder/"request.json").write_text(json.dumps(request),encoding="utf-8")
         transfer(folder,"stage",env)
         with target_connection("msdb") as conn:

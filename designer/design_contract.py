@@ -36,7 +36,7 @@ def cdo_operations(cdo_name, parent_cdo, fields, description='', *, create_table
         if not isinstance(field, dict) or not field.get('name'):
             raise ValueError('每个字段需要name')
         unknown = set(field) - {'name', 'data_type', 'max_length', 'precision', 'scale', 'field_type',
-                                'persistent', 'is_list', 'description'}
+                                'persistent', 'is_list', 'description', 'portal_editable'}
         if unknown:
             raise ValueError(f"字段 {field['name']} 包含未知参数：{', '.join(sorted(unknown))}")
         name = field['name']
@@ -61,6 +61,8 @@ def cdo_operations(cdo_name, parent_cdo, fields, description='', *, create_table
         operations.append({'action': 'add_field', 'name': name, 'owner': cdo_name, 'field_type': field_type,
                            'persistent': field.get('persistent', True), 'is_list': field.get('is_list', False),
                            'description': field.get('description', '')})
+        if 'portal_editable' in field:
+            operations[-1]['portal_editable'] = field['portal_editable']
         if field.get('field_type'):
             expected = {key: field[key] for key in ('data_type', 'precision', 'scale') if key in field}
             if expected:

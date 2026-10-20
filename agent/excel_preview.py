@@ -77,13 +77,16 @@ def build(calls, attachments, creation_checks=None):
                 row(actions.get(op.get('action'), op.get('action', '设计变更')), op.get('owner', ''), op.get('name', ''), op.get('parent', ''), values)
         else:
             row('新增字段', args.get('target_cdo', ''), args.get('field_name', ''), values={**args, 'persistent': False})
+    for check in creation_checks or []:
+        for field in check.get('maintenance_fields', []):
+            row('新增维护字段', field['owner'], field['name'], values={**field, 'AllowClientToRead': True, 'AllowClientToUpdate': True})
     payload = {'rows': rows, 'objects': objects, 'targets': targets,
                'creation_checks': creation_checks or [],
                'attachments': [{'id': item['id'], 'name': item['name'], 'sha256': item['sha256']} for item in attachments],
                'call_fingerprints': [fingerprint(call) for call in calls]}
     identity = sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
     return {**payload, 'id': identity, 'status': 'pending',
-            'object_count': len(objects), 'field_count': sum(row['action'] == '新增字段' for row in rows),
+            'object_count': len(objects), 'field_count': sum(row['action'] in {'新增字段', '新增维护字段'} for row in rows),
             'message': '请核对设计预览，可直接输入修改要求更新预览；输入“确定”或“确认”后开始创建；输入“取消”可停止。'}
 
 

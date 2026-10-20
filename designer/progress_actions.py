@@ -220,9 +220,12 @@ def final_wcf_fields(mdb_file, checksum, fields, names):
 def verify_wcf_fields(result, state, names):
     if result.get('status') != 'services_generated' or result.get('partial_package') or not result.get('source_unchanged'):
         raise ValueError('WCF 全量生成未通过核对')
-    checks = {}
-    for item in result.get('type_checks', []):
-        checks.setdefault(item['name'].split('.')[-1].removesuffix('Changes'), set()).update(item.get('properties', []))
+    contracts = {item['name'].split('.')[-1]: set(item.get('properties', []))
+                 for item in result.get('type_checks', [])}
+    # Both a data object and its actual maintenance object may be affected.
+    # Prefer the exact contract, as the worker does, before trying its suffix.
+    checks = {name: contracts[name] if name in contracts else contracts[name + 'Changes']
+              for name in names if name in contracts or name + 'Changes' in contracts}
     from designer.operations import final_fields
     fields = state.get('field_expectations')
     if fields is None:

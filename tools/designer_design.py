@@ -87,10 +87,11 @@ async def restore_designer_mdb_backup(mdb_file: str, backup_id: str, expected_sh
 
 
 @mcp.tool
-async def generate_designer_wcf_package(compiled_mdb: str, expected_sha256: str, verify_types: list[str], service_names: list[str] | None = None) -> dict:
+async def generate_designer_wcf_package(compiled_mdb: str, expected_sha256: str, verify_types: list[str], service_names: list[str] | None = None,
+                                        expected_fields: list[dict] | None = None) -> dict:
     """在已配置的测试服务器隔离生成官方WCF程序集，核对非零计数与指定类型；不部署运行目录。需要Windows共享凭据与SQL Agent。省略service_names为全量，指定时仅生成部分服务，不能替代完整运行包。当前安装版本适配仍在验收，失败返回日志位置，不能据作业退出码宣称成功。"""
     from designer.services import generate_wcf
-    return await asyncio.to_thread(generate_wcf,compiled_mdb,expected_sha256,verify_types,service_names)
+    return await asyncio.to_thread(generate_wcf,compiled_mdb,expected_sha256,verify_types,service_names,expected_fields)
 
 
 @mcp.tool
@@ -236,7 +237,7 @@ async def generate_designer_design_package(mdb_file: str, expected_sha256: str, 
     示例：[{"action":"create_cdo","name":"ExExample","parent":"NamedDataObject","create_table":true,"table_name":"ExExample","table_description":"示例主表"}]
     create_cdo: name,parent,description,create_table,table_name,table_description,create_revision_base,create_maintenance。建表时必须提供非空 table_description。
     create_field_type: name,data_type,String需max_length；数值可precision/scale。
-    add_field: name,owner,field_type,persistent(默认false),is_list(默认false),description；expected_type可核对data_type/precision/scale，引用不符拒绝创建。创建参数未知键会拒绝，不能使用拼错的属性。
+    add_field: name,owner,field_type,persistent(默认false),is_list(默认false),description；portal_editable=true 按真实维护服务的 ObjectChanges 关系同时创建可读写维护字段，不复制数据库列，缺少或冲突的维护关系会阻断；默认不自动创建维护字段。expected_type可核对data_type/precision/scale，引用不符拒绝创建。创建参数未知键会拒绝，不能使用拼错的属性。
     copy_clf: name,template；create_query: name,query_type,db_type_id,text,description。
     create_map: owner源CDO,target目标CDO，由官方生成映射名称。
     create_clf: name,clf_type；add_clf_function: owner,function,sequence。

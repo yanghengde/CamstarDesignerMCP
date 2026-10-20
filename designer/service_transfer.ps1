@@ -42,7 +42,7 @@ try {
    Copy-Item -LiteralPath (Join-Path $LocalFolder $taskName) -Destination ($taskRemote+'\'+$taskName)
   }
  } else {
-  foreach($taskName in @('result.json','worker.log','progress.json','generator.log')) {
+  foreach($taskName in @('result.json','worker.log','progress.json','generator.log','contract_preflight.json')) {
    if(Test-Path -LiteralPath ($taskRemote+'\'+$taskName)) {Copy-Item -LiteralPath ($taskRemote+'\'+$taskName) -Destination (Join-Path $LocalFolder $taskName)}
   }
   foreach($taskName in @('client','server')) {

@@ -1,4 +1,5 @@
 using System;
+using System.Collections;
 using System.IO;
 using System.Collections.Generic;
 using System.Web.Script.Serialization;
@@ -8,6 +9,53 @@ using Camstar.WCF.Generator;
 using Camstar.WCF.Generator.Helper;
 
 public static class DesignerWcfWorker {
+ static object Property(object item,string name) {
+  return item.GetType().GetProperty(name,BindingFlags.Public|BindingFlags.NonPublic|BindingFlags.Instance).GetValue(item,null);
+ }
+ static string ContractName(string name,Dictionary<string,object> types) {
+  if(types.ContainsKey(name)) return name;
+  if(types.ContainsKey(name+"Changes")) return name+"Changes";
+  throw new InvalidOperationException("WCF contract preflight: no reachable contract for "+name);
+ }
+ static HashSet<string> ContractFields(object type,Dictionary<string,object> types) {
+  var fields=new HashSet<string>(); var seen=new HashSet<string>();
+  while(type!=null && seen.Add((string)Property(type,"Name"))) {
+   var getFields=type.GetType().GetMethod("GetFields",BindingFlags.Public|BindingFlags.NonPublic|BindingFlags.Instance);
+   foreach(var field in (IEnumerable)getFields.Invoke(type,null)) fields.Add((string)Property(field,"Name"));
+   object parent; string parentName=(string)Property(type,"ParentName");
+   type=!String.IsNullOrEmpty(parentName) && types.TryGetValue(parentName,out parent)?parent:null;
+  }
+  return fields;
+ }
+ static object PreflightContracts(Runner runner,Dictionary<string,string> request,JavaScriptSerializer json) {
+  var collect=typeof(Runner).GetMethod("CollectInformation",BindingFlags.NonPublic|BindingFlags.Instance);
+  var cacheField=typeof(Runner).GetField("_TypeCache",BindingFlags.NonPublic|BindingFlags.Instance);
+  if(collect==null || cacheField==null) throw new InvalidOperationException("Unsupported WCF generator contract preflight API");
+  collect.Invoke(runner,null);
+  var cache=cacheField.GetValue(runner);
+  var sorted=cache.GetType().GetMethod("GetSortedDCTypes",BindingFlags.Public|BindingFlags.NonPublic|BindingFlags.Instance);
+  var types=((IEnumerable)sorted.Invoke(cache,null)).Cast<object>().ToDictionary(t=>(string)Property(t,"Name"));
+  var checks=new List<object>();
+  foreach(var name in request["verify_types"].Split(new[]{','},StringSplitOptions.RemoveEmptyEntries)) ContractName(name,types);
+  if(request.ContainsKey("expected_fields")) foreach(var raw in (object[])json.DeserializeObject(request["expected_fields"])) {
+   var field=(Dictionary<string,object>)raw;
+   string owner=(string)field["owner"],name=(string)field["name"],contract=ContractName(owner,types);
+   bool present=ContractFields(types[contract],types).Contains(name),expected=(bool)field["present"];
+   if(present!=expected) throw new InvalidOperationException("WCF contract preflight failed: "+owner+"."+name+
+    " expected "+(expected?"present":"absent")+" in "+contract+"; check maintenance ObjectChanges fields before generation");
+   checks.Add(new {owner=owner,name=name,contract=contract,present=present});
+  }
+  return new {status="contract_preflight_passed",data_contract_count=types.Count,fields=checks};
+ }
+ static void CountExposure(IService node,ref int services,ref int methods) {
+  if(node.ExposedState==ExposedServiceStateType.Exposed || node.ExposedState==ExposedServiceStateType.BaseAndExposed) {
+   services++;
+   foreach(var method in node.Methods) {
+    if(method.ExposedState==ExposedMethodStateType.Exposed || method.ExposedState==ExposedMethodStateType.BaseAndExposed) methods++;
+   }
+  }
+  foreach(var child in node.Children) CountExposure(child,ref services,ref methods);
+ }
  static bool ExposeService(IService node,string name) {
   if(node.Name==name) {
    node.ExposedState=ExposedServiceStateType.Exposed;
@@ -49,27 +97,53 @@ public static class DesignerWcfWorker {
    logger.FilePath=Path.Combine(folder,"generator.log"); logger.LogLevel=3;
    runner.Init();
    if(request.ContainsKey("service_names")) {
-    var root=(IService)typeof(Runner).GetField("_RootService",BindingFlags.NonPublic|BindingFlags.Instance).GetValue(runner);
+    var root=runner.GetRootService();
     foreach(string name in request["service_names"].Split(',')) {
      if(!ExposeService(root,name)) throw new InvalidOperationException("Unknown WCF service: "+name);
     }
    }
    // This installed version invokes StateChanged with an incompatible argument
    // count. Root diagnostics provide phase/count logging without subscriptions.
+   int exposedServices=0,exposedMethods=0;
+   CountExposure(runner.GetRootService(),ref exposedServices,ref exposedMethods);
+   Console.WriteLine("Exposure scope: services="+exposedServices+", method entries="+exposedMethods);
+   if(request.ContainsKey("expected_fields") || request.ContainsKey("preflight_only")) {
+    Console.WriteLine("Checking reachable WCF contracts before generation");
+    var preflight=PreflightContracts(runner,request,json);
+    File.WriteAllText(Path.Combine(folder,"contract_preflight.json"),json.Serialize(preflight));
+    if(request.ContainsKey("preflight_only")) {
+     File.WriteAllText(resultFile,json.Serialize(new {ok=true,result=preflight}));return;
+    }
+   }
    Console.WriteLine("Generating WCF assemblies"); var info=runner.Generate();
    string client=Path.Combine(folder,"client","Camstar.WCFClient.dll"),service=Path.Combine(folder,"server","bin","Camstar.WCFService.dll");
    if(!info.IsSuccess || info.DCCount<1 || info.SCCount<1 || !File.Exists(client) || !File.Exists(service))
     throw new InvalidOperationException("Incomplete WCF output: success="+info.IsSuccess+", contracts="+info.DCCount+", services="+info.SCCount+", client="+File.Exists(client)+", service="+File.Exists(service),info.Exception);
    var assembly=Assembly.LoadFrom(client);
+   var serverAssembly=Assembly.LoadFrom(service);
    var checks=new List<object>();
+   var serverChecks=new List<object>();
+   var clientFields=new Dictionary<string,HashSet<string>>();
+   var serverFields=new Dictionary<string,HashSet<string>>();
    foreach(string name in request["verify_types"].Split(new[]{','},StringSplitOptions.RemoveEmptyEntries)) {
     // Revisioned/named object contracts use the vendor's <CDO>Changes suffix.
     var type=assembly.GetType("Camstar.WCF.ObjectStack."+name,false) ?? assembly.GetType("Camstar.WCF.ObjectStack."+name+"Changes",false);
     if(type==null) throw new InvalidOperationException("Generated client missing type: "+name);
-    checks.Add(new {name=type.FullName,properties=type.GetProperties().Select(p=>p.Name).ToArray()});
+    var properties=type.GetProperties().Select(p=>p.Name).ToArray();
+    checks.Add(new {name=type.FullName,properties=properties});clientFields[name]=new HashSet<string>(properties);
+    var serverType=serverAssembly.GetType("Camstar.WCF.Service."+type.Name,false);
+    if(serverType==null) throw new InvalidOperationException("Generated server missing type: "+type.Name);
+    var members=serverType.GetFields().Select(f=>f.Name).Concat(serverType.GetProperties().Select(p=>p.Name)).Distinct().ToArray();
+    serverChecks.Add(new {name=serverType.FullName,properties=members});serverFields[name]=new HashSet<string>(members);
+   }
+   if(request.ContainsKey("expected_fields")) foreach(var raw in (object[])json.DeserializeObject(request["expected_fields"])) {
+    var field=(Dictionary<string,object>)raw;string owner=(string)field["owner"],name=(string)field["name"];bool expected=(bool)field["present"];
+    if(clientFields[owner].Contains(name)!=expected || serverFields[owner].Contains(name)!=expected)
+     throw new InvalidOperationException("Generated client/server field mismatch: "+owner+"."+name);
    }
    File.WriteAllText(resultFile,json.Serialize(new {ok=true,result=new {status="services_generated",data_contract_count=info.DCCount,
-    service_count=info.SCCount,client_assembly=client,service_assembly=service,type_checks=checks,deployed=false}}));
+    service_count=info.SCCount,exposed_method_entries=exposedMethods,client_assembly=client,service_assembly=service,type_checks=checks,
+    server_type_checks=serverChecks,deployed=false}}));
   } catch(Exception error) {File.WriteAllText(resultFile,json.Serialize(new {ok=false,error=error.ToString()}));}
  }
 }
