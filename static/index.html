@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="theme-color" content="#f7f8fa">
     <title>Opcenter Designer · 设计工作台</title>
-    <link rel="stylesheet" href="/clf-workspace.css">
+    <link rel="stylesheet" href="/clf-workspace.css?v=20261021-3">
     <link rel="icon" type="image/svg+xml" href="/svg/opcenter.svg">
     <script src="https://cdn.jsdelivr.net/npm/marked@15.0.12/marked.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/dompurify@3.4.16/dist/purify.min.js"></script>
@@ -365,7 +365,7 @@
             <p class="welcome-footnote"><svg class="icon"><use href="#i-check"/></svg>先查询，再设计。变更结果可在 Designer 中继续审核。</p>
         </section>
     </template>
-    <script src="/clf-workspace.js"></script>
+    <script src="/clf-workspace.js?v=20261021-3"></script>
     <script>
         const clfMode = location.pathname === '/clf' || location.pathname === '/clf/records';
         const assistantPath = clfMode ? '/clf' : '/';
@@ -646,6 +646,12 @@
             }
             scrollToBottom();
             return bubble;
+        }
+
+        function appendClfHistory(text) {
+            if(text.length<700)return appendMessage('agent',text);
+            const bubble=createBubble('agent'),details=document.createElement('details'),summary=document.createElement('summary'),body=document.createElement('div');
+            details.className='clf-history-detail';summary.textContent='展开完整分析说明';details.append(summary,body);renderMarkdown(body,text);bubble.append(details);return bubble;
         }
 
         function showFieldCatalog(id, result) {
@@ -958,10 +964,10 @@
                 if(clfMode)window.clfWorkspace?.history(data);
                 let hasVisible = false;
                 const result=data.designer_results?.[data.designer_results.length-1];
-                let resultShown=false;
+                let resultShown=false,clfReadProcess=null;
                 (data.messages || []).forEach(message => {
-                    if (message.role === 'user') {const bubble=appendMessage('user', message.content, message.attachments || []);if(message.requirement_id)bubble.dataset.requirementId=message.requirement_id;hasVisible = true; }
-                    else if (message.role === 'assistant') {if(message.content){appendMessage('agent',message.content);hasVisible=true;}if(message.excel_preview){showExcelPreview(message.excel_preview);hasVisible=true;}}
+                    if (message.role === 'user') {clfReadProcess=null;const bubble=appendMessage('user', message.content, message.attachments || []);if(message.requirement_id)bubble.dataset.requirementId=message.requirement_id;hasVisible = true; }
+                    else if (message.role === 'assistant') {if(message.content){if(clfMode&&message.tool_calls?.length){if(!clfReadProcess){const bubble=createBubble('agent'),details=document.createElement('details'),summary=document.createElement('summary');summary.textContent='读取与核对过程';details.className='clf-history-detail';clfReadProcess=document.createElement('div');details.append(summary,clfReadProcess);bubble.append(details);}const part=document.createElement('div');renderMarkdown(part,message.content);clfReadProcess.append(part);}else if(clfMode)appendClfHistory(message.content);else appendMessage('agent',message.content);hasVisible=true;}if(message.excel_preview){showExcelPreview(message.excel_preview);hasVisible=true;}}
                     else if(message.role==='tool'&&message.field_catalog){showFieldCatalog(message.tool_call_id,message.field_catalog);hasVisible=true;}
                     else if(message.role==='tool'&&result&&!resultShown&&String(message.content).includes(result.id)){showDesignerResult(result);resultShown=true;}
                 });
@@ -1018,7 +1024,7 @@
             await loadHistory();
             if (!currentSessionId) await refreshSessionsList().catch(() => {});
             setView(viewFromLocation(), { updateUrl: false });
-            if(clfMode)await window.clfWorkspace?.initialize({fetchJson,notice:showNotice,username:()=>currentUsername,session:()=>currentSessionId,sendText:text=>{input.value=text;input.dispatchEvent(new Event('input'));input.focus();}});
+            if(clfMode)await window.clfWorkspace?.initialize({fetchJson,notice:showNotice,username:()=>currentUsername,session:()=>currentSessionId,sendText:(text,options={})=>{input.value=text;input.dispatchEvent(new Event('input'));input.focus();if(options.submit)document.getElementById('composerForm').requestSubmit();}});
         }
 
         async function handleSend() {

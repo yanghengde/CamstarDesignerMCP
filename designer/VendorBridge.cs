@@ -846,6 +846,16 @@ public static class DesignerVendorBridge {
       "total",descendants.Count,"records",descendants,"complete",true);
     } else if(mode=="fields") {
      result=FieldCatalog((CDODefinition)Find(set,"cdo",name,""));
+    } else if(mode=="catalog" && kind=="clf" && name=="rule_browser") {
+     var owners=set.CDODefinitions.Values.Where(x=>x.ModifiedStatus!=ModifiedStatusEnum.Deleted).ToDictionary(x=>x.CDODefId);
+     var bindings=set.CLFEventMaps.Values.Where(x=>x.ModifiedStatus!=ModifiedStatusEnum.Deleted && owners.ContainsKey(x.CDODefID))
+      .Select(x=>Dict("clf",x.CLFReference,"object",owners[x.CDODefID].Name,
+       "event",x.EventDefinition==null?"":x.EventDefinition.Name,"field_level",x.CallerID!=x.CDODefID)).ToArray();
+     result=Dict("objects",owners.Values.OrderBy(x=>x.Name).Select(x=>Dict("name",x.Name,"label",x.DisplayNameLabel,
+       "parent",x.ParentCDOName,"maintenance",x.MaintenanceCDOName,"is_service",x.IsService)).ToArray(),
+      "rules",set.CLFDefinitions.Values.Where(x=>x.ModifiedStatus!=ModifiedStatusEnum.Deleted).OrderBy(x=>x.Name)
+       .Select(x=>Dict("name",x.Name,"description",x.Description,"workspace",x.WorkspaceCode,
+        "customer",x.WorkspaceCode==x.ActiveWorkspaceCode)).ToArray(),"bindings",bindings);
     } else if(mode=="catalog") {
      var inventory=new Dictionary<string,object>(); foreach(var k in Collections.Keys) inventory[k]=Objects(set,k,"").Count;
      result=Dict("counts",inventory,"workspaces",set.GetWorkspaces().Select(Record).ToArray());

@@ -33,6 +33,59 @@ def list_clfs(mdb_file, search='', offset=0, limit=50):
         for row in result['records']]}
 
 
+def rule_index(mdb_file):
+    """One compact, version-cached vendor read; never scan each CLF separately."""
+    path, checksum = source(mdb_file)
+    result = vendor.query(str(path), 'catalog', 'clf', name='rule_browser')
+    _unchanged(path, checksum)
+    return {**result, 'source_sha256': checksum}
+
+
+def rule_objects(mdb_file, search='', selected=''):
+    index = rule_index(mdb_file)
+    objects = [o for o in index['objects'] if search.casefold() in (o['name'] + ' ' + (o.get('label') or '')).casefold()]
+    selected_object = next((o for o in index['objects'] if o['name'] == selected), None)
+    records = objects[:50]
+    if selected_object and selected_object not in records:
+        records.insert(0, selected_object)
+    return {'records': records, 'total': len(objects), 'source_sha256': index['source_sha256']}
+
+
+def related_rules(mdb_file, object_name='', scope='related', search='', offset=0):
+    if scope not in {'related', 'customer', 'all'} or not 0 <= offset <= 10000:
+        raise ValueError('规则筛选范围或分页无效')
+    index = rule_index(mdb_file)
+    objects = {o['name']: o for o in index['objects']}
+    owners = set()
+    if object_name:
+        if object_name not in objects:
+            raise ValueError('业务对象不存在，请从真实对象目录选择')
+        pending = [object_name, objects[object_name].get('maintenance')]
+        while pending:
+            name = pending.pop()
+            if not name or name in owners or name not in objects:
+                continue
+            owners.add(name)
+            pending.append(objects[name].get('parent'))
+    bindings = [b for b in index['bindings'] if not owners or b['object'] in owners]
+    by_name = {}
+    for binding in bindings:
+        by_name.setdefault(binding['clf'], []).append(binding)
+    records = []
+    for rule in index['rules']:
+        if scope == 'customer' and not rule['customer']:
+            continue
+        if scope == 'related' and owners and rule['name'] not in by_name:
+            continue
+        if search.casefold() not in (rule['name'] + ' ' + (rule.get('description') or '')).casefold():
+            continue
+        records.append({**rule, 'bindings': by_name.get(rule['name'], [])})
+    records.sort(key=lambda r: (not r['customer'], r['name'].casefold()))
+    return {'records': records[offset:offset+20], 'total': len(records), 'offset': offset,
+            'source_sha256': index['source_sha256'], 'object_name': object_name,
+            'scope': 'declared_object_maintenance_and_parent_bindings', 'dynamic_usage_verified': False}
+
+
 def clf_view(record):
     calls = []
     for item in sorted(record.get('functions', []), key=lambda row: (row.get('Sequence', 0), row.get('CLFFunctionID', 0))):

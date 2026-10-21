@@ -46,12 +46,12 @@ def testing_page():
 
 @router.get('/testing.js')
 def testing_script():
-    return FileResponse('static/testing.js', media_type='text/javascript')
+    return FileResponse('static/testing.js', media_type='text/javascript', headers={'Cache-Control': 'no-cache'})
 
 
 @router.get('/testing.css')
 def testing_style():
-    return FileResponse('static/testing.css', media_type='text/css')
+    return FileResponse('static/testing.css', media_type='text/css', headers={'Cache-Control': 'no-cache'})
 
 
 @router.get('/api/testing/bootstrap')
@@ -72,9 +72,21 @@ async def bootstrap(username: str, session_id: str | None = None):
             if receipt.get('result_file'):
                 from pathlib import Path
                 context['artifact_id'] = Path(receipt['result_file']).parent.name
+    default_profile = None
+    for profile in profiles:
+        try:
+            if profile.get('protected_password') and config.DESIGNER_WCF_ADDRESS and native.endpoint(profile['endpoint']) == native.endpoint(config.DESIGNER_WCF_ADDRESS):
+                default_profile = profile
+                break
+        except ValueError:
+            continue
+    defaults = {'endpoint': config.DESIGNER_WCF_ADDRESS, 'timeout': config.DESIGNER_TEST_TIMEOUT,
+                'environment_id': (default_profile or {}).get('id', ''),
+                'project_id': (default_profile or {}).get('project_id', ''),
+                'artifact_id': (default_profile or {}).get('artifact_id', '')}
     return {'projects': projects, 'artifacts': artifacts, 'environments': [store.public_environment(p) for p in profiles],
             'cases': cases, 'history': history, 'context': {key: context.get(key) for key in ('project_id', 'clf_name', 'artifact_id')},
-            'defaults': {'endpoint': config.DESIGNER_WCF_ADDRESS, 'timeout': config.DESIGNER_TEST_TIMEOUT},
+            'defaults': defaults,
             'write_target_confirmed': config.DESIGNER_TEST_TARGET_CONFIRMED}
 
 

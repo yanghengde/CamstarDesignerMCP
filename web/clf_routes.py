@@ -28,16 +28,17 @@ class ContextRequest(BaseModel):
     session_id: str
     project_id: str = Field(pattern=r'^[0-9a-f]{32}$')
     clf_name: str = Field(default='', max_length=200)
+    object_name: str = Field(default='', max_length=200)
 
 
 @router.get('/clf-workspace.js')
 def workspace_script():
-    return FileResponse('static/clf-workspace.js', media_type='text/javascript')
+    return FileResponse('static/clf-workspace.js', media_type='text/javascript', headers={'Cache-Control': 'no-cache'})
 
 
 @router.get('/clf-workspace.css')
 def workspace_style():
-    return FileResponse('static/clf-workspace.css', media_type='text/css')
+    return FileResponse('static/clf-workspace.css', media_type='text/css', headers={'Cache-Control': 'no-cache'})
 
 
 @router.get('/api/clf/projects')
@@ -67,7 +68,9 @@ async def select_context(req: ContextRequest):
         raise HTTPException(404, '工作项目不存在')
     session = assistant_modes.session(req.username, req.session_id)
     previous = session.get('clf_context', {})
-    session['clf_context'] = {**previous, 'project_id': req.project_id, 'clf_name': req.clf_name}
+    session['clf_context'] = {**previous, 'project_id': req.project_id, 'clf_name': req.clf_name,
+                              'object_name': req.object_name if 'object_name' in req.model_fields_set else
+                              previous.get('object_name', '') if previous.get('project_id') == req.project_id else ''}
     memory.save_session(req.username, req.session_id)
     return await asyncio.to_thread(clf.session_context, req.username, req.session_id)
 
@@ -95,6 +98,24 @@ async def detail(username: str, session_id: str, name: str, expected_sha256: str
     try:
         project = await asyncio.to_thread(selected_project, username, session_id)
         return await asyncio.to_thread(clf.get_clf, project['mdb_file'], name, expected_sha256)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@router.get('/api/clf/objects')
+async def rule_objects(username: str, session_id: str, search: str = '', selected: str = ''):
+    try:
+        project = await asyncio.to_thread(selected_project, username, session_id)
+        return await asyncio.to_thread(clf.rule_objects, project['mdb_file'], search, selected)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@router.get('/api/clf/rules')
+async def rule_list(username: str, session_id: str, object_name: str = '', scope: str = 'related', search: str = '', offset: int = 0):
+    try:
+        project = await asyncio.to_thread(selected_project, username, session_id)
+        return await asyncio.to_thread(clf.related_rules, project['mdb_file'], object_name, scope, search, offset)
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from exc
 
