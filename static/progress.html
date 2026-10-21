@@ -217,6 +217,8 @@
                 <a class="nav-item" href="/clf"><svg class="icon"><use href="#i-progress"/></svg>CLF 逻辑助手</a>
                 <a class="nav-item" href="/records"><svg class="icon"><use href="#i-history"/></svg>设计记录</a>
                 <a class="nav-item active" href="/progress" aria-current="page"><svg class="icon"><use href="#i-progress"/></svg>设计进度</a>
+                <a class="nav-item" href="/wcf-test"><svg class="icon"><use href="#i-progress"/></svg>WCF 接口测试</a>
+                <a class="nav-item" href="/clf-test"><svg class="icon"><use href="#i-progress"/></svg>CLF 逻辑测试</a>
                 <a class="nav-item" href="/logs"><svg class="icon"><use href="#i-log"/></svg>运行日志</a>
             </nav>
             <div class="recent-heading"><span>最近对话</span><span id="sessionCount">—</span></div>
@@ -355,6 +357,7 @@
                 actions.after(readback);
             } else readback?.remove();
             if((stage.number===9||stage.number===10)&&state.wcf) {const link=document.createElement('a');link.className='button';link.textContent='下载 WCF 程序集';link.href=`/api/progress/${encodeURIComponent(currentSession)}/wcf?username=${encodeURIComponent(navigationUsername)}&package_id=${state.package.id}`;actions.appendChild(link);}
+            if(state.wcf&&stage.number>=9){const link=document.createElement('a');link.className='button';link.textContent='测试 WCF 接口';link.href='/wcf-test?'+new URLSearchParams({session_id:currentSession});actions.appendChild(link);}
             if(state.package&&stage.number===5) {const link=document.createElement('a');link.className='button';link.textContent='下载变更 XML';link.href=`/api/progress/${encodeURIComponent(currentSession)}/changes?username=${encodeURIComponent(navigationUsername)}&package_id=${state.package.id}`;actions.appendChild(link);}
             document.getElementById('syncBtn').disabled=!state.package?.review||!!state.active||submitting;
             renderFiles();renderRuntime();

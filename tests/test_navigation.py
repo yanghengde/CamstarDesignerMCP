@@ -31,7 +31,7 @@ def test_workspace_pages_link_to_distinct_assistant_and_records_urls(client, pat
     assert response.status_code == 200
     parser = NavigationParser()
     parser.feed(response.text)
-    assert parser.links == ['/', '/clf', '/records', '/progress', '/logs']
+    assert parser.links == ['/', '/clf', '/records', '/progress', '/wcf-test', '/clf-test', '/logs']
 
 
 def test_legacy_records_bookmark_redirects_and_preserves_session(client):

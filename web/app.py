@@ -30,6 +30,8 @@ async def lifespan(app: FastAPI):
     """应用生命周期：启动时加载记忆和注册工具。"""
     # 恢复历史记忆
     init_memory()
+    from designer import testing_store
+    testing_store.recover()
 
     # 注册 MCP 工具
     await register_tools()
@@ -51,6 +53,8 @@ async def lifespan(app: FastAPI):
         from designer import progress, progress_store
         await chat_jobs.drain()
         await progress_store.drain()
+        from designer import testing
+        await testing.drain()
         if progress._tasks:
             import asyncio
             await asyncio.gather(*list(progress._tasks), return_exceptions=True)
@@ -79,6 +83,8 @@ def create_app() -> FastAPI:
     app.include_router(router)
     from web.clf_routes import router as clf_router
     app.include_router(clf_router)
+    from web.testing_routes import router as testing_router
+    app.include_router(testing_router)
     from web.local_access import LocalAccessMiddleware
     app.add_middleware(LocalAccessMiddleware, mcp_path=MCP_HTTP_PATH if ENABLE_MCP_HTTP else None)
 

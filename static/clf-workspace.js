@@ -16,6 +16,7 @@
     function renderClf(area,result,title='函数调用顺序') {
         area.append(node('h3',result.name),caption(result.description||'没有说明'));
         const tags=node('div',undefined,'clf-state');
+        const testLink=node('a','在测试页验证','clf-button');testLink.href='/clf-test?'+new URLSearchParams({session_id:api.session(),project_id:currentContext.project_id||'',clf_name:result.name});area.appendChild(testLink);
         tags.append(node('span',`工作区 ${result.workspace??'未知'}`,'clf-tag'),node('span',`${result.calls.length} 个调用`,'clf-tag'));
         area.append(tags,node('h4',title));
         if(!result.calls.length)area.appendChild(caption('没有读取到函数调用。'));
