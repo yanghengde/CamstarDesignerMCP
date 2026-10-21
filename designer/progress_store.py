@@ -51,6 +51,8 @@ def recover_chat_results(username, session_id, messages):
                 and result.get('format') == 'designer_field_catalog_v1' and result.get('complete') is True):
             message['field_catalog'] = result
             message['content'] = str({**result, 'displayed_as_table': True})
+        if isinstance(result, dict) and result.get('format') in {'designer_clf_v1', 'designer_clf_plan_v1'}:
+            message['clf_result'] = result
         messages.append(message)
         seen.add(call_id)
         changed = True
@@ -206,6 +208,12 @@ def finish(identity, result=None, error='', status='done'):
                       ('format', 'rows', 'package_id', 'source_file', 'baseline_file', 'baseline_sha256',
                        'comparison_engine', 'xml_file', 'xml_sha256', 'read_at', 'comparison_seconds',
                        'duration_seconds', 'cache_hit', 'compiled') if key in result})
+    if isinstance(result, dict) and result.get('format') in {'designer_clf_v1', 'designer_clf_plan_v1'}:
+        saved.update({key: result[key] for key in
+                      ('format', 'id', 'name', 'description', 'workspace', 'active_workspace', 'clf_type', 'calls',
+                       'declared_parameters', 'references', 'source_file', 'operations', 'requirements',
+                       'test_cases', 'before', 'after', 'metadata_preflight_passed', 'conflicts',
+                       'runtime_verified', 'saved', 'published', 'notice') if key in result})
     replay = saved
     if isinstance(result, str):
         replay = redact(result)

@@ -191,6 +191,8 @@ async def upload_excel(
 
 @router.get("/")
 @router.get("/records")
+@router.get("/clf")
+@router.get("/clf/records")
 def index(request: Request):
     """Serve the assistant or records page, retaining legacy record links."""
     if request.url.path == '/' and request.query_params.get('view') == 'records':
@@ -208,17 +210,18 @@ def config_endpoint():
 
 
 @router.get("/sessions/{username}")
-def sessions_endpoint(username: str):
+def sessions_endpoint(username: str, mode: Literal['designer', 'clf'] | None = None):
     """获取用户所有会话"""
     require_progress_owner(username)
-    return {"sessions": get_sessions(username)}
+    sessions = get_sessions(username)
+    return {"sessions": [item for item in sessions if mode is None or item['mode'] == mode]}
 
 
 @router.post("/sessions/{username}/new")
-def new_session_endpoint(username: str):
+def new_session_endpoint(username: str, mode: Literal['designer', 'clf'] = 'designer'):
     """创建新会话"""
     require_progress_owner(username)
-    session_id = create_session(username)
+    session_id = create_session(username, mode=mode)
     return {"session_id": session_id}
 
 
@@ -250,7 +253,11 @@ async def history_endpoint(username: str, session_id: str = None):
     recovered.extend({'role': 'tool', 'name': item['tool'], 'content': item['result']}
                      for item in events
                      if item.get('result') and (not item.get('call_id') or item.get('call_id') not in known))
-    return {"designer_results": session_packages(recovered),
+    from agent import assistant_modes
+    return {"assistant_mode": assistant_modes.mode(username, actual),
+            "clf_context": assistant_modes.session(username, actual).get('clf_context', {}),
+            "clf_results": [message['clf_result'] for message in messages if message.get('clf_result')],
+            "designer_results": session_packages(recovered),
             'background_running': chat_jobs.running(username, actual) or progress_store.background_running(username, actual),
             'background_chat': background_chat,
             'chat_requirements': chat_requirements.records(username, actual),

@@ -77,6 +77,8 @@ def create_app() -> FastAPI:
 
     # 注册路由
     app.include_router(router)
+    from web.clf_routes import router as clf_router
+    app.include_router(clf_router)
     from web.local_access import LocalAccessMiddleware
     app.add_middleware(LocalAccessMiddleware, mcp_path=MCP_HTTP_PATH if ENABLE_MCP_HTTP else None)
 

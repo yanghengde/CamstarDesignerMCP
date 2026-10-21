@@ -91,6 +91,8 @@ def build(calls, attachments, creation_checks=None):
                 displayed = describe_operations([op], [op])[0]
                 row('自动配套维护字段', field['owner'], field['name'], values={**displayed, 'AllowClientToRead': True, 'AllowClientToUpdate': True})
     payload = {'rows': rows, 'objects': objects, 'targets': targets,
+               'business_rule_count': sum(item.get('rule_count', 0) for item in attachments),
+               'business_rules_status': 'needs_clf_analysis' if any(item.get('rule_count') for item in attachments) else 'none',
                'creation_checks': creation_checks or [],
                'attachments': [{'id': item['id'], 'name': item['name'], 'sha256': item['sha256']} for item in attachments],
                'call_fingerprints': [fingerprint(call) for call in calls]}

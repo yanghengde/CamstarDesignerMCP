@@ -15,7 +15,7 @@ def client():
     return TestClient(app)
 
 
-@pytest.mark.parametrize('path', ['/', '/records', '/progress', '/logs'])
+@pytest.mark.parametrize('path', ['/', '/records', '/clf', '/progress', '/logs'])
 def test_workspace_pages_link_to_distinct_assistant_and_records_urls(client, path):
     class NavigationParser(HTMLParser):
         def __init__(self):
@@ -31,7 +31,7 @@ def test_workspace_pages_link_to_distinct_assistant_and_records_urls(client, pat
     assert response.status_code == 200
     parser = NavigationParser()
     parser.feed(response.text)
-    assert parser.links == ['/', '/records', '/progress', '/logs']
+    assert parser.links == ['/', '/clf', '/records', '/progress', '/logs']
 
 
 def test_legacy_records_bookmark_redirects_and_preserves_session(client):

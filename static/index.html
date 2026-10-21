@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="theme-color" content="#f7f8fa">
     <title>Opcenter Designer · 设计工作台</title>
+    <link rel="stylesheet" href="/clf-workspace.css">
     <link rel="icon" type="image/svg+xml" href="/svg/opcenter.svg">
     <script src="https://cdn.jsdelivr.net/npm/marked@15.0.12/marked.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/dompurify@3.4.16/dist/purify.min.js"></script>
@@ -314,6 +315,7 @@
             <button class="new-chat" id="newChatTopBtn"><svg class="icon"><use href="#i-plus"/></svg>新建设计对话</button>
             <nav class="nav" aria-label="主要功能">
                 <a class="nav-item active" id="designNav" href="/" aria-current="page"><svg class="icon"><use href="#i-chat"/></svg>设计助手</a>
+                <a class="nav-item" id="clfNav" href="/clf"><svg class="icon"><use href="#i-progress"/></svg>CLF 逻辑助手</a>
                 <a class="nav-item" id="recordsNav" href="/records"><svg class="icon"><use href="#i-history"/></svg>设计记录</a>
                 <a class="nav-item" href="/progress"><svg class="icon"><use href="#i-progress"/></svg>设计进度</a>
                 <a class="nav-item" href="/logs"><svg class="icon"><use href="#i-log"/></svg>运行日志</a>
@@ -361,7 +363,10 @@
             <p class="welcome-footnote"><svg class="icon"><use href="#i-check"/></svg>先查询，再设计。变更结果可在 Designer 中继续审核。</p>
         </section>
     </template>
+    <script src="/clf-workspace.js"></script>
     <script>
+        const clfMode = location.pathname === '/clf' || location.pathname === '/clf/records';
+        const assistantPath = clfMode ? '/clf' : '/';
         const input = document.getElementById('inputBox');
         const sendBtn = document.getElementById('sendBtn');
         const stopBtn = document.getElementById('stopBtn');
@@ -423,7 +428,7 @@
         }
 
         function viewFromLocation() {
-            return location.pathname === '/records' ? 'records' : 'design';
+            return location.pathname === '/records' || location.pathname === '/clf/records' ? 'records' : 'design';
         }
 
         function setView(view, { updateUrl = true, replace = false } = {}) {
@@ -431,9 +436,10 @@
             const records = view === 'records';
             document.getElementById('chatColumn').hidden = records;
             document.getElementById('recordsView').hidden = !records;
-            document.getElementById('pageTitle').textContent = records ? '设计记录' : '设计助手';
-            document.title = `Opcenter Designer · ${records ? '设计记录' : '设计助手'}`;
-            for (const [id, active] of [['designNav', !records], ['recordsNav', records]]) {
+            document.getElementById('pageTitle').textContent = records ? (clfMode?'CLF 记录':'设计记录') : clfMode ? 'CLF 逻辑助手' : '设计助手';
+            document.title = `Opcenter Designer · ${records ? (clfMode?'CLF 记录':'设计记录') : clfMode ? 'CLF 逻辑助手' : '设计助手'}`;
+            const inspector=document.querySelector('.clf-inspector');if(inspector)inspector.hidden=records;
+            for (const [id, active] of [['designNav', !records&&!clfMode], ['clfNav', !records&&clfMode], ['recordsNav', records]]) {
                 const button = document.getElementById(id);
                 button.classList.toggle('active', active);
                 if (active) button.setAttribute('aria-current', 'page');
@@ -441,7 +447,7 @@
             }
             if (updateUrl) {
                 const url = new URL(location.href);
-                url.pathname = records ? '/records' : '/';
+                url.pathname = records ? (clfMode?'/clf/records':'/records') : assistantPath;
                 url.searchParams.delete('view');
                 if (records) url.searchParams.delete('session_id');
                 else if (currentSessionId) url.searchParams.set('session_id', currentSessionId);
@@ -460,7 +466,7 @@
             sendBtn.disabled = !hasDraft || navigationLocked || requirementSubmitting || ((busy || backgroundRunning) && !runningChat);
             sendBtn.title = runningChat ? '补充要求' : '发送';
             sendBtn.setAttribute('aria-label', sendBtn.title);
-            input.placeholder = runningChat ? '可以继续补充或修改要求，将在当前操作完成后处理…' : pendingExcelPreview ? '可追问或修改要求；核对后输入“确定”或“确认”…' : '描述你的对象或字段设计需求…';
+            input.placeholder = runningChat ? '可以继续补充或修改要求，将在当前操作完成后处理…' : pendingExcelPreview ? '可追问或修改要求；核对后输入“确定”或“确认”…' : typeof clfMode!=='undefined'&&clfMode ? '描述业务规则，或让我解释右侧选择的 CLF…' : '描述你的对象或字段设计需求…';
             newChatTopBtn.disabled = navigationLocked;
             for (const id of ['designNav', 'recordsNav']) document.getElementById(id).setAttribute('aria-disabled', String(navigationLocked));
             attachBtn.disabled = locked || backgroundRunning || !!pendingExcelPreview || attachmentDrafts.length >= 3;
@@ -477,6 +483,7 @@
         }
 
         function monitorBackground(data) {
+            if(typeof clfMode!=='undefined'&&clfMode)window.clfWorkspace?.history(data);
             const previous = backgroundRunning;
             backgroundRunning = !!data.background_running;
             if(data.background_chat)backgroundJobId=data.background_chat.status==='running'?data.background_chat.id:null;
@@ -550,7 +557,7 @@
         }
 
         async function refreshSessionsList() {
-            const data = await fetchJson(`/sessions/${encodeURIComponent(currentUsername)}`);
+            const data = await fetchJson(`/sessions/${encodeURIComponent(currentUsername)}?mode=${clfMode?'clf':'designer'}`);
             sessions = (data.sessions || []).slice();
             if (!currentSessionId && sessions.length) currentSessionId = sessions[0].id;
             renderSessions();
@@ -769,6 +776,12 @@
                 const note = document.createElement('p'); note.className = 'attachment-warning'; note.textContent = warning; preview.appendChild(note);
             }
             details.appendChild(preview); item.appendChild(details);
+            if(attachment.rule_count){
+                const rules=document.createElement('div');rules.className='clf-rule-handoff';
+                const note=document.createElement('span');note.textContent=`识别到 ${attachment.rule_count} 条业务规则 · 待分析`;rules.appendChild(note);
+                if(!clfMode){const open=document.createElement('button');open.type='button';open.className='clf-button';open.textContent='在 CLF 助手分析规则';open.onclick=async()=>{open.disabled=true;try{await window.clfWorkspace.fromExcel(currentUsername,currentSessionId,[attachment.id]);}catch(error){showNotice(error.message);open.disabled=false;}};rules.appendChild(open);}
+                item.appendChild(rules);
+            }
             if (removable) {
                 const remove = document.createElement('button');
                 remove.type = 'button'; remove.className = 'attachment-remove'; remove.textContent = '×';
@@ -920,6 +933,7 @@
             const scroll=document.createElement('div');scroll.className='excel-preview-table';const table=document.createElement('table');const head=table.createTHead().insertRow();for(const text of ['动作','对象','字段 / 名称','类型','长度','持久化','列表','说明']){const th=document.createElement('th');th.textContent=text;head.appendChild(th);}const body=table.createTBody();
             for(const item of preview.rows){const row=body.insertRow();const yes=value=>value==null?'—':value?'是':'否';const details=[item.parent?`继承 ${item.parent}`:'',item.description,item.display_note,Object.keys(item.details||{}).length?JSON.stringify(item.details):''].filter(Boolean).join(' · ');for(const value of [item.display_action||item.action,item.owner||item.name,item.name,item.data_type||'—',item.max_length===''?'—':item.max_length,yes(item.persistent),yes(item.is_list),details||'—'])row.insertCell().textContent=value;}
             scroll.appendChild(table);card.appendChild(scroll);
+            if(preview.business_rule_count){const rules=document.createElement('p');rules.className='excel-preview-note';rules.textContent=`另有 ${preview.business_rule_count} 条业务规则待 CLF 分析，字段设计预览不代表这些规则已实现。`;card.appendChild(rules);}
             const source=document.createElement('details');source.className='excel-preview-source';const summary=document.createElement('summary');summary.textContent='来源与工作区';source.appendChild(summary);for(const target of preview.targets){const code=document.createElement('code');code.textContent=`${target.mdb_file||target.xml_file}\n工作区：${target.workspace||'唯一活跃客户工作区'}`;source.appendChild(code);}card.appendChild(source);
             const note=document.createElement('p');note.className='excel-preview-note';card.appendChild(note);
             if(preview.partial_execution)card.dataset.partialExecution='true';
@@ -939,6 +953,7 @@
                 let url = `/history/${encodeURIComponent(currentUsername)}`;
                 if (currentSessionId) url += `?session_id=${encodeURIComponent(currentSessionId)}`;
                 const data = await fetchJson(url);
+                if(clfMode)window.clfWorkspace?.history(data);
                 let hasVisible = false;
                 const result=data.designer_results?.[data.designer_results.length-1];
                 let resultShown=false;
@@ -993,7 +1008,7 @@
             }
             if (sessionsLoaded && !currentSessionId) {
                 try {
-                    const data = await fetchJson(`/sessions/${encodeURIComponent(currentUsername)}/new`, { method: 'POST' });
+                    const data = await fetchJson(`/sessions/${encodeURIComponent(currentUsername)}/new?mode=${clfMode?'clf':'designer'}`, { method: 'POST' });
                     currentSessionId = data.session_id;
                     await refreshSessionsList();
                 } catch (error) { showNotice(`创建对话失败：${error.message}`); }
@@ -1001,6 +1016,7 @@
             await loadHistory();
             if (!currentSessionId) await refreshSessionsList().catch(() => {});
             setView(viewFromLocation(), { updateUrl: false });
+            if(clfMode)await window.clfWorkspace?.initialize({fetchJson,notice:showNotice,username:()=>currentUsername,session:()=>currentSessionId,sendText:text=>{input.value=text;input.dispatchEvent(new Event('input'));input.focus();}});
         }
 
         async function handleSend() {
@@ -1047,6 +1063,8 @@
                     if (data.session_id) currentSessionId = data.session_id;
                     attachmentDrafts = []; renderAttachmentDrafts();
                     refreshSessionsList().catch(() => showNotice('最近对话刷新失败，可稍后刷新页面。'));
+                } else if (data.type === 'clf_result') {
+                    window.clfWorkspace?.result(data.result);
                 } else if (data.type === 'designer_result') {
                     showDesignerResult(data.result);
                 } else if (data.type === 'field_catalog') {
@@ -1136,7 +1154,7 @@
             historyLoading = true;
             updateControls();
             try {
-                const data = await fetchJson(`/sessions/${encodeURIComponent(currentUsername)}/new`, { method: 'POST' });
+                const data = await fetchJson(`/sessions/${encodeURIComponent(currentUsername)}/new?mode=${clfMode?'clf':'designer'}`, { method: 'POST' });
                 currentSessionId = data.session_id;
                 attachmentDrafts = []; renderAttachmentDrafts();
                 input.value = '';
@@ -1150,6 +1168,7 @@
         });
         for (const [id, view] of [['designNav', 'design'], ['recordsNav', 'records']]) {
             document.getElementById(id).addEventListener('click', event => {
+                if(clfMode&&id==='designNav')return;
                 if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey || event.button !== 0) return;
                 event.preventDefault();
                 setView(view);
