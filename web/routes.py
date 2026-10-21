@@ -23,7 +23,7 @@ class ProgressActionRequest(BaseModel):
     package_id: str
     action: Literal['check', 'prepare', 'sync', 'compile', 'verify', 'confirm_review', 'confirm_compile',
                     'confirm_publish', 'skip_services', 'confirm_services', 'confirm_complete', 'confirm_wcf',
-                    'preflight', 'backup', 'publish', 'wcf', 'restore_mdb']
+                    'preflight', 'backup', 'publish', 'wcf', 'restore_mdb', 'readback']
     backup_id: str = ''
     expected_plan_sha256: str = ''
     expected_backup_sha256: str = ''

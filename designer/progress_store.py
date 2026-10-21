@@ -201,6 +201,11 @@ def finish(identity, result=None, error='', status='done'):
     if isinstance(result, dict) and result.get('format') == 'designer_field_catalog_v1':
         saved.update({key: result[key] for key in
                       ('format', 'owner', 'total_fields', 'complete', 'columns', 'rows', 'source_file') if key in result})
+    if isinstance(result, dict) and result.get('format') == 'designer_mdb_changes_v1':
+        saved.update({key: result[key] for key in
+                      ('format', 'rows', 'package_id', 'source_file', 'baseline_file', 'baseline_sha256',
+                       'comparison_engine', 'xml_file', 'xml_sha256', 'read_at', 'comparison_seconds',
+                       'duration_seconds', 'cache_hit', 'compiled') if key in result})
     replay = saved
     if isinstance(result, str):
         replay = redact(result)

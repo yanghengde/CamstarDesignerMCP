@@ -258,6 +258,31 @@ def test_background_operation_survives_polling_and_deduplicates(workflow, monkey
     assert len(calls) == 1
 
 
+def test_mdb_readback_public_action_does_not_confirm_review_or_compile(workflow, monkeypatch):
+    from tests.test_mdb_readback import fake_export
+    sid, folder = workflow
+    check_receipt(sid, folder)
+    dll = folder / 'metadata.dll'; dll.write_bytes(b'fake-sdk')
+    monkeypatch.setattr(vendor, 'assembly', lambda: dll)
+    calls = fake_export(monkeypatch)
+    # Exercise HTTP validation and the real background executor/reader/receipt path.
+    assert routes.ProgressActionRequest(username='user', session_id=sid, package_id=folder.name,
+                                        action='readback').action == 'readback'
+    async def scenario():
+        progress.start_action('user', sid, folder.name, 'readback')
+        await asyncio.gather(*list(progress._tasks))
+    asyncio.run(scenario())
+    state = progress.snapshot('user', sid)
+    assert state['last_job']['status'] == 'done'
+    assert state['mdb_readback']['rows'][0]['name'] == 'ActualField'
+    assert state['current'] == 6 and state['stages'][5]['status'] == 'waiting'
+    assert state['stages'][6]['status'] == 'pending'
+    assert store.confirmations('user', sid, folder.name) == {}
+    assert len(calls) == 1
+    progress.snapshot('user', sid)  # Polling never triggers another MDB compare.
+    assert len(calls) == 1
+
+
 def test_expired_operation_is_interrupted_not_completed(workflow):
     sid, folder = workflow
     identity, _ = store.begin('user', sid, 'compile_designer_mdb', {'manifest_file': str(folder/'manifest.json')}, package_id=folder.name, action='compile')

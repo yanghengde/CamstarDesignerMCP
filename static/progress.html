@@ -138,6 +138,14 @@
         .execution-summary div { display:flex; gap:12px; justify-content:space-between; padding:5px 0; border-bottom:1px solid var(--border); }
         .execution-summary b { color:var(--text); font-weight:500; overflow-wrap:anywhere; text-align:right; }
         .execution-summary p { margin-top:9px; color:#a96c31; }
+        .mdb-readback { margin-top:18px; padding-top:16px; border-top:1px solid var(--border); }
+        .mdb-readback>p { margin-bottom:10px; }
+        .mdb-change { border:1px solid var(--border); border-radius:8px; padding:12px; margin:10px 0; font-size:12px; overflow-wrap:anywhere; }
+        .mdb-change b { display:block; margin-bottom:7px; font-weight:550; }
+        .mdb-change details { margin-top:10px; }
+        .mdb-change summary { cursor:pointer; color:var(--secondary); font-size:11px; }
+        .mdb-change .detail-table { font-size:11px; table-layout:fixed; }
+        .mdb-change .detail-table td { white-space:pre-wrap; vertical-align:top; }
         .confirm-note { font-size:12px; color:var(--secondary); line-height:1.8; margin-bottom:14px; }
         .wcf-input { width:100%; border:1px solid var(--border); border-radius:7px; padding:12px; font:inherit; font-size:13px; }
         .file-content { padding:18px 22px; }
@@ -290,7 +298,7 @@
 
         let currentSession = null, selectedStage = null, state = null, taskList = [], pollTimer, loading = false, submitting = false, noticeTimer, confirmationResolve;
         const statusNames = {pending:'未开始',done:'已完成',confirmed:'用户确认',skipped:'不需要',waiting:'待你操作',running:'执行中',failed:'未完成',blocked:'待核对'};
-        const labels = {check:'核对结果',prepare:'准备 Designer 文件',sync:'同步文件',compile:'Compile',verify:'核验数据库',preflight:'检查发布',backup:'备份数据库',publish:'Update Database',wcf:'编译并生成 WCF'};
+        const labels = {check:'核对结果',readback:'读取 MDB 变更',prepare:'准备 Designer 文件',sync:'同步文件',compile:'Compile',verify:'核验数据库',preflight:'检查发布',backup:'备份数据库',publish:'Update Database',wcf:'编译并生成 WCF'};
         const explanations = ['需求已记录','对象与字段已识别','检查来源与已有定义','保存对象与字段','核对文件与设计来源','在 Designer 中检查对象与字段','编译当前设计副本','检查通过后更新测试数据库','全量生成 WCF，核对设计对象与字段','在运行环境部署 WCF，完成后确认','核验数据库并完成业务验收'];
         function notice(message) { const node=document.getElementById('notice'); node.textContent=message; node.hidden=false; clearTimeout(noticeTimer); noticeTimer=setTimeout(()=>node.hidden=true,6000); }
         async function api(url,options) { const response=await fetch(url,options); const data=await response.json(); if(!response.ok) throw Error(typeof data.detail==='string'?data.detail:`HTTP ${response.status}`); return data; }
@@ -338,6 +346,13 @@
             });
             document.querySelectorAll('[data-execution-summary]').forEach(node=>node.remove());
             if(stage.number===8&&state.publication) {const summary=document.createElement('div');summary.className='execution-summary';summary.dataset.executionSummary='true';publicationSummary(summary,state.publication,stage.status==='done');actions.after(summary);}
+            let readback=document.querySelector('[data-mdb-readback]');
+            if(stage.number===6&&stage.actions.some(item=>item.id==='readback')) {
+                if(!readback){readback=document.createElement('div');readback.className='mdb-readback';readback.dataset.mdbReadback='true';}
+                const key=JSON.stringify([state.package?.id,state.mdb_readback?.read_at,state.mdb_readback?.duration_seconds]);
+                if(readback.dataset.reportKey!==key){readback.replaceChildren();renderReadback(readback,state.mdb_readback,4);readback.dataset.reportKey=key;}
+                actions.after(readback);
+            } else readback?.remove();
             if((stage.number===9||stage.number===10)&&state.wcf) {const link=document.createElement('a');link.className='button';link.textContent='下载 WCF 程序集';link.href=`/api/progress/${encodeURIComponent(currentSession)}/wcf?username=${encodeURIComponent(navigationUsername)}&package_id=${state.package.id}`;actions.appendChild(link);}
             if(state.package&&stage.number===5) {const link=document.createElement('a');link.className='button';link.textContent='下载变更 XML';link.href=`/api/progress/${encodeURIComponent(currentSession)}/changes?username=${encodeURIComponent(navigationUsername)}&package_id=${state.package.id}`;actions.appendChild(link);}
             document.getElementById('syncBtn').disabled=!state.package?.review||!!state.active||submitting;
@@ -388,6 +403,42 @@
             else {content.className='requirements';for(const text of state.requirements){const p=document.createElement('p');p.textContent=text;content.appendChild(p);}}
             document.getElementById('detailsDialog').showModal();
         }
+        function readbackValue(value) {
+            if(value===null||value===undefined)return '—';
+            if(typeof value!=='object')return value===''?'（空）':String(value);
+            const parts=[];
+            if(value.value!==undefined)parts.push(readbackValue(value.value));
+            for(const [key,item] of Object.entries(value.attributes||{}))parts.push(`${key}: ${item}`);
+            for(const child of value.children||[])parts.push(`${child.property==='Name'?'':child.property+': '}${readbackValue(child.value)}`);
+            return parts.join(' · ')||'（空）';
+        }
+        function renderReadback(container,report,limit=Infinity) {
+            const note=document.createElement('p');note.className='file-note';
+            note.textContent='读取已保存的 MDB，与本轮设计开始前的基线比较。Designer 中手动修改后，请先保存并点击“同步 Designer 修改”。';container.appendChild(note);
+            if(!report){const hint=document.createElement('p');hint.className='file-note';hint.textContent='点击“读取 MDB 变更”查看新增、修改和删除内容；读取完成后仍需人工审核确认。';container.appendChild(hint);return;}
+            const fields=report.rows.filter(row=>row.kind==='CDOFieldDefinition');
+            const heading=document.createElement('p');heading.className='file-note';heading.textContent=`MDB 实际差异：${fields.length} 项字段变更，${report.rows.length} 项定义变更 · 本次 ${report.duration_seconds} 秒${report.cache_hit?'（复用相同版本的读取结果）':''}`;container.appendChild(heading);
+            if(fields.some(row=>row.automatic_maintenance)){const role=document.createElement('p');role.className='file-note';role.textContent=`其中 ${fields.filter(row=>row.automatic_maintenance).length} 项是自动配套的维护字段，用于提交业务字段的新值。`;container.appendChild(role);}
+            if(report.rows.some(row=>row.kind==='DBColumnDefinition')){const storage=document.createElement('p');storage.className='file-note';storage.textContent='字段的存储列会另列为数据库列，不代表额外新增业务字段。';container.appendChild(storage);}
+            const time=document.createElement('p');time.className='file-note';time.textContent=`首次读取 ${new Date(report.read_at).toLocaleString('zh-CN',{hour12:false})} · 人工审核确认后再继续编译。`;container.appendChild(time);
+            const rows=[...fields,...report.rows.filter(row=>row.kind!=='CDOFieldDefinition')];
+            if(!rows.length){const empty=document.createElement('p');empty.className='file-note';empty.textContent='当前 MDB 与本轮基线没有导出差异。';container.appendChild(empty);}
+            for(const row of rows.slice(0,limit)) {
+                const card=document.createElement('div');card.className='mdb-change';
+                const title=document.createElement('b');title.textContent=`${row.label}${row.kind_label} · ${row.owner?row.owner+'.':''}${row.name}`;card.appendChild(title);
+                if(row.automatic_maintenance){const role=document.createElement('p');role.className='file-note';role.textContent='自动配套的维护字段，用于 Portal/WCF 提交同一业务字段的新值。';card.appendChild(role);}
+                const type=row.properties.find(prop=>prop.property==='FieldDef');
+                if(type){const summary=document.createElement('p');summary.className='file-note';summary.textContent=`字段类型：${readbackValue(type.after)}`;card.appendChild(summary);}
+                if(row.properties.length){const details=document.createElement('details');const caption=document.createElement('summary');caption.textContent=`查看 ${row.properties.length} 项属性`;details.appendChild(caption);
+                    const table=document.createElement('table');table.className='detail-table';const head=table.createTHead().insertRow();for(const text of ['属性','变更前','变更后']){const th=document.createElement('th');th.textContent=text;head.appendChild(th);}
+                    const body=table.createTBody();for(const prop of row.properties){const tr=body.insertRow();for(const text of [prop.label,prop.before_known?readbackValue(prop.before):'原值未在差异中提供',readbackValue(prop.after)])tr.insertCell().textContent=text;}details.appendChild(table);card.appendChild(details);
+                }
+                container.appendChild(card);
+            }
+            if(rows.length>limit)container.appendChild(button(`查看全部 ${rows.length} 项定义变更`,()=>{const content=document.getElementById('detailsContent');content.replaceChildren();content.className='';document.getElementById('detailsTitle').textContent='MDB 实际变更';renderReadback(content,report);document.getElementById('detailsDialog').showModal();}));
+            const source=document.createElement('details');const caption=document.createElement('summary');caption.textContent='读取文件与比较基线';source.className='internal-files';source.appendChild(caption);
+            for(const [label,path] of [['已读取的工作 MDB',report.source_file],['本轮修改前的基线',report.baseline_file],['MDB 版本',report.source_sha256]]){const name=document.createElement('p');name.className='file-note';name.textContent=label;const code=document.createElement('code');code.className='file-path';code.textContent=path;source.append(name,code);}container.appendChild(source);
+        }
         function summaryRow(container,label,value) {const row=document.createElement('div');const name=document.createElement('span');name.textContent=label;const text=document.createElement('b');text.textContent=value;row.append(name,text);container.appendChild(row);}
         function publicationSummary(container,info,verified=false) {
             const fresh=created=>created&&Date.now()-Date.parse(created)>=0&&Date.now()-Date.parse(created)<=3600000;
@@ -402,7 +453,7 @@
         function askConfirmation(action,options={}) {
             const titles={confirm_review:'确认已在 Designer 检查设计？',confirm_compile:'确认已在 Designer 编译？',confirm_publish:'确认已执行 Update Database？',confirm_wcf:'确认已生成并核对 WCF？',confirm_services:'确认 WCF 已部署并检查服务？',skip_services:'本次设计无需 WCF？',confirm_complete:'确认业务验收已完成？',backup:'备份目标数据库',publish:'执行 Update Database',wcf:'生成 WCF',restore_mdb:'恢复工作 MDB'};
             const content=document.getElementById('confirmContent');content.replaceChildren();document.getElementById('confirmTitle').textContent=titles[action];
-            const note=document.createElement('p');note.className='confirm-note';note.textContent=action==='publish'?'更新以下数据库的设计元数据与存储结构。':action==='backup'?'创建独立备份并校验可读性。':action==='wcf'?'编译当前设计副本，全量生成 WCF，并核对本轮全部变更对象的客户端与服务端字段契约。':'记录手动完成状态。';content.appendChild(note);
+            const note=document.createElement('p');note.className='confirm-note';note.textContent=action==='publish'?'更新以下数据库的设计元数据与存储结构。':action==='backup'?'创建独立备份并校验可读性。':action==='wcf'?'编译当前设计副本，全量生成 WCF，并核对本轮全部变更对象的客户端与服务端字段契约。':action==='confirm_review'?'确认对象、字段类型与本次需求一致。可先使用“读取 MDB 变更”核对已保存文件；此按钮仅记录人工审核结果。':'记录手动完成状态。';content.appendChild(note);
             if(action==='confirm_publish'&&state.package.working){document.getElementById('confirmTitle').textContent='核验已更新的数据库并继续？';note.textContent='读取数据库并核对当前完整设计，不再执行 Update DB。通过后登记已发布基线、完成第 8 步并继续生成 WCF；核验失败时保留原发布记录。';}
             if(action==='restore_mdb') {const version=state.package.working.backups.find(item=>item.id===options.backup_id);note.textContent=`将工作 MDB 恢复为 ${new Date(version.created_utc).toLocaleString('zh-CN',{hour12:false})} 的版本。恢复前自动保存当前 MDB；数据库与 SiteInfo 保持当前版本。恢复后请重新检查、编译并发布。`;const path=document.createElement('code');path.className='file-path';path.textContent=state.package.working.server_mdb||state.package.mdb_file;content.appendChild(path);}
             if(action==='publish'||action==='backup') {const summary=document.createElement('div');summary.className='execution-summary';publicationSummary(summary,state.publication);content.appendChild(summary);}
@@ -438,7 +489,7 @@
             if(currentSession!==session||state?.package?.id!==packageId){notice('设计已更新，请刷新后重试');return;}
             if(action==='wcf')options.verify_types=document.getElementById('wcfTypes').value.split(/[,，]/).map(value=>value.trim()).filter(Boolean);
             submitting=true;render();
-            try {await api('/api/progress/action',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:navigationUsername,session_id:session,package_id:packageId,action,...options})});selectedStage=null;await refresh();}
+            try {await api('/api/progress/action',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:navigationUsername,session_id:session,package_id:packageId,action,...options})});selectedStage=action==='readback'?6:null;await refresh();}
             catch(error){notice(error.message);}
             finally{submitting=false;if(state)render();}
         }

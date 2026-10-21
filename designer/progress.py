@@ -22,6 +22,7 @@ STAGES = {'generate_designer_cdo_package': 4, 'generate_designer_design_package'
           'generate_designer_wcf_package': 9}
 STAGES.update({name: 4 for name in DESIGN_TOOLS})
 STAGES['confirm_designer_manual_publish'] = 8
+STAGES['read_designer_mdb_changes'] = 6
 _tasks = set()
 
 
@@ -143,7 +144,7 @@ def snapshot(username, session_id):
     saved = all_saved if designs and designs[-1] in all_saved else []
     package, manifests, error = None, [], ''
     change_summary = {'rows': []}
-    publication_info = None
+    publication_info, mdb_readback = None, None
     if saved:
         path = saved[-1]['result']['files']['manifest.json']
         try:
@@ -216,6 +217,13 @@ def snapshot(username, session_id):
                 publication_info['plan'].get('changes', []), associated)}
         latest_preflight = next((item for item in reversed(relevant)
                                  if item['tool'] == 'prepare_designer_publish_plan'), None)
+        latest_readback = next((item for item in reversed(relevant) if item['tool'] == 'read_designer_mdb_changes'), None)
+        if latest_readback and latest_readback['status'] == 'done':
+            result = latest_readback.get('result') or {}
+            if (result.get('format') == 'designer_mdb_changes_v1' and result.get('status') == 'mdb_changes_read'
+                    and isinstance(result.get('rows'), list) and result.get('source_sha256') == package['sha256']
+                    and result.get('package_id') == package['id']):
+                mdb_readback = result
         for item in relevant:
             result = item.get('result') or {}
             tool = item['tool']
@@ -252,6 +260,8 @@ def snapshot(username, session_id):
                 mark(stage, status, '用户确认' if status == 'confirmed' else '无需服务')
         if package.get('review') and stages[5]['status'] == 'pending':
             mark(6, 'waiting', '文件已准备，待 Designer 审核')
+        if mdb_readback and stages[5]['status'] in {'pending', 'waiting'}:
+            mark(6, 'waiting', '已读取 MDB 实际变更，待人工审核确认')
         syncs = [item for item in relevant if item.get('action') == 'sync' and item.get('result') and item['result'].get('server_mdb') == (package.get('review') or {}).get('server_mdb')]
         if syncs and syncs[-1]['result'].get('unchanged') is False:
             for number in range(5, len(TITLES)+1):
@@ -260,7 +270,7 @@ def snapshot(username, session_id):
             for number in range(5, len(TITLES)+1):
                 mark(number, 'blocked', '等待设计结果核对')
         stage_actions = {
-            5: [('check', '核对结果')], 6: [('prepare', '准备 Designer 文件'), ('confirm_review', '手动检查确认')],
+            5: [('check', '核对结果')], 6: [('readback', '读取 MDB 变更'), ('prepare', '准备 Designer 文件'), ('confirm_review', '人工审核确认')],
             7: [('compile', '执行 Compile'), ('confirm_compile', '手动编译确认')],
             8: [('preflight', '检查发布')] +
                ([('backup', '备份数据库')] if publication_info['backup_required'] else []) +
@@ -309,6 +319,7 @@ def snapshot(username, session_id):
             'has_design': bool(designs), 'workflow_active': public_job(workflow_active),
             'publication': publication_info,
             'wcf': wcf,
+            'mdb_readback': mdb_readback,
             'design_rows': change_summary['rows'] if package else [],
             'field_expectations': change_summary.get('field_expectations', []) if package else [],
             'updated': time.time(), '_manifests': [path for path, _ in manifests]}
@@ -338,6 +349,9 @@ async def execute(identity, username, session_id, package, manifests, action, op
             result = await asyncio.to_thread(review.synchronize, package['mdb_file'], package['sha256'])
         elif action == 'restore_mdb':
             result = await asyncio.to_thread(review.restore_backup, package['mdb_file'], (options or {}).get('backup_id', ''), package['sha256'])
+        elif action == 'readback':
+            from designer.readback import read_changes
+            result = await asyncio.to_thread(read_changes, package, manifests)
         else:
             if package.get('review'):
                 synced = await asyncio.to_thread(sync_file, package['manifest_file'])
@@ -438,6 +452,7 @@ def start_action(username, session_id, package_id, action, options=None):
     if action == 'wcf':
         progress_actions.wcf_types(package, (options or {}).get('verify_types'))
     tool = {'check': 'check_designer_package', 'prepare': 'prepare_designer_review', 'sync': 'sync_designer_file', 'restore_mdb': 'restore_designer_mdb',
+            'readback': 'read_designer_mdb_changes',
             'confirm_publish': 'confirm_designer_manual_publish',
             'compile': 'compile_designer_mdb', 'verify': 'verify_designer_published_design',
             'preflight': 'prepare_designer_publish_plan', 'backup': 'backup_designer_test_database',
