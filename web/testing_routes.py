@@ -24,6 +24,21 @@ async def call(function, *args, **kwargs):
 
 
 @router.get('/wcf-test')
+def wcf_page():
+    return FileResponse('static/wcf-test.html', headers={'Cache-Control': 'no-store'})
+
+
+@router.get('/wcf-simple.js')
+def wcf_script():
+    return FileResponse('static/wcf-simple.js', media_type='text/javascript')
+
+
+@router.get('/wcf-simple.css')
+def wcf_style():
+    return FileResponse('static/wcf-simple.css', media_type='text/css')
+
+
+@router.get('/wcf-test/settings')
 @router.get('/clf-test')
 def testing_page():
     return FileResponse('static/testing.html', headers={'Cache-Control': 'no-store'})

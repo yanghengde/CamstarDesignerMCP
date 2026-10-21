@@ -38,6 +38,9 @@ def save_environment(owner, request: Environment, identity=None):
         conn.execute('BEGIN IMMEDIATE')
         row = conn.execute('SELECT document FROM test_items WHERE id=? AND owner=? AND kind=?', (identity, owner, 'environment')).fetchone()
         old = json.loads(row[0]) if row else None
+        for key in ('project_id', 'artifact_id'):
+            if key not in request.model_fields_set:
+                data[key] = (old or {}).get(key, '')
         if request.version != (old or {}).get('version', 0):
             raise ValueError('环境配置已变化，请刷新后重新核对')
         password = store.protect(request.password) if request.password is not None else (old or {}).get('protected_password', '')

@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#f7f8fa"><title>Opcenter Designer · 功能测试</title><link rel="icon" href="/svg/opcenter.svg" type="image/svg+xml"><link rel="stylesheet" href="/testing.css"><script src="/wcf-simple.js" defer></script><link rel="stylesheet" href="/wcf-simple.css"></head>
+<body><div class="app-shell">
+  <aside class="sidebar"><div class="brand"><img src="/svg/opcenter.svg" alt="" width="32" height="32"><div>Opcenter Designer<small>设计工作台</small></div></div><nav class="nav" aria-label="工作台导航"><a class="nav-item" href="/">设计助手</a><a class="nav-item" href="/clf">CLF 逻辑助手</a><a class="nav-item" href="/records">设计记录</a><a class="nav-item" href="/progress">设计进度</a><a class="nav-item" href="/wcf-test" id="wcfNav">WCF 接口测试</a><a class="nav-item" href="/clf-test" id="clfNav">CLF 逻辑测试</a><a class="nav-item" href="/logs">运行日志</a></nav><div class="sidebar-footer"><strong id="usernameLabel">本机工作台</strong><small>测试结果保存在本机</small></div></aside>
+  <main class="workspace"><header class="topbar"><span>测试与验收 / <span id="breadcrumb">WCF 接口测试</span></span><button class="button" id="historyToggle" aria-expanded="false">测试记录</button></header>
+  <div class="page simple-page">
+  <div class="page-heading"><div><h1>WCF 接口测试</h1><p>选择对象，快速增删查改。</p></div><a class="button subtle" href="/wcf-test/settings">环境设置</a></div>
+  <div id="notice" role="status" hidden></div>
+  <section class="environment-bar"><label>测试环境<select id="environmentSelect" aria-label="测试环境"></select></label><span id="connection" class="muted">请选择环境</span></section>
+  <section class="panel object-panel"><label>测试对象<input id="objectSearch" placeholder="搜索对象，例如 Product 或产品" aria-label="搜索对象"></label><select id="objectSelect" aria-label="测试对象"></select><span id="serviceCaption" class="muted"></span></section>
+  <section class="panel operation-panel"><div class="operation-tabs" role="group" aria-label="操作"><button class="button" data-op="query">查询</button><button class="button" data-op="create">新增</button><button class="button" data-op="update">修改</button><button class="button" data-op="delete">删除</button></div>
+  <p id="operationHint" class="muted"></p><div class="form-grid identity-fields"><label>对象名称<input id="objectName" autocomplete="off"></label><label id="revisionLabel">版本<input id="objectRevision" autocomplete="off" placeholder="留空查询当前有效版本"></label></div>
+  <div id="editFields" hidden><div id="commonFields" class="form-grid"></div><details><summary>其他字段</summary><input id="fieldSearch" placeholder="搜索字段" aria-label="搜索字段"><div id="otherFields" class="form-grid"></div></details></div>
+  <div class="actions"><button class="primary" id="executeButton" disabled>执行查询</button><span id="busyLabel" class="muted"></span></div></section>
+  <section class="panel result-panel"><div class="section-heading"><h2>操作结果</h2></div><div id="result" aria-live="polite"><p class="empty-state">输入对象名称后执行查询。</p></div></section>
+  <section class="panel history-panel" id="historyPanel" hidden><h2>测试记录</h2><div id="historyList"></div></section>
+  </div></main></div></body></html>

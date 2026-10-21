@@ -9,6 +9,8 @@ class StrictModel(BaseModel):
 
 
 class Environment(StrictModel):
+    project_id: str = Field(default='', pattern=r'^(?:[0-9a-f]{32})?$')
+    artifact_id: str = Field(default='', pattern=r'^(?:[0-9a-f]{32})?$')
     name: str = Field(min_length=1, max_length=100)
     endpoint: str = Field(min_length=1, max_length=1000)
     business_user: str = Field(min_length=1, max_length=200)

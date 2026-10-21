@@ -75,7 +75,7 @@ def run(client, spec, identity='1' * 32):
 
 def test_pages_assets_and_navigation_are_real_routes(setup):
     client, *_ = setup
-    for path in ('/wcf-test', '/clf-test', '/testing.js', '/testing.css'):
+    for path in ('/wcf-test', '/wcf-test/settings', '/wcf-simple.js', '/wcf-simple.css', '/clf-test', '/testing.js', '/testing.css'):
         assert client.get(path).status_code == 200
     assert 'testing.js' in client.get('/clf-test').text
     assert client.get('/api/testing/bootstrap?username=other').status_code == 404
@@ -285,6 +285,15 @@ def test_real_generated_client_catalog_and_typed_requests_without_network():
     assert {'Load', 'ExecuteTransaction'}.issubset({method['name'] for method in schema['methods']})
     result = native.invoke(item, 'validate', service='ProductMaint', method='Load', data={'ObjectToChange': {'Name': 'TEST_ONLY'}}, return_fields=['ObjectChanges.Name'], allow_write=False, collect_trace=False)
     assert result['validated'] is True
+    # Simple page CRUD shapes use the real generated contract without contacting a server.
+    for method, data in (
+        ('ExecuteTransaction', {'ObjectChanges': {'Name': 'TEST_ONLY', 'Revision': '1', 'Description': 'new'}}),
+        ('ExecuteTransaction', {'ObjectToChange': {'Name': 'TEST_ONLY', 'Revision': '1'}, 'ObjectChanges': {'Description': 'changed'}}),
+        ('Delete', {'ObjectToChange': {'Name': 'TEST_ONLY', 'Revision': '1'}}),
+    ):
+        assert native.invoke(item, 'validate', service='ProductMaint', method=method, data=data,
+                             return_fields=['ObjectChanges.Name', 'ObjectChanges.Description'],
+                             allow_write=True, collect_trace=False)['validated'] is True
     with pytest.raises(ValueError, match='Unknown or readonly field'):
         native.invoke(item, 'validate', service='ProductMaint', method='Load', data={'NotARealField': 1}, return_fields=[], allow_write=False, collect_trace=False)
 
@@ -324,3 +333,21 @@ def test_real_wcf_transport_uses_configured_local_endpoint_and_rejects_soap_faul
         server.shutdown()
         server.server_close()
         thread.join(timeout=2)
+
+
+def test_environment_client_binding_survives_clf_edits(setup):
+    client, spec, *_ = setup
+    url = '/api/testing/environments/' + spec['environment_id']
+    environment = {'name': 'bound', 'endpoint': 'http://test.invalid/WCF/', 'business_user': 'operator',
+                   'project_id': spec['project_id'], 'artifact_id': spec['artifact_id'], 'version': 1}
+    saved = client.put(url, json={'username': 'user', 'environment': environment})
+    assert saved.status_code == 200
+    assert saved.json()['project_id'] == spec['project_id']
+    assert saved.json()['artifact_id'] == spec['artifact_id']
+    del environment['project_id'], environment['artifact_id']
+    environment['version'] = 2
+    saved = client.put(url, json={'username': 'user', 'environment': environment})
+    assert saved.status_code == 200
+    assert saved.json()['artifact_id'] == spec['artifact_id']
+    assert saved.json()['project_id'] == spec['project_id']
+    assert saved.json()['has_password'] is True
