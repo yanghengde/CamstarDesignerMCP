@@ -10,7 +10,7 @@ import config
 from designer.files import artifact_dir,source_path
 from designer.publication import target_connection,redact
 from designer.vendor import digest
-from designer.metadata import identifier
+from designer import wcf_contract
 
 
 def worker_environment() -> dict:
@@ -47,19 +47,11 @@ def generate_wcf(compiled_mdb: str, expected_sha256: str, verify_types: list[str
                  expected_fields: list[dict] | None = None) -> dict:
     source=source_path(compiled_mdb,".mdb")
     if digest(source)!=expected_sha256: raise ValueError("编译MDB的SHA256不匹配")
-    if not isinstance(verify_types,list) or not verify_types or len(set(verify_types)) != len(verify_types): raise ValueError("必须提供不重复的验收对象名")
-    for name in verify_types: identifier(name)
+    verify_types = wcf_contract.names(verify_types)
     if expected_fields is not None:
-        if not isinstance(expected_fields, list): raise ValueError('expected_fields 必须为字段验收列表')
-        for field in expected_fields:
-            if (not isinstance(field, dict) or set(field) - {'owner', 'name', 'present'}
-                    or not isinstance(field.get('present'), bool) or field.get('owner') not in verify_types):
-                raise ValueError('expected_fields 需要验收对象 owner、字段 name 和布尔值 present')
-            identifier(field.get('name', ''))
+        expected_fields = wcf_contract.fields(expected_fields, verify_types)
     if service_names is not None:
-        if not isinstance(service_names,list) or not 1<=len(service_names)<=20 or len(set(service_names))!=len(service_names):
-            raise ValueError("service_names必须是1～20个不重复的服务名；省略为全量")
-        for name in service_names: identifier(name)
+        service_names = wcf_contract.names(service_names, 'service_names', limit=20)
     env=worker_environment(); folder=artifact_dir(); server=PureWindowsPath("C:/Temp/DesignerMCP")/folder.name
     report={"status":"preparing","server":config.DESIGNER_DB_SERVER,"compiled_sha256":expected_sha256,"server_folder":str(server),"deployed":False,
             "service_scope":service_names if service_names is not None else "all","partial_package":service_names is not None}
@@ -92,8 +84,11 @@ def generate_wcf(compiled_mdb: str, expected_sha256: str, verify_types: list[str
                         running=False; transfer(folder,"fetch",env)
                         if not (folder/"result.json").is_file(): raise ValueError("WCF工作进程未生成回执，请检查worker.log")
                         result=json.loads((folder/"result.json").read_text(encoding="utf-8-sig"))
-                        if row[0]!=1 or not result.get("ok"): raise ValueError(result.get("error","WCF生成作业失败"))
-                        report.update(result["result"])
+                        if not isinstance(result, dict) or row[0]!=1 or result.get('ok') is not True:
+                            raise ValueError(result.get('error', 'WCF生成作业失败') if isinstance(result, dict) else 'WCF工作进程回执格式不正确')
+                        if not isinstance(result.get('result'), dict):
+                            raise ValueError('WCF工作进程回执缺少生成结果')
+                        report.update(result['result'])
                         break
                     time.sleep(3)
                 else: raise ValueError("WCF生成超时")
@@ -110,6 +105,11 @@ def generate_wcf(compiled_mdb: str, expected_sha256: str, verify_types: list[str
         local_files={str(p.relative_to(folder)):digest(p) for directory in (folder/"client",folder/"server") if directory.is_dir() for p in directory.rglob("*") if p.is_file()}
         if not local_files: raise ValueError("服务产物未复制回本地")
         report.update(files_sha256=local_files,source_unchanged=digest(source)==expected_sha256)
+        # Worker exit codes and success flags cannot substitute for acceptance.
+        # Keep the request's generation scope authoritative over worker output.
+        report.update(partial_package=service_names is not None,
+                      service_scope=service_names if service_names is not None else 'all')
+        wcf_contract.verify_result(report, expected_fields or [], verify_types, allow_partial=service_names is not None)
     except Exception as exc:
         report.update(status="generation_failed",error=redact(str(exc)))
         output.write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding="utf-8")

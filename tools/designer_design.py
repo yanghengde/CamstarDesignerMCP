@@ -6,6 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 import config
 from designer import vendor
 from designer.files import artifact_dir, source_path
+from designer.wcf_contract import ExpectedField
 from tools import mcp
 
 
@@ -88,7 +89,7 @@ async def restore_designer_mdb_backup(mdb_file: str, backup_id: str, expected_sh
 
 @mcp.tool
 async def generate_designer_wcf_package(compiled_mdb: str, expected_sha256: str, verify_types: list[str], service_names: list[str] | None = None,
-                                        expected_fields: list[dict] | None = None) -> dict:
+                                        expected_fields: list[ExpectedField] | None = None) -> dict:
     """在已配置的测试服务器隔离生成官方 WCF 程序集，核对计数、指定对象及 expected_fields 的客户端/服务端类型与列表形态，不部署运行目录。需要 Windows 共享凭据与 SQL Agent。省略 service_names 为全量；指定时仅生成部分服务，不能作为完整验收。进度页面自动覆盖本轮全部对象，只有字段、契约与产物均通过才标记完成；不能据作业退出码宣称成功。"""
     from designer.services import generate_wcf
     return await asyncio.to_thread(generate_wcf,compiled_mdb,expected_sha256,verify_types,service_names,expected_fields)

@@ -402,7 +402,7 @@
         function askConfirmation(action,options={}) {
             const titles={confirm_review:'确认已在 Designer 检查设计？',confirm_compile:'确认已在 Designer 编译？',confirm_publish:'确认已执行 Update Database？',confirm_wcf:'确认已生成并核对 WCF？',confirm_services:'确认 WCF 已部署并检查服务？',skip_services:'本次设计无需 WCF？',confirm_complete:'确认业务验收已完成？',backup:'备份目标数据库',publish:'执行 Update Database',wcf:'生成 WCF',restore_mdb:'恢复工作 MDB'};
             const content=document.getElementById('confirmContent');content.replaceChildren();document.getElementById('confirmTitle').textContent=titles[action];
-            const note=document.createElement('p');note.className='confirm-note';note.textContent=action==='publish'?'更新以下数据库的设计元数据与存储结构。':action==='backup'?'创建独立备份并校验可读性。':action==='wcf'?'编译当前设计副本，全量生成 WCF，并核对所选对象的新字段。':'记录手动完成状态。';content.appendChild(note);
+            const note=document.createElement('p');note.className='confirm-note';note.textContent=action==='publish'?'更新以下数据库的设计元数据与存储结构。':action==='backup'?'创建独立备份并校验可读性。':action==='wcf'?'编译当前设计副本，全量生成 WCF，并核对本轮全部变更对象的客户端与服务端字段契约。':'记录手动完成状态。';content.appendChild(note);
             if(action==='confirm_publish'&&state.package.working){document.getElementById('confirmTitle').textContent='核验已更新的数据库并继续？';note.textContent='读取数据库并核对当前完整设计，不再执行 Update DB。通过后登记已发布基线、完成第 8 步并继续生成 WCF；核验失败时保留原发布记录。';}
             if(action==='restore_mdb') {const version=state.package.working.backups.find(item=>item.id===options.backup_id);note.textContent=`将工作 MDB 恢复为 ${new Date(version.created_utc).toLocaleString('zh-CN',{hour12:false})} 的版本。恢复前自动保存当前 MDB；数据库与 SiteInfo 保持当前版本。恢复后请重新检查、编译并发布。`;const path=document.createElement('code');path.className='file-path';path.textContent=state.package.working.server_mdb||state.package.mdb_file;content.appendChild(path);}
             if(action==='publish'||action==='backup') {const summary=document.createElement('div');summary.className='execution-summary';publicationSummary(summary,state.publication);content.appendChild(summary);}
@@ -424,7 +424,7 @@
                 }
                 content.appendChild(table);
             }
-            if(action==='wcf') {const label=document.createElement('label');label.className='confirm-note';label.textContent='验收对象（英文逗号分隔，最多 20 个）';label.htmlFor='wcfTypes';const input=document.createElement('input');input.id='wcfTypes';input.className='wcf-input';input.value=(state.package.service_objects||state.package.objects).join(', ');content.append(label,input);}
+            if(action==='wcf') {const label=document.createElement('label');label.className='confirm-note';label.textContent='验收对象（英文逗号分隔，将自动覆盖本轮全部变更对象）';label.htmlFor='wcfTypes';const input=document.createElement('input');input.id='wcfTypes';input.className='wcf-input';input.value=(state.package.service_objects||state.package.objects).join(', ');content.append(label,input);}
             document.getElementById('acceptConfirm').textContent=action==='publish'?'执行 Update Database':action==='backup'?'开始备份':action==='wcf'?'生成 WCF':action==='confirm_publish'&&state.package.working?'开始核验':'确认';
             document.getElementById('confirmDialog').showModal();return new Promise(resolve=>confirmationResolve=resolve);
         }

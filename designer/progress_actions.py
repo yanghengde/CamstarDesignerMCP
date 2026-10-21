@@ -174,13 +174,13 @@ def copy_siteinfo(package):
 
 
 def wcf_types(package, requested):
-    from designer.metadata import identifier
-    eligible = package.get('service_objects', package['objects'])
+    from designer import wcf_contract
+    eligible = package.get('service_objects', package.get('objects', []))
     names = eligible if requested is None else requested
-    if not isinstance(names, list) or not names or len(names) != len(set(names)):
+    if not isinstance(names, list) or not names:
         raise ValueError('请选择至少一个不重复的验收对象')
+    names = wcf_contract.names(names)
     for name in names:
-        identifier(name)
         if name not in eligible:
             raise ValueError('WCF 验收对象必须来自当前设计')
     # A selection can add emphasis, but cannot narrow whole-design acceptance.
@@ -192,6 +192,8 @@ def final_wcf_fields(mdb_file, checksum, fields, names):
     source = source_path(mdb_file, '.mdb')
     if vendor.digest(source) != checksum:
         raise ValueError('WCF 验收来源已变化')
+    from designer import wcf_contract
+    fields = wcf_contract.fields(fields)
     if {row['owner'] for row in fields} - set(names):
         raise ValueError('WCF 验收范围遗漏当前设计字段')
     actual = {}
@@ -221,57 +223,24 @@ def final_wcf_fields(mdb_file, checksum, fields, names):
 
 
 def verify_wcf_fields(result, state, names):
-    if result.get('status') != 'services_generated' or result.get('partial_package') or not result.get('source_unchanged'):
-        raise ValueError('WCF 全量生成未通过核对')
-    client = {item['name'].split('.')[-1]: item for item in result.get('type_checks', [])}
-    server = {item['name'].split('.')[-1]: item for item in result.get('server_type_checks', [])}
-    contracts = {name: set(item.get('properties', [])) for name, item in client.items()}
-    # Both a data object and its actual maintenance object may be affected.
-    # Prefer the exact contract, as the worker does, before trying its suffix.
-    checks = {name: contracts[name] if name in contracts else contracts[name + 'Changes']
-              for name in names if name in contracts or name + 'Changes' in contracts}
+    from designer import wcf_contract
     from designer.operations import final_fields
+    names = wcf_contract.names(names)
     fields = state.get('field_expectations')
     if fields is None:
         fields = final_fields([{**row, 'kind': row.get('kind', 'field')} for row in state['design_rows']])
-    if {row['owner'] for row in fields} - set(names):
-        raise ValueError('WCF 验收范围遗漏当前设计字段，不能标记全量通过')
     if set((state.get('package') or {}).get('service_objects', [])) - set(names):
         raise ValueError('WCF 验收范围遗漏当前设计对象')
-    for row in fields:
-        present = row['name'] in checks.get(row['owner'], [])
-        if row['owner'] in names and present != row['present']:
-            raise ValueError(f"WCF 当前字段不匹配：{row['owner']}.{row['name']}，预期{'存在' if row['present'] else '不存在'}")
-        owner = row['owner'] if row['owner'] in client else row['owner'] + 'Changes'
-        if (row['name'] in server.get(owner, {}).get('properties', [])) != row['present']:
-            raise ValueError(f"WCF 服务端当前字段不匹配：{row['owner']}.{row['name']}")
-        if 'data_type' in row or 'is_list' in row:
-            a = client.get(owner, {}).get('field_schemas', {}).get(row['name'])
-            b = server.get(owner, {}).get('field_schemas', {}).get(row['name'])
-            if row['present'] and (not a or a != b or a.get('is_list') != row.get('is_list')):
-                raise ValueError(f"WCF 客户端/服务端字段契约不一致：{row['owner']}.{row['name']}")
-            expected_clr = {'String': 'System.String', 'Integer': 'System.Int32', 'Boolean': 'System.Boolean'}.get(row.get('data_type'))
-            if row['present'] and expected_clr and a.get('value_type') != expected_clr:
-                raise ValueError(f"WCF 字段 CLR 类型不匹配：{row['owner']}.{row['name']}")
-    if any(name not in checks for name in names):
-        raise ValueError('WCF 缺少验收对象')
-    if any((name if name in client else name + 'Changes') not in server for name in names):
-        raise ValueError('WCF 服务端缺少验收对象')
-    if not result.get('data_contract_count') or not result.get('service_count') or not result.get('files_sha256'):
-        raise ValueError('WCF 产物或生成计数不完整')
-    # The installed Windows generator emits either Bin or bin. Receipt paths
-    # follow Windows case-insensitive file semantics, including DLL names.
-    files = {name.replace('\\', '/').casefold() for name in result['files_sha256']}
-    if not {'client/camstar.wcfclient.dll', 'server/bin/camstar.wcfservice.dll'}.issubset(files):
-        raise ValueError('WCF 客户端或服务端程序集缺失')
-    return result
+    return wcf_contract.verify_result(result, fields, names)
 
 
 def complete_wcf_receipt(result, package, fields):
     if not result.get('fields_verified') or result.get('verification_version') != 2:
         return False
     try:
-        verified = {(row['owner'], row['name']): row for row in result.get('verified_fields', [])}
+        from designer import wcf_contract
+        checked = wcf_contract.fields(result.get('verified_fields', []))
+        verified = {(row['owner'], row['name']): row for row in checked}
         if set(verified) != {(row['owner'], row['name']) for row in fields}:
             return False
         if any(row['present'] and not verified[row['owner'], row['name']]['present'] for row in fields):
@@ -291,10 +260,18 @@ def compiled_field_contracts(mdb_file, checksum, fields):
     source = source_path(mdb_file, '.mdb')
     if vendor.digest(source) != checksum:
         raise ValueError('编译 MDB 已变化')
+    from designer import wcf_contract
+    fields = wcf_contract.fields(fields)
     result = vendor.run(artifact_dir(), {'mode': 'field_contracts', 'mdb': str(source), 'fields': fields}) if fields else {'complete': True, 'fields': []}
-    if not result.get('complete') or len(result['fields']) != len(fields) or vendor.digest(source) != checksum:
+    if result.get('complete') is not True or not isinstance(result.get('fields'), list) or vendor.digest(source) != checksum:
         raise ValueError('编译字段契约检查未完成')
-    return result['fields']
+    actual = wcf_contract.fields(result['fields'], enriched=True)
+    expected = {(row['owner'], row['name']): row for row in fields}
+    if set(expected) != {(row['owner'], row['name']) for row in actual}:
+        raise ValueError('编译字段契约返回的对象或字段与请求不一致')
+    if any(expected[row['owner'], row['name']]['present'] and not row['present'] for row in actual):
+        raise ValueError('编译字段契约缺少预期字段')
+    return actual
 
 
 def wcf_archive(result):
