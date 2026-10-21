@@ -58,7 +58,7 @@ def environment(owner, identity, version=None):
 
 
 def _arguments(spec):
-    return {key: getattr(spec, key) for key in ('service', 'method', 'data', 'return_fields', 'collect_trace', 'allow_write')}
+    return {key: getattr(spec, key) for key in ('service', 'method', 'data', 'return_fields', 'selection_limit', 'collect_trace', 'allow_write')}
 
 
 def prepare(owner, spec):
@@ -80,7 +80,7 @@ def prepare(owner, spec):
                                      'calls': definition['calls'], 'references': definition['references']}
     native.invoke(item, 'validate', env, **_arguments(spec))
     if spec.readback:
-        native.invoke(item, 'validate', env, **{**_arguments(spec), 'method': 'Load', 'data': spec.readback_data, 'allow_write': False})
+        native.invoke(item, 'validate', env, **{**_arguments(spec), 'method': 'Load', 'data': spec.readback_data, 'selection_limit': 0, 'allow_write': False})
     return context, item, env
 
 
@@ -155,7 +155,7 @@ def execute(owner, spec):
                 raise ValueError(response.get('message') or '客户端或服务通信失败，未取得明确业务返回')
             readback = None
             if spec.readback and response['outcome'] == 'success':
-                readback = native.invoke(item, 'run', env, **{**_arguments(spec), 'method': 'Load', 'data': spec.readback_data, 'allow_write': False})
+                readback = native.invoke(item, 'run', env, **{**_arguments(spec), 'method': 'Load', 'data': spec.readback_data, 'selection_limit': 0, 'allow_write': False})
                 if readback.get('outcome') not in {'success', 'rejected'}:
                     raise ValueError('Load 回读未完成：' + (readback.get('message') or '客户端或服务通信失败'))
             checks = assertions(spec, response, readback)

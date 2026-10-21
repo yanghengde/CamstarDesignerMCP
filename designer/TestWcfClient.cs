@@ -155,6 +155,31 @@ public static class TestWcfClient {
             current = child;
         }
     }
+    static void RequestSelection(object info, int limit) {
+        var property = Prop(info.GetType(), "ObjectToChange");
+        if (property == null) throw new InvalidOperationException("Service does not expose an ObjectToChange selection");
+        var field = Activator.CreateInstance(property.PropertyType);
+        Prop(field.GetType(), "RequestSelectionValues").SetValue(field, true, null);
+        var selectionProperty = Prop(field.GetType(), "RequestSelectionValuesInfo");
+        var selection = Activator.CreateInstance(selectionProperty.PropertyType);
+        var optionsProperty = Prop(selection.GetType(), "Options");
+        var options = Activator.CreateInstance(optionsProperty.PropertyType);
+        Prop(options.GetType(), "RowSetSize").SetValue(options, limit, null);
+        Prop(options.GetType(), "StartRow").SetValue(options, 1, null);
+        optionsProperty.SetValue(selection, options, null);
+        selectionProperty.SetValue(field, selection, null);
+        property.SetValue(info, field, null);
+    }
+    static object Selection(object result, int limit) {
+        var selection = Get(Get(Get(result, "Environment"), "ObjectToChange"), "SelectionValues");
+        var headers = Get(selection, "Headers") as IEnumerable;
+        var rows = Get(selection, "Rows") as IEnumerable;
+        return new {
+            headers = headers == null ? new string[0] : headers.Cast<object>().Select(h => Convert.ToString(Get(h, "Name"))).ToArray(),
+            rows = rows == null ? new object[0] : rows.Cast<object>().Take(limit).Select(r => Output(Get(r, "Values"), 0)).ToArray(),
+            limit = limit
+        };
+    }
     static object Execute(Dictionary<string, object> input) {
         var mode = Convert.ToString(input["mode"]);
         if (mode == "catalog") return new { services = client.GetExportedTypes().Where(t => t.Namespace + "." == services && t.Name.EndsWith("Service") && client.GetType(stack + t.Name.Substring(0, t.Name.Length - 7)) != null).Select(t => t.Name.Substring(0, t.Name.Length - 7)).OrderBy(n => n).ToArray() };
@@ -162,7 +187,12 @@ public static class TestWcfClient {
             string name = Convert.ToString(input["service"]);
             var data = Find(stack + name);
             var service = Find(services + name + "Service");
-            return new { service = name, fields = Schema(data, 0), methods = Methods(service, data).Select(m => new { name = m.Name, writes = !readMethods.Contains(m.Name) }).ToArray() };
+            var requestInfo = Prop(Find(services + name + "_Request"), "Info");
+            var changesInfo = requestInfo == null ? null : Prop(requestInfo.PropertyType, "ObjectChanges");
+            var returnFields = changesInfo == null ? new string[0] : Properties(changesInfo.PropertyType)
+                .Where(p => p.CanWrite && Prop(p.PropertyType, "RequestValue") != null)
+                .Select(p => "ObjectChanges." + p.Name).ToArray();
+            return new { service = name, fields = Schema(data, 0), return_fields = returnFields, methods = Methods(service, data).Select(m => new { name = m.Name, writes = !readMethods.Contains(m.Name) }).ToArray() };
         }
         var profile = Activator.CreateInstance(Find(stack + "UserProfile"), new object[] { Convert.ToString(input["business_user"]), Convert.ToString(input["password"]) });
         if (input.ContainsKey("server_name") && !String.IsNullOrEmpty(Convert.ToString(input["server_name"]))) Prop(profile.GetType(), "ServerName").SetValue(profile, Convert.ToString(input["server_name"]), null);
@@ -177,6 +207,9 @@ public static class TestWcfClient {
         var dataType = Find(stack + serviceName);
         var serviceType = Find(services + serviceName + "Service");
         var methodName = Convert.ToString(input["method"]);
+        int selectionLimit = input.ContainsKey("selection_limit") ? Convert.ToInt32(input["selection_limit"]) : 0;
+        if (selectionLimit < 0 || selectionLimit > 5 || selectionLimit > 0 && (methodName != "GetEnvironment" || ((Dictionary<string, object>)input["data"]).Count != 0))
+            throw new InvalidOperationException("Selection query requires a readonly GetEnvironment request with at most five rows");
         var method = Methods(serviceType, dataType).SingleOrDefault(m => m.Name == methodName);
         if (method == null) throw new InvalidOperationException("Unsupported service method or client signature");
         bool writes = !readMethods.Contains(methodName);
@@ -187,6 +220,7 @@ public static class TestWcfClient {
         var info = Activator.CreateInstance(infoProperty.PropertyType);
         infoProperty.SetValue(request, info, null);
         foreach (var raw in (object[])input["return_fields"]) RequestField(info, Convert.ToString(raw));
+        if (selectionLimit > 0) RequestSelection(info, selectionLimit);
         if (mode == "validate") return new { validated = true, writes = writes };
         if ((bool)input["collect_trace"]) {
             var debug = Activator.CreateInstance(Find(stack + "DebugRequest"));
@@ -197,7 +231,7 @@ public static class TestWcfClient {
         var instance = Activator.CreateInstance(serviceType, new object[] { profile });
         var args = new object[] { dataObject, request, null };
         var resultStatus = method.Invoke(instance, args);
-        return new { outcome = Outcome(resultStatus), message = Message(resultStatus), exception = Output(Get(resultStatus, "ExceptionData"), 0), value = Output(Get(args[2], "Value"), 0), trace = Output(Get(Get(resultStatus, "DebugResponse"), "Trace"), 0), output_truncated = outputTruncated, writes = writes };
+        return new { outcome = Outcome(resultStatus), message = Message(resultStatus), exception = Output(Get(resultStatus, "ExceptionData"), 0), value = Output(Get(args[2], "Value"), 0), selection = selectionLimit > 0 ? Selection(args[2], selectionLimit) : null, trace = Output(Get(Get(resultStatus, "DebugResponse"), "Trace"), 0), output_truncated = outputTruncated, writes = writes };
     }
     public static int Main() {
         try {

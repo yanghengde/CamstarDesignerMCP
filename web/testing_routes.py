@@ -8,7 +8,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, ConfigDict
 
 import config
-from designer import clf, working, testing
+from designer import clf, working, testing, wcf_simple
 from designer import testing_runtime as native, testing_store as store
 from designer.testing_models import Environment, RunRequest, CaseRequest, BatchRequest, TestSpec
 from web.routes import require_progress_owner
@@ -76,6 +76,28 @@ async def bootstrap(username: str, session_id: str | None = None):
             'cases': cases, 'history': history, 'context': {key: context.get(key) for key in ('project_id', 'clf_name', 'artifact_id')},
             'defaults': {'endpoint': config.DESIGNER_WCF_ADDRESS, 'timeout': config.DESIGNER_TEST_TIMEOUT},
             'write_target_confirmed': config.DESIGNER_TEST_TARGET_CONFIRMED}
+
+
+@router.get('/api/testing/simple/bootstrap')
+async def simple_bootstrap(username: str):
+    require_progress_owner(username)
+    return await call(wcf_simple.bootstrap, username)
+
+
+@router.get('/api/testing/simple/schema/{service}')
+async def simple_schema(service: str, username: str):
+    require_progress_owner(username)
+    return await call(wcf_simple.view_schema, username, service)
+
+
+@router.post('/api/testing/simple/runs', status_code=202)
+async def simple_run(req: wcf_simple.ActionRequest):
+    require_progress_owner(req.username)
+    spec = await call(wcf_simple.build_spec, req.username, req)
+    try:
+        return await testing.start(req.username, req.request_id, spec)
+    except ValueError as exc:
+        raise HTTPException(409, native.redact(str(exc))) from None
 
 
 class EnvironmentRequest(BaseModel):

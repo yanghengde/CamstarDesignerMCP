@@ -38,6 +38,7 @@ class TestSpec(StrictModel):
     method: str = Field(pattern=r'^[A-Za-z_][A-Za-z0-9_]*$', max_length=200)
     data: dict = Field(default_factory=dict)
     return_fields: list[str] = Field(default_factory=list, max_length=100)
+    selection_limit: int = Field(default=0, ge=0, le=5)
     expected_outcome: Literal['success', 'rejected'] = 'success'
     message_contains: str = Field(default='', max_length=2000)
     assertions: list[Assertion] = Field(default_factory=list, max_length=100)
@@ -49,6 +50,8 @@ class TestSpec(StrictModel):
 
     @model_validator(mode='after')
     def validate_clf(self):
+        if self.selection_limit and (self.method != 'GetEnvironment' or self.data or self.allow_write):
+            raise ValueError('列表查询只允许不带写入数据的 GetEnvironment 请求')
         if self.kind == 'clf' and not self.clf_name:
             raise ValueError('CLF 测试需要选择真实 CLF')
         for path in self.return_fields:

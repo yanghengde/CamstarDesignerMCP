@@ -1,38 +1,267 @@
-/* Simple maintenance CRUD. CLF continues to use the full testing workbench. */
+/* Browse at most five real WCF records and edit an existing loaded row. */
 (() => {
-'use strict';
-const $=id=>document.getElementById(id), el=(tag,text)=>{const n=document.createElement(tag);if(text!==undefined)n.textContent=text;return n;};
-const names={Product:'产品',Resource:'资源',Employee:'员工',Factory:'工厂',Operation:'工序',Workflow:'工作流',Spec:'规范',UOM:'计量单位',Name:'名称',Revision:'版本',Description:'描述',ExtName:'扩展名称'};
-const ops={query:'查询',create:'新增',update:'修改',delete:'删除'};
-const excluded=new Set(['Name','Revision','FieldAction','IgnoreTypeDifference','ListItemAction','ListItemIndex','Key','CDOTypeName','Self']);
-let user='',boot,env,project,artifact,catalog,schema,operation='query',loaded=null,epoch=0,busy=false,inputs=new Map(),activeRun=null,noticeTimer;
-const json=v=>JSON.stringify(v,null,2), params=()=>new URLSearchParams({username:user});
-const title=s=>(names[s.replace(/Maint$/,'')]||s.replace(/Maint$/,''));
-function notice(message,error=false){clearTimeout(noticeTimer);$('notice').textContent=message;$('notice').hidden=!message;$('notice').classList.toggle('error',error);if(!error)noticeTimer=setTimeout(()=>$('notice').hidden=true,5000);}
-async function api(path,body){const r=await fetch(path,{cache:'no-store',...(body?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:user,...body})}:{})});const data=await r.json();if(!r.ok){const e=new Error(typeof data.detail==='string'?data.detail:json(data.detail));e.status=r.status;throw e;}return data;}
-function options(target,items,placeholder){target.replaceChildren();const blank=el('option',placeholder);blank.value='';target.append(blank);for(const [value,label] of items){const option=el('option',label);option.value=value;target.append(option);}}
-const method=()=>operation==='query'?'Load':operation==='delete'?'Delete':'ExecuteTransaction';
-function supported(op){const methods=schema?.methods.map(m=>m.name)||[];return !!schema?.fields.fields.some(f=>f.name==='ObjectToChange')&&methods.includes(op==='query'?'Load':op==='delete'?'Delete':'ExecuteTransaction')&&(op==='query'||op==='delete'||schema.fields.fields.some(f=>f.name==='ObjectChanges'));}
-function refresh(){for(const button of document.querySelectorAll('[data-op]')){button.hidden=!supported(button.dataset.op);button.disabled=busy;button.classList.toggle('active',operation===button.dataset.op);}const needsLoad=['update','delete'].includes(operation)&&!loaded;$('executeButton').textContent=busy?'正在执行…':needsLoad?'先查询对象':operation==='update'?'保存修改':'执行'+ops[operation];$('executeButton').disabled=busy||!supported(operation)||!project||!env;$('editFields').hidden=operation==='query'||operation==='delete'||needsLoad;$('operationHint').textContent=needsLoad?'先查询确认对象，再'+ops[operation]+'。':operation==='create'?'填写新对象名称及字段，保存后自动回查。':operation==='update'?'修改需要调整的字段，保存后自动回查。':operation==='delete'?'请核对下方查询结果，删除时会再次确认。':'输入名称查询对象内容。';for(const id of ['environmentSelect','objectSearch','objectSelect','objectName','objectRevision'])$(id).disabled=busy;}
-function clearLoaded(){loaded=null;refresh();}
-function setOperation(op){if(busy||!supported(op))return;operation=op;if(op==='create')loaded=null;renderFields();refresh();}
-const fields=()=>schema?.fields.fields.find(f=>f.name==='ObjectChanges')?.schema.fields||[];
-function renderFields(){inputs.clear();$('commonFields').replaceChildren();$('otherFields').replaceChildren();const priority=new Set(['Description','ExtName',...(project?.changes||[]).map(c=>c.field||c.name)]);for(const f of fields()){if(excluded.has(f.name))continue;const label=el('label',names[f.name]||f.name);label.dataset.field=f.name.toLowerCase();const t=f.schema.value_type||f.schema.type||'';let input;if(t==='System.Boolean'||f.schema.kind==='enum'){input=el('select');options(input,(f.schema.values||['true','false']).map(v=>[v,v]),'不填写');}else if(f.schema.kind==='object'||f.schema.kind==='array'){input=el('textarea');input.rows=2;input.placeholder=/ObjectRef$/.test(t)?'{"Name":"引用对象名称"}':'选填 JSON';}else{input=el('input');input.placeholder='选填';}input.setAttribute('aria-label',f.name);const original=operation==='update'?loaded?.value?.[f.name]:undefined;if(original!==undefined&&original!==null)input.value=typeof original==='object'?json(original):String(original);let dirty=false;input.oninput=()=>{dirty=true;};inputs.set(f.name,{f,input,original,dirty:()=>dirty});label.append(input);(priority.has(f.name)?$('commonFields'):$('otherFields')).append(label);}filterFields();}
-function filterFields(){const search=$('fieldSearch').value.toLowerCase().trim();for(const label of $('otherFields').children)label.hidden=!!search&&!label.dataset.field.includes(search)&&!label.textContent.includes(search);}
-function changes(){const out={};for(const [name,row] of inputs){if(operation==='update'&&!row.dirty())continue;const text=row.input.value,t=row.f.schema.value_type||row.f.schema.type||'';if(text===''&&(operation!=='update'||row.original===undefined))continue;if(t==='System.Boolean')out[name]=text==='true';else if(/System\.(Int16|Int32|Int64|Double|Single|Decimal)$/.test(t)){const n=Number(text);if(!text.trim()||!Number.isFinite(n)||(Number.isInteger(n)&&!Number.isSafeInteger(n)))throw new Error(name+' 请输入有效数值');out[name]=n;}else if(['object','array'].includes(row.f.schema.kind)){try{out[name]=JSON.parse(text,(_key,value)=>{if(typeof value==='number'&&Number.isInteger(value)&&!Number.isSafeInteger(value))throw new Error('整数超出精确范围');return value;});}catch{throw new Error(name+' 的 JSON 格式不正确');}}else out[name]=text;}return out;}
-function reference(){const Name=$('objectName').value.trim();if(!Name)throw new Error('请填写对象名称');const Revision=$('objectRevision').value.trim();return {Name,...(!$('revisionLabel').hidden?(Revision?{Revision}:{RevisionOfRecord:true}):{})};}
-function identity(){return json({env:env?.id,artifact:artifact?.id,service:schema?.service,ref:reference()});}
-function renderObjects(){const search=$('objectSearch').value.toLowerCase().trim(),selected=$('objectSelect').value;options($('objectSelect'),(catalog?.services||[]).filter(s=>s.endsWith('Maint')&&(s===selected||s.toLowerCase().includes(search)||title(s).includes(search))).map(s=>[s,title(s)+' · '+s]),'选择测试对象');$('objectSelect').value=selected;}
-async function selectObject(){const ticket=++epoch;schema=null;loaded=null;refresh();$('result').replaceChildren(el('p','请选择对象并执行查询。'));const service=$('objectSelect').value;if(!service)return;const data=await api('/api/testing/catalog/'+artifact.id+'/'+encodeURIComponent(service)+'?'+params());if(ticket!==epoch)return;schema=data;if(schema.client_sha256!==catalog.client_sha256)throw new Error('客户端已变化，请刷新页面');operation='query';$('serviceCaption').textContent=service;const ref=schema.fields.fields.find(f=>f.name==='ObjectToChange');$('revisionLabel').hidden=!ref?.schema.fields?.some(f=>f.name==='Revision');$('objectRevision').value='';renderFields();refresh();if(!supported('query'))notice('这个服务不支持对象维护查询，请选择其他对象。',true);}
-async function selectEnvironment(){const ticket=++epoch;env=boot.environments.find(e=>e.id===$('environmentSelect').value);project=null;artifact=null;schema=null;catalog=null;loaded=null;options($('objectSelect'),[],'选择测试对象');refresh();$('connection').textContent='';$('result').replaceChildren(el('p','输入对象名称后执行查询。'));if(!env)return;const projectId=env.project_id||(boot.projects.length===1?boot.projects[0].id:'');artifact=boot.artifacts.find(a=>a.id===env.artifact_id)||(!env.artifact_id&&boot.artifacts.length===1?boot.artifacts[0]:null);if(!projectId||!artifact){notice('请在环境设置中关联工作项目和默认客户端。',true);return;}$('connection').textContent='正在连接…';const selectedEnv=env,selectedArtifact=artifact;const [p,c]=await Promise.all([api('/api/testing/project/'+projectId+'?'+params()),api('/api/testing/catalog/'+artifact.id+'?'+params())]);if(ticket!==epoch)return;project=p;catalog=c;renderObjects();refresh();api('/api/testing/environments/'+selectedEnv.id+'/check',{artifact_id:selectedArtifact.id}).then(r=>{if(env?.id!==selectedEnv.id||artifact?.id!==selectedArtifact.id)return;$('connection').textContent=r.login_verified?'● 已连接':'连接失败';if(!r.login_verified)notice(r.message||'请检查环境设置。',true);}).catch(e=>{if(env?.id===selectedEnv.id){$('connection').textContent='连接失败';notice(e.message,true);}});}
-function showResult(record){const area=$('result');area.replaceChildren();const result=record.result,status=el('div',record.status==='running'?'正在执行…':record.status==='passed'?'操作成功':record.status==='failed'?'操作未完成':'执行失败');status.className='result-status '+record.status;area.append(status,el('p',title(record.spec.service)+' · '+(record.spec.method==='Load'?'查询':record.spec.method==='Delete'?'删除':record.spec.data.ObjectToChange?'修改':'新增')+' · '+new Date(record.created_utc).toLocaleString()));if(!result)return;area.append(el('p',result.error||result.message||''),el('small','耗时 '+(result.elapsed_ms??'—')+' ms'));if(result.mutation_may_have_occurred)area.append(el('p','写入可能已发生，请先查询核对后再重试。'));if(record.spec.readback)area.append(el('p',result.readback?.outcome==='success'?'已自动回查保存后的内容':'保存后的回查未成功，请查询核对。'));const value=(result.readback||result.response||result.primary_response)?.value;const rows=value?.ObjectChanges||value;if(rows&&typeof rows==='object'){const table=el('table');for(const [name,value] of Object.entries(rows)){const tr=el('tr');tr.append(el('td',names[name]||name),el('td',typeof value==='object'?json(value):String(value)));table.append(tr);}area.append(table);}const detail=el('details');detail.append(el('summary','技术详情'),el('pre',json(record)));area.append(detail);}
-async function submit(){if(busy)return;if(!env||!project||!schema)throw new Error('请选择环境和对象');const ref=reference(),key=identity();const queryFirst=['update','delete'].includes(operation)&&(!loaded||loaded.key!==key);const effective=queryFirst?'query':operation;if(effective==='delete'&&!confirm('确认删除 '+title(schema.service)+'「'+ref.Name+'」'+(ref.Revision?'，版本 '+ref.Revision:'')+'？'))return;if(effective!=='query'&&!boot.write_target_confirmed)throw new Error('当前环境尚未启用写入，请在服务配置中启用 DESIGNER_TEST_TARGET_CONFIRMED。');let data={ObjectToChange:ref},readbackRef=ref;if(effective==='create'||effective==='update'){const change=changes();if(effective==='create'){change.Name=ref.Name;if(ref.Revision)change.Revision=ref.Revision;data={ObjectChanges:change};}else data.ObjectChanges=change;}
-const requested=new Set(['Name','Revision',...(project.changes||[]).map(c=>c.field||c.name),...Object.keys(data.ObjectChanges||{})]);const available=fields().filter(f=>!excluded.has(f.name)||['Name','Revision'].includes(f.name));const ordered=[...available.filter(f=>requested.has(f.name)),...available.filter(f=>!requested.has(f.name)&&['primitive','scalar','enum'].includes(f.schema.kind))];const return_fields=ordered.slice(0,100).map(f=>'ObjectChanges.'+f.name);
-const spec={kind:'wcf',project_id:project.id,source_sha256:project.source_sha256,artifact_id:artifact.id,client_sha256:catalog.client_sha256,environment_id:env.id,environment_version:env.version,service:schema.service,method:effective==='query'?'Load':effective==='delete'?'Delete':'ExecuteTransaction',data,return_fields,allow_write:effective!=='query',readback:['create','update'].includes(effective),readback_data:['create','update'].includes(effective)?{ObjectToChange:readbackRef}:{}};
-if(effective==='query')loaded=null;busy=true;refresh();$('result').replaceChildren(el('p','正在提交…'));let request;const storage='designer-wcf-simple-pending';try{const fingerprint=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(json(spec))))).map(b=>b.toString(16).padStart(2,'0')).join('');const pending=JSON.parse(sessionStorage.getItem(storage)||'null');if(pending&&pending.fingerprint!==fingerprint)throw new Error('上次提交结果尚未确认，请刷新查看记录后再操作。');request=pending||{id:crypto.randomUUID().replaceAll('-',''),fingerprint};sessionStorage.setItem(storage,json(request));let record=await api('/api/testing/runs',{request_id:request.id,spec});sessionStorage.removeItem(storage);activeRun=record.id;while(record.status==='running'){showResult(record);await new Promise(resolve=>setTimeout(resolve,900));record=await api('/api/testing/runs/'+record.id+'?'+params());}showResult(record);if(effective==='query'&&record.status==='passed'){loaded={key,value:record.result.response?.value?.ObjectChanges||{}};renderFields();}else loaded=null;boot.history=[record,...boot.history.filter(r=>r.id!==record.id)];renderHistory();}catch(error){if(error.status&&error.status<500)sessionStorage.removeItem(storage);$('result').replaceChildren(el('p',error.message));throw error;}finally{busy=false;activeRun=null;refresh();}}
-function renderHistory(){const list=$('historyList');list.replaceChildren();for(const record of boot.history.filter(r=>r.spec.kind==='wcf')){const button=el('button',title(record.spec.service)+' · '+(record.spec.method==='Load'?'查询':record.spec.method==='Delete'?'删除':record.spec.data.ObjectToChange?'修改':'新增')+' · '+new Date(record.created_utc).toLocaleString());button.className='button';button.onclick=()=>{if(!busy)showResult(record);};list.append(button);}}
-function handle(fn){return ()=>Promise.resolve().then(fn).catch(e=>notice(e.message,true));}
-$('environmentSelect').onchange=handle(selectEnvironment);$('objectSelect').onchange=handle(selectObject);$('objectSearch').oninput=renderObjects;$('fieldSearch').oninput=filterFields;$('objectName').oninput=clearLoaded;$('objectRevision').oninput=clearLoaded;$('executeButton').onclick=handle(submit);$('historyToggle').onclick=()=>{$('historyPanel').hidden=!$('historyPanel').hidden;$('historyToggle').setAttribute('aria-expanded',String(!$('historyPanel').hidden));};for(const button of document.querySelectorAll('[data-op]'))button.onclick=()=>setOperation(button.dataset.op);
-$('wcfNav').classList.add('active');$('wcfNav').setAttribute('aria-current','page');
-handle(async()=>{user=(await api('/config')).username;$('usernameLabel').textContent=user;boot=await api('/api/testing/bootstrap?'+params());options($('environmentSelect'),boot.environments.map(e=>[e.id,e.name]),'选择测试环境');$('environmentSelect').value=boot.environments[0]?.id||'';renderHistory();await selectEnvironment();if(!boot.environments.length)notice('请先在环境设置中添加测试环境。',true);const pending=JSON.parse(sessionStorage.getItem('designer-wcf-simple-pending')||'null');if(pending&&boot.history.some(r=>r.request_id===pending.id))sessionStorage.removeItem('designer-wcf-simple-pending');const running=boot.history.find(r=>r.spec.kind==='wcf'&&r.status==='running');if(running){busy=true;refresh();let record=running;try{while(record.status==='running'){showResult(record);await new Promise(resolve=>setTimeout(resolve,900));record=await api('/api/testing/runs/'+record.id+'?'+params());}showResult(record);}finally{busy=false;refresh();}}})();
+  'use strict';
+  const $ = id => document.getElementById(id);
+  const element = (tag, text) => {
+    const node = document.createElement(tag);
+    if (text !== undefined) node.textContent = text;
+    return node;
+  };
+  const names = {Product:'产品', Resource:'资源', Employee:'员工', Factory:'工厂', Operation:'工序',
+    Workflow:'工作流', Spec:'规范', UOM:'计量单位', Name:'名称', Revision:'版本', Description:'描述',
+    ExtName:'扩展名称', LastEditTime:'最后修改时间', LastEditedBy:'最后修改人', Status:'状态'};
+  const storage = 'designer-wcf-simple-request';
+  let user = '', boot = null, schema = null, loadRecord = null, busy = false, epoch = 0;
+  const inputs = new Map();
+  const title = service => names[service.replace(/Maint$/, '')] || service.replace(/Maint$/, '');
+  const queryParams = () => new URLSearchParams({username:user});
+  const json = value => JSON.stringify(value, null, 2);
+  function notice(message, error = false) {
+    $('notice').textContent = message; $('notice').hidden = !message;
+    $('notice').classList.toggle('error', error);
+  }
+  async function api(path, body) {
+    const response = await fetch(path, {cache:'no-store', ...(body ? {
+      method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({username:user, ...body})
+    } : {})});
+    const data = await response.json();
+    if (!response.ok) {
+      const error = new Error(typeof data.detail === 'string' ? data.detail : json(data.detail));
+      error.status = response.status; throw error;
+    }
+    return data;
+  }
+  function refresh() {
+    $('queryButton').disabled = busy || !schema?.can_query;
+    $('queryButton').textContent = busy ? '正在处理…' : '查询前 5 条';
+    $('objectSelect').disabled = busy; $('objectSearch').disabled = busy;
+    $('saveButton').disabled = busy || !loadRecord || !boot?.write_target_confirmed ||
+      !Array.from(inputs.values()).some(row => row.dirty);
+    $('closeEditor').disabled = busy; $('cancelEdit').disabled = busy;
+    for (const button of document.querySelectorAll('[data-edit-row]')) {
+      button.disabled = busy || !schema?.can_edit || button.dataset.service !== schema.service;
+    }
+  }
+  function renderObjects() {
+    const search = $('objectSearch').value.trim().toLowerCase(), selected = $('objectSelect').value;
+    $('objectSelect').replaceChildren(element('option', '选择测试对象'));
+    $('objectSelect').firstChild.value = '';
+    for (const service of boot?.services || []) {
+      if (service !== selected && search && !service.toLowerCase().includes(search) && !title(service).includes(search)) continue;
+      const option = element('option', title(service) + ' · ' + service); option.value = service;
+      $('objectSelect').append(option);
+    }
+    $('objectSelect').value = selected;
+  }
+  async function selectObject() {
+    const ticket = ++epoch;
+    schema = null; loadRecord = null;
+    $('result').replaceChildren(element('p', '点击“查询前 5 条”获取当前对象的数据。')); refresh();
+    const service = $('objectSelect').value;
+    $('serviceCaption').textContent = service || '选择对象后即可查询，无需填写对象名称。';
+    if (!service) return;
+    const result = await api('/api/testing/simple/schema/' + encodeURIComponent(service) + '?' + queryParams());
+    if (ticket !== epoch) return;
+    schema = result; refresh();
+    notice(schema.can_query ? '' : '此对象暂不支持列表查询，请选择其他对象。', !schema.can_query);
+  }
+  function responseValue(record) {
+    return (record.result?.readback || record.result?.response || record.result?.primary_response)?.value?.ObjectChanges || {};
+  }
+  function showResult(record) {
+    const area = $('result'); area.replaceChildren();
+    const selection = record.result?.response?.selection, rows = selection?.rows?.slice(0, 5) || [];
+    const isQuery = record.spec.method === 'GetEnvironment' && record.spec.selection_limit === 5;
+    const passed = record.status === 'passed';
+    const status = element('div', record.status === 'running' ? '正在请求 WCF…' :
+      passed ? (isQuery ? (rows.length ? 'WCF 查询通过' : 'WCF 查询通过，暂无数据') : '操作通过') : 'WCF 请求未通过');
+    status.className = 'result-status ' + record.status; area.append(status);
+    if (record.result?.error) area.append(element('p', record.result.error));
+    else if (!passed && record.result?.message) area.append(element('p', record.result.message));
+    if (passed && isQuery) {
+      const headers = selection?.headers || [];
+      const columns = ['Name', 'Revision', 'Description', 'LastEditTime'].filter(name => headers.includes(name));
+      if (!rows.length) area.append(element('p', '返回 0 条记录，本次接口查询成功。'));
+      else {
+        const wrap = element('div'); wrap.className = 'table-scroll';
+        const table = element('table'), head = element('tr'), thead = element('thead'), body = element('tbody');
+        for (const column of columns) head.append(element('th', names[column] || column));
+        head.append(element('th', '操作')); thead.append(head); table.append(thead);
+        rows.forEach((values, index) => {
+          const row = element('tr');
+          for (const column of columns) row.append(element('td', values[headers.indexOf(column)] ?? ''));
+          const action = element('td'), button = element('button', '编辑');
+          button.type = 'button'; button.className = 'button edit-row';
+          button.dataset.editRow = String(index); button.dataset.service = record.spec.service;
+          button.setAttribute('aria-label', '编辑 ' + (values[headers.indexOf('Name')] || '记录'));
+          button.onclick = handle(() => editRow(record, index));
+          button.disabled = busy || !schema?.can_edit || record.spec.service !== schema.service;
+          action.append(button); row.append(action); body.append(row);
+        });
+        table.append(body); wrap.append(table); area.append(wrap);
+        area.append(element('small', '本次返回 ' + rows.length + ' 条，最多查询 5 条。'));
+      }
+      $('connection').textContent = '● 已连接';
+    } else if (passed) {
+      const list = element('dl');
+      for (const [key, value] of Object.entries(responseValue(record))) {
+        if (typeof value !== 'object') list.append(element('dt', names[key] || key), element('dd', String(value ?? '')));
+      }
+      area.append(list);
+    }
+    if (record.result?.mutation_may_have_occurred) area.append(element('p', '保存结果尚未确认，请先重新查询核对。'));
+    const detail = element('details');
+    detail.append(element('summary', '查看请求记录'), element('pre', json(record))); area.append(detail);
+  }
+  function renderHistory() {
+    $('historyList').replaceChildren();
+    for (const record of boot.history) {
+      const operation = {GetEnvironment:'查询', Load:'读取记录', ExecuteTransaction:'修改'}[record.spec.method] || '历史操作';
+      const button = element('button', title(record.spec.service) + ' · ' + operation + ' · ' + new Date(record.created_utc).toLocaleString());
+      button.className = 'button'; button.onclick = () => { if (!busy) { showResult(record); refresh(); } };
+      $('historyList').append(button);
+    }
+  }
+  async function requestAction(action, extra = {}, progress) {
+    const body = {action, service:$('objectSelect').value, ...extra}, fingerprint = json(body);
+    const pending = JSON.parse(sessionStorage.getItem(storage) || 'null');
+    if (pending && pending.fingerprint !== fingerprint) throw new Error('上次请求结果尚未确认，请刷新查看测试记录后再操作。');
+    const request = pending || {id:crypto.randomUUID().replaceAll('-', ''), fingerprint};
+    sessionStorage.setItem(storage, json(request));
+    let record;
+    try {
+      record = await api('/api/testing/simple/runs', {...body, request_id:request.id});
+      sessionStorage.removeItem(storage);
+    } catch (error) {
+      if (error.status && error.status < 500) sessionStorage.removeItem(storage);
+      throw error;
+    }
+    while (record.status === 'running') {
+      if (progress) progress(record);
+      await new Promise(resolve => setTimeout(resolve, 800));
+      record = await api('/api/testing/runs/' + record.id + '?' + queryParams());
+    }
+    boot.history = [record, ...boot.history.filter(row => row.id !== record.id)]; renderHistory();
+    return record;
+  }
+  async function query() {
+    if (busy || !schema?.can_query) return;
+    busy = true; loadRecord = null; refresh(); notice('');
+    $('result').replaceChildren(element('p', '正在查询前 5 条数据…'));
+    try { showResult(await requestAction('query', {}, showResult)); }
+    catch (error) { $('result').replaceChildren(element('p', error.message)); throw error; }
+    finally { busy = false; refresh(); }
+  }
+  function renderFields() {
+    inputs.clear(); $('commonFields').replaceChildren(); $('otherFields').replaceChildren(); $('fieldSearch').value = '';
+    const original = responseValue(loadRecord);
+    for (const field of schema.editable_fields) {
+      if (!(field.name in original)) continue;
+      const value = original[field.name], type = field.schema.value_type || field.schema.type;
+      const label = element('label', names[field.name] || field.name); label.dataset.field = field.name.toLowerCase();
+      let input;
+      if (type === 'System.Boolean' || field.schema.kind === 'enum') {
+        input = element('select');
+        if (value == null) { const blank = element('option', '未设置'); blank.value = ''; blank.disabled = true; input.append(blank); }
+        for (const item of field.schema.values || ['true', 'false']) {
+          const option = element('option', item === 'true' ? '是' : item === 'false' ? '否' : item); option.value = item; input.append(option);
+        }
+      } else { input = element(field.name === 'Description' ? 'textarea' : 'input'); if (input.tagName === 'TEXTAREA') input.rows = 3; }
+      input.value = value == null ? '' : String(value); input.setAttribute('aria-label', field.name);
+      const row = {field, input, original:value, dirty:false};
+      input.oninput = () => { row.dirty = input.value !== (value == null ? '' : String(value)); refresh(); };
+      inputs.set(field.name, row); label.append(input);
+      (['Description', 'ExtName'].includes(field.name) || /^Ex/.test(field.name) ? $('commonFields') : $('otherFields')).append(label);
+    }
+    $('otherFieldsDetails').hidden = !$('otherFields').children.length;
+    $('otherFieldsDetails').open = !$('commonFields').children.length;
+  }
+  async function editRow(record, index) {
+    if (busy || !schema?.can_edit || record.spec.service !== schema.service) return;
+    busy = true; loadRecord = null; inputs.clear(); refresh();
+    $('commonFields').replaceChildren(); $('otherFields').replaceChildren(); $('otherFieldsDetails').hidden = true;
+    $('editTitle').textContent = '编辑' + title(record.spec.service); $('editIdentity').textContent = '';
+    $('editStatus').textContent = '正在读取记录…'; $('editDialog').showModal();
+    try {
+      const result = await requestAction('load', {source_run_id:record.id, row_index:index});
+      if (result.status !== 'passed') throw new Error(result.result?.error || result.result?.message || '读取记录失败');
+      loadRecord = result;
+      const ref = result.spec.data.ObjectToChange;
+      $('editIdentity').textContent = ref.Name + (ref.Revision ? ' · 版本 ' + ref.Revision : '');
+      $('editStatus').textContent = boot.write_target_confirmed ? '修改需要调整的字段，保存后自动回读核对。' : '当前系统尚未允许修改业务数据。';
+      renderFields();
+    } catch (error) { $('editStatus').textContent = error.message; }
+    finally { busy = false; refresh(); }
+  }
+  function changes() {
+    const data = {};
+    for (const [name, row] of inputs) {
+      if (!row.dirty) continue;
+      const type = row.field.schema.value_type || row.field.schema.type, text = row.input.value;
+      if (type === 'System.Boolean') data[name] = text === 'true';
+      else if (/System\.(Int16|Int32|Int64|Double|Single|Decimal)$/.test(type)) {
+        const value = Number(text);
+        if (!text.trim() || !Number.isFinite(value) || (Number.isInteger(value) && !Number.isSafeInteger(value))) throw new Error(name + ' 请输入有效数值');
+        data[name] = value;
+      } else data[name] = text;
+    }
+    return data;
+  }
+  async function save() {
+    if (busy || !loadRecord) return;
+    let data;
+    try { data = changes(); }
+    catch (error) { $('editStatus').textContent = error.message; return; }
+    if (!Object.keys(data).length) return;
+    busy = true; refresh(); $('editStatus').textContent = '正在保存并回读核对…';
+    let saved = false;
+    try {
+      const record = await requestAction('update', {source_run_id:loadRecord.id, changes:data});
+      if (record.status !== 'passed') {
+        const uncertain = record.result?.mutation_may_have_occurred || record.result?.primary_response?.outcome === 'success' || record.result?.response?.outcome === 'success';
+        throw new Error((record.result?.error || record.result?.message || '保存后的字段核对未通过') + (uncertain ? '；请先重新查询核对，避免重复保存。' : ''));
+      }
+      saved = true; loadRecord = null; $('editDialog').close(); notice('修改已保存，回读核对通过。');
+    } catch (error) {
+      loadRecord = null;
+      $('editStatus').textContent = error.message + ' 请关闭编辑后重新查询核对。';
+    }
+    finally { busy = false; refresh(); }
+    if (saved) { await query(); notice('修改已保存，回读核对通过。'); }
+  }
+  function handle(action) { return () => Promise.resolve().then(action).catch(error => notice(error.message, true)); }
+  $('objectSearch').oninput = renderObjects; $('objectSelect').onchange = handle(selectObject);
+  $('queryButton').onclick = handle(query);
+  $('editForm').onsubmit = event => { event.preventDefault(); handle(save)(); };
+  $('fieldSearch').oninput = () => {
+    const search = $('fieldSearch').value.trim().toLowerCase();
+    for (const label of $('otherFields').children) label.hidden = !!search && !label.dataset.field.includes(search) && !label.textContent.includes(search);
+  };
+  for (const id of ['closeEditor', 'cancelEdit']) $(id).onclick = () => { if (!busy) $('editDialog').close(); };
+  $('editDialog').oncancel = event => { if (busy) event.preventDefault(); };
+  $('historyToggle').onclick = () => {
+    $('historyPanel').hidden = !$('historyPanel').hidden;
+    $('historyToggle').setAttribute('aria-expanded', String(!$('historyPanel').hidden));
+  };
+  $('wcfNav').classList.add('active'); $('wcfNav').setAttribute('aria-current', 'page');
+  handle(async () => {
+    user = (await api('/config')).username; $('usernameLabel').textContent = user;
+    boot = await api('/api/testing/simple/bootstrap?' + queryParams()); $('connection').textContent = '默认配置已载入';
+    renderObjects(); renderHistory();
+    $('objectSelect').value = boot.services.includes('ProductMaint') ? 'ProductMaint' : boot.services[0] || '';
+    await selectObject();
+    const pending = JSON.parse(sessionStorage.getItem(storage) || 'null');
+    if (pending && boot.history.some(row => row.request_id === pending.id)) sessionStorage.removeItem(storage);
+    const running = boot.history.find(row => row.status === 'running');
+    if (running) {
+      busy = true; refresh(); let record = running;
+      try {
+        while (record.status === 'running') {
+          showResult(record); await new Promise(resolve => setTimeout(resolve, 800));
+          record = await api('/api/testing/runs/' + record.id + '?' + queryParams());
+        }
+        showResult(record);
+      } finally { busy = false; refresh(); }
+    }
+  })();
 })();
