@@ -194,13 +194,28 @@ async def save_case(req: CaseRequest):
     require_progress_owner(req.username)
     await call(testing.project, req.spec.project_id, req.spec.source_sha256)
     await call(store.item, req.username, 'environment', req.spec.environment_id)
-    return await call(store.save, req.username, 'case', {'name': req.name, 'spec': native.redact(req.spec.model_copy(update={'allow_write': False}).model_dump())})
+    revision = 1
+    if req.parent_run_id:
+        parent = await call(store.run, req.username, req.parent_run_id)
+        if parent['spec']['project_id'] != req.spec.project_id:
+            raise HTTPException(409, '来源运行不属于当前项目')
+    if req.parent_case_id:
+        parent = await call(store.item, req.username, 'case', req.parent_case_id)
+        if parent['spec']['project_id'] != req.spec.project_id:
+            raise HTTPException(409, '来源用例不属于当前项目')
+        revision = parent.get('revision', 1) + 1
+    return await call(store.save, req.username, 'case', {'name': req.name, 'schema_version': 1, 'revision': revision,
+        'group': req.group, 'parent_run_id': req.parent_run_id, 'parent_case_id': req.parent_case_id,
+        'spec': native.redact(req.spec.model_copy(update={'allow_write': False}).model_dump())})
 
 
 @router.delete('/api/testing/cases/{identity}')
 async def delete_case(identity: str, username: str):
     require_progress_owner(username)
     await call(store.item, username, 'case', identity)
+    children = await call(store.items, username, 'case')
+    if any(c.get('parent_case_id') == identity for c in children):
+        raise HTTPException(409, '该用例仍被后续修订引用，请保留来源用例')
     await call(store.delete, username, 'case', identity)
     return {'deleted': True}
 

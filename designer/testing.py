@@ -141,20 +141,24 @@ def trace_evidence(trace, name):
     return matches
 
 
-def execute(owner, spec):
+def execute(owner, spec, on_phase=None):
     started = time.monotonic()
     response = None
     attempted = False
     env = {}
+    phase = on_phase or (lambda value: None)
     try:
         with _execution_lock:
+            phase('preparing')
             context, item, env = prepare(owner, spec)
             attempted = True
+            phase('invoking')
             response = native.invoke(item, 'run', env, **_arguments(spec))
             if response.get('outcome') not in {'success', 'rejected'}:
                 raise ValueError(response.get('message') or '客户端或服务通信失败，未取得明确业务返回')
             readback = None
             if spec.readback and response['outcome'] == 'success':
+                phase('readback')
                 readback = native.invoke(item, 'run', env, **{**_arguments(spec), 'method': 'Load', 'data': spec.readback_data, 'selection_limit': 0, 'allow_write': False})
                 if readback.get('outcome') not in {'success', 'rejected'}:
                     raise ValueError('Load 回读未完成：' + (readback.get('message') or '客户端或服务通信失败'))
@@ -166,6 +170,7 @@ def execute(owner, spec):
             passed = all(check['passed'] for check in checks)
             result = {'status': 'passed' if passed else 'failed', 'outcome': response['outcome'],
                       'message': response.get('message', ''), 'checks': checks, 'response': response, 'readback': readback,
+                      'execution_phase': 'completed',
                       'source_current': current, 'source_sha256': spec.source_sha256, 'client_sha256': spec.client_sha256,
                       'compiled_sha256': item['compiled_sha256'], 'environment': store.public_environment({key: value for key, value in env.items() if key != 'password'}),
                       'deployment_version_verified': False, 'artifact_project_link_verified': False,
@@ -177,6 +182,7 @@ def execute(owner, spec):
             return native.redact({**result, 'elapsed_ms': round((time.monotonic() - started) * 1000)}, [env.get('password', '')])
     except Exception as exc:
         return native.redact({'status': 'error', 'outcome': 'unknown', 'runtime_verified': False,
+                              'execution_phase': 'rejected_before_invoke' if not attempted else 'readback_failed' if (response or {}).get('outcome') == 'success' else 'unknown_after_invoke',
                               'error': str(exc), 'primary_response': response,
                               'mutation_may_have_occurred': attempted and spec.method not in native.READ_METHODS and spec.allow_write,
                               'elapsed_ms': round((time.monotonic() - started) * 1000)}, [env.get('password', '')])
@@ -190,7 +196,7 @@ async def start(owner, request_id, spec):
     record, created = await asyncio.to_thread(store.begin, owner, request_id, sha256(encoded.encode()).hexdigest(), native.redact(payload))
     if created:
         async def background():
-            result = await asyncio.to_thread(execute, owner, spec)
+            result = await asyncio.to_thread(execute, owner, spec, lambda value: store.phase(owner, record['id'], value))
             await asyncio.to_thread(store.finish, owner, record['id'], result)
         task = asyncio.create_task(background())
         _tasks.add(task)

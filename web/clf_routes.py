@@ -14,6 +14,18 @@ from designer.attachments import resolve_attachments, AttachmentError
 from web.routes import require_progress_owner
 
 router = APIRouter()
+from web.clf_core_routes import router as core_router
+router.include_router(core_router)
+
+
+@router.get('/clf-core.js')
+def core_script():
+    return FileResponse('static/clf-core.js', media_type='text/javascript', headers={'Cache-Control': 'no-cache'})
+
+
+@router.get('/clf-core.css')
+def core_style():
+    return FileResponse('static/clf-core.css', media_type='text/css', headers={'Cache-Control': 'no-cache'})
 
 
 def require_clf(username, session_id):

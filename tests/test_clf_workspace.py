@@ -118,6 +118,24 @@ def test_actual_call_identity_order_and_truncated_reference_scope(tmp_path, monk
         clf.get_clf(str(source),'ExLogic','0'*64)
 
 
+def test_attached_values_are_opt_in_and_never_replace_library_defaults(tmp_path, monkeypatch):
+    source, checksum = mock_reads(monkeypatch, tmp_path)
+    raw = raw_clf()
+    binding = {'CLFEventMapID': 77, 'owner_name': 'Spec', 'attached_parameters': [
+        {'CLFFunctionID': 2, 'Name': 'Value', 'ValueExpression': '99', 'WorkspaceCode': '200'}]}
+    def batch(path, queries):
+        detail = {**raw, **({'bindings': [binding]} if queries[0].get('owner') == 'attached_parameters' else {})}
+        return {'results': [{'result': detail}, {'result': {'where_used': [], 'total': 0}}]}
+    monkeypatch.setattr(vendor, 'query_batch', batch)
+    ordinary = clf.get_clf(str(source), 'ExLogic', checksum)
+    full = clf.get_clf(str(source), 'ExLogic', checksum, True)
+    assert ordinary['bindings_omitted'] and ordinary['bindings'] == []
+    assert full['binding_parameters_available'] and not full['bindings_omitted']
+    assert full['calls'][1]['parameters'][0]['value'] == '1'
+    assert full['bindings'][0]['attached_parameters'][0]['ValueExpression'] == '99'
+    assert vendor.digest(source) == checksum
+
+
 def test_plan_preview_uses_native_preflight_and_never_claims_execution(tmp_path, monkeypatch):
     source,checksum=mock_reads(monkeypatch,tmp_path)
     seen=[]

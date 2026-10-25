@@ -104,7 +104,7 @@ def public_environment(document):
 
 
 def begin(owner, request_id, fingerprint, spec):
-    document = {'id': uuid4().hex, 'request_id': request_id, 'status': 'running', 'created_utc': now(), 'spec': spec, 'result': None}
+    document = {'id': uuid4().hex, 'request_id': request_id, 'status': 'running', 'execution_phase': 'queued', 'created_utc': now(), 'spec': spec, 'result': None}
     with connection() as conn:
         conn.execute('INSERT OR IGNORE INTO test_runs VALUES (?,?,?,?,?,?)',
                      (document['id'], owner, request_id, fingerprint, json.dumps(document, ensure_ascii=False), now()))
@@ -118,10 +118,27 @@ def begin(owner, request_id, fingerprint, spec):
 def finish(owner, identity, result):
     document = run(owner, identity)
     document.update(status=result['status'], result=result, finished_utc=now())
+    document['execution_phase'] = result.get('execution_phase', 'completed')
     with connection() as conn:
         conn.execute('UPDATE test_runs SET document=?,updated=? WHERE id=? AND owner=?',
                      (json.dumps(document, ensure_ascii=False), now(), identity, owner))
     return document
+
+
+def phase(owner, identity, value):
+    """Only the executor reports phases; UI elapsed time never implies invocation."""
+    with connection() as conn:
+        conn.execute('BEGIN IMMEDIATE')
+        row = conn.execute('SELECT document FROM test_runs WHERE owner=? AND id=?', (owner, identity)).fetchone()
+        if not row:
+            raise ValueError('测试记录不存在或不属于当前用户')
+        document = json.loads(row[0])
+        if document['status'] != 'running':
+            return
+        document['execution_phase'] = value
+        document['phase_updated_utc'] = now()
+        conn.execute('UPDATE test_runs SET document=?,updated=? WHERE owner=? AND id=?',
+                     (json.dumps(document, ensure_ascii=False), now(), owner, identity))
 
 
 def run(owner, identity):

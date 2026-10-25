@@ -902,6 +902,21 @@ public static class DesignerVendorBridge {
       }
       if(obj is CDOField) record["events"]=Values(((CDOField)obj).Events).Select(Record).ToArray();
       if(obj is CLFDefinition) record=ClfRecord((CLFDefinition)obj);
+      if(obj is CLFDefinition && owner=="attached_parameters") {
+       var clf=(CLFDefinition)obj;
+       record["parameter_definitions"]=clf.CLFFunctions.Where(x=>x.FunctionDefinition!=null).Select(x=>x.FunctionDefinition)
+        .GroupBy(x=>x.FunctionID).Select(group=>Dict("name",group.First().Name,
+         "parameters",Values(group.First().Parameters).Select(Record).ToArray())).ToArray();
+       record["bindings"]=set.CLFEventMaps.Values.Where(x=>x.CLFID==clf.CLFID && x.ModifiedStatus!=ModifiedStatusEnum.Deleted).Select(map=>{
+        var binding=Record(map);
+        CDODefinition cdo;
+        binding["owner_name"]=set.CDODefinitions.TryGetValue(map.CDODefID,out cdo)?cdo.Name:"";
+        binding["field_name"]=cdo==null || map.CallerID==map.CDODefID?"":Values(cdo.AllFields).Where(x=>((CDOField)x).FieldID==map.CallerID).Select(Name).FirstOrDefault();
+        binding["attached_parameters"]=map.AllFunctionParameters.Values.Select(Record).ToArray();
+        binding["parameter_scope"]="selected_vendor_event_map";
+        return binding;
+       }).ToArray();
+      }
       if(obj is CLFFunction) record["parameters"]=Values(((CLFFunction)obj).Parameters).Select(Record).ToArray();
       if(obj is QueryDef) { record["query_texts"]=Values(((QueryDef)obj).QueryTexts).Select(Record).ToArray(); record["parameters"]=Values(((QueryDef)obj).Parameters).Select(Record).ToArray(); }
       result=record;

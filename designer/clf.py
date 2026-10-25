@@ -102,9 +102,10 @@ def clf_view(record):
             'calls': calls, 'declared_parameters': record.get('declared_parameters', [])}
 
 
-def get_clf(mdb_file, name, expected_sha256=''):
+def get_clf(mdb_file, name, expected_sha256='', include_bindings=False):
     path, checksum = source(mdb_file, expected_sha256)
-    batch = vendor.query_batch(str(path), [{'mode': 'get', 'kind': 'clf', 'name': name},
+    batch = vendor.query_batch(str(path), [{'mode': 'get', 'kind': 'clf', 'name': name,
+                                          **({'owner': 'attached_parameters'} if include_bindings else {})},
                                          {'mode': 'impact', 'kind': 'clf', 'name': name}])
     detail, references = [entry['result'] for entry in batch['results']]
     if detail.get('status') == 'failed':
@@ -112,6 +113,10 @@ def get_clf(mdb_file, name, expected_sha256=''):
     _unchanged(path, checksum)
     return {'format': 'designer_clf_v1', 'status': 'read', 'read_only': True,
             'source_file': str(path), 'source_sha256': checksum, **clf_view(detail),
+            'bindings': detail.get('bindings', []),
+            'binding_parameters_available': 'bindings' in detail,
+            'bindings_omitted': not include_bindings,
+            'parameter_definitions': detail.get('parameter_definitions', []),
             'references': {'available': references.get('status') != 'failed',
                            'rows': references.get('where_used', []), 'total': references.get('total'),
                            'truncated': references.get('truncated', False), 'error': references.get('error', ''),

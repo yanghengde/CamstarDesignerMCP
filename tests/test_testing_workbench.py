@@ -67,6 +67,18 @@ def completed(client, identity):
     pytest.fail('Background test did not complete')
 
 
+def test_case_groups_and_lineage_preserve_write_boundary(setup):
+    client, spec, *_ = setup
+    first = client.post('/api/testing/cases', json={'username': 'user', 'name': '边界', 'spec': spec, 'group': 'boundary'}).json()
+    assert first['group'] == 'boundary' and first['revision'] == 1
+    assert first['spec']['allow_write'] is False
+    second = client.post('/api/testing/cases', json={'username': 'user', 'name': '边界修订', 'spec': spec,
+        'group': 'boundary', 'parent_case_id': first['id']}).json()
+    assert second['revision'] == 2 and second['parent_case_id'] == first['id']
+    assert client.delete('/api/testing/cases/'+first['id']+'?username=user').status_code == 409
+    assert client.delete('/api/testing/cases/'+second['id']+'?username=user').status_code == 200
+
+
 def run(client, spec, identity='1' * 32):
     response = client.post('/api/testing/runs', json={'username': 'user', 'request_id': identity, 'spec': spec})
     assert response.status_code == 202, response.text

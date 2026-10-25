@@ -195,6 +195,9 @@ async def upload_excel(
 @router.get("/clf/records")
 def index(request: Request):
     """Serve the assistant or records page, retaining legacy record links."""
+    if request.url.path == '/clf' and not (request.query_params.get('session_id') or request.query_params.get('assistant')):
+        with open('static/clf-core.html', encoding='utf-8') as file:
+            return HTMLResponse(file.read(), headers={'Cache-Control': 'no-store'})
     if request.url.path == '/' and request.query_params.get('view') == 'records':
         query = urlencode([(key, value) for key, value in request.query_params.multi_items() if key != 'view'])
         return RedirectResponse('/records' + ('?' + query if query else ''), status_code=307)

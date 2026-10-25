@@ -69,6 +69,9 @@ class CaseRequest(StrictModel):
     username: str
     name: str = Field(min_length=1, max_length=200)
     spec: TestSpec
+    group: Literal['normal', 'exception', 'boundary', 'custom'] = 'custom'
+    parent_run_id: str = Field(default='', pattern=r'^(?:[0-9a-f]{32})?$')
+    parent_case_id: str = Field(default='', pattern=r'^(?:[0-9a-f]{32})?$')
 
 
 class BatchRequest(StrictModel):
