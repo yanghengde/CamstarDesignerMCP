@@ -1,5 +1,6 @@
 """CLF read models and native in-memory plan previews shared by MCP and UI."""
 import json
+import re
 from hashlib import sha256
 from pathlib import Path
 
@@ -115,6 +116,31 @@ def get_clf(mdb_file, name, expected_sha256=''):
                            'rows': references.get('where_used', []), 'total': references.get('total'),
                            'truncated': references.get('truncated', False), 'error': references.get('error', ''),
                            'scope': 'vendor_where_used', 'runtime_usage_verified': False}}
+
+
+def analysis_context(mdb_file, name, expected_sha256=''):
+    """Bundle exact function/parameter/label definitions without loading whole CDOs."""
+    result = get_clf(mdb_file, name, expected_sha256)
+    functions = list(dict.fromkeys(call['function'] for call in result['calls'] if call.get('function')))
+    labels = sorted({label for call in result['calls'] for parameter in call['parameters']
+                     for label in re.findall(r'\bLabelId::([A-Za-z_]\w*)', str(parameter.get('value', '')))})
+    queries = []
+    for function in functions:
+        queries.extend([{'mode': 'get', 'kind': 'function', 'name': function},
+                        {'mode': 'list', 'kind': 'function_parameter', 'owner': function, 'limit': 1000}])
+    queries.extend({'mode': 'get', 'kind': 'label', 'name': label} for label in labels)
+    entries = []
+    for offset in range(0, len(queries), 20):
+        batch = vendor.query_batch(mdb_file, queries[offset:offset + 20])
+        entries.extend(batch['results'])
+    path, _ = source(mdb_file, result['source_sha256'])
+    _unchanged(path, result['source_sha256'])
+    result['analysis'] = {
+        'definitions': entries, 'scope': 'direct_functions_parameters_and_explicit_label_ids',
+        'nested_clfs_expanded': False, 'runtime_verified': False,
+        'notice': '调用顺序、表达式、声明参数和引用已经一并提供；先据此回答。仅缺少用户问题所需证据时补查。嵌套 CLF、callsuper 和动态调用未自动展开，不能据此宣称整笔交易的全部规则已核实。',
+    }
+    return result
 
 
 def inspect_plan(mdb_file, expected_sha256, operations, workspace='', requirements=None, test_cases=None):

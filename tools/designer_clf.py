@@ -108,9 +108,14 @@ async def list_designer_clfs(mdb_file: str, search: str = '', offset: int = 0, l
 
 
 @mcp.tool
-async def get_designer_clf(mdb_file: str, name: str, expected_sha256: str = '') -> dict:
-    """只读获取 CLF 有序函数调用、调用参数、声明参数与官方引用范围。重复函数按 call_id 区分；不能把空引用当作没有动态调用。"""
-    return await asyncio.to_thread(clf.get_clf, mdb_file, name, expected_sha256)
+async def get_designer_clf(mdb_file: str, name: str, expected_sha256: str = '', include_analysis: bool = True) -> dict:
+    """只读一次获取 CLF 有序调用、表达式、声明参数、官方引用及直接函数定义、函数参数和显式 LabelId 标签。
+
+    解释规则优先一次调用本工具，按返回证据回答；不要例行再查整份业务对象、相同 CLF/schema 或重复分页原始回执。
+    include_analysis=false 只读取调用与引用。重复函数按 call_id 区分；引用/参数失败或截断需说明，嵌套 CLF、callsuper 和动态调用不属于自动展开范围。
+    """
+    read = clf.analysis_context if include_analysis else clf.get_clf
+    return await asyncio.to_thread(read, mdb_file, name, expected_sha256)
 
 
 @mcp.tool

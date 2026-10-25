@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import threading
 import time
+import config
 
 _lock = threading.Lock()
 _process = None
@@ -57,7 +58,8 @@ def execute(args, folder, identity, timeout):
         # Only one version stays resident. Changes to MDB/SDK/bridge discard the
         # process, including all vendor static state, before the next load.
         if (_process is not None and
-                (_identity != identity or _process.poll() is not None or time.monotonic() - _last_used > 300)):
+                (_identity != identity or _process.poll() is not None or
+                 time.monotonic() - _last_used > config.DESIGNER_READ_WORKER_IDLE_SECONDS)):
             _stop()
         reused = _process is not None
         try:

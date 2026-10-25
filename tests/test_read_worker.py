@@ -1,5 +1,6 @@
 import json
 import sys
+import time
 
 import pytest
 
@@ -14,7 +15,7 @@ def cleanup():
     read_worker.close()
 
 
-def test_worker_reuses_identity_restarts_on_change_and_recovers_timeout(tmp_path):
+def test_worker_reuses_identity_restarts_on_change_and_recovers_timeout(tmp_path, monkeypatch):
     script = """
 import sys,json,pathlib,time
 for line in sys.stdin:
@@ -30,6 +31,14 @@ for line in sys.stdin:
     pid = read_worker._process.pid
     assert read_worker.execute(args, tmp_path, 'mdb1-sdk1', 5)
     assert read_worker._process.pid == pid
+    monkeypatch.setattr(read_worker.config, 'DESIGNER_READ_WORKER_IDLE_SECONDS', 900)
+    monkeypatch.setattr(read_worker, '_last_used', time.monotonic() - 600)
+    assert read_worker.execute(args, tmp_path, 'mdb1-sdk1', 5)
+    assert read_worker._process.pid == pid
+    monkeypatch.setattr(read_worker, '_last_used', time.monotonic() - 901)
+    assert not read_worker.execute(args, tmp_path, 'mdb1-sdk1', 5)
+    assert read_worker._process.pid != pid
+    pid = read_worker._process.pid
     assert not read_worker.execute(args, tmp_path, 'mdb2-sdk1', 5)
     assert read_worker._process.pid != pid
     assert not read_worker.execute(args, tmp_path, 'mdb2-sdk2', 5)

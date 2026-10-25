@@ -71,7 +71,7 @@ def _brief(value, depth=0):
     return value
 
 
-def compact_tool(message, index):
+def compact_tool(message, index, *, scope=''):
     result = {key: deepcopy(value) for key, value in message.items() if key in API_KEYS}
     content = str(result.get('content') or '')
     limit = config.CHAT_TOOL_CONTEXT_CHARS
@@ -94,14 +94,51 @@ def compact_tool(message, index):
         return result
     # Field catalogs use positional rows to keep all fields and their types together.
     if isinstance(data, dict):
+        if data.get('format') == 'designer_clf_v1':
+            # Function order and expressions are executable semantics. Never
+            # replace them with the generic eight-item/depth-limited sample.
+            encoded = json.dumps(data, ensure_ascii=False, separators=(',', ':'))
+            if len(encoded) <= min(60000, config.CHAT_CONTEXT_CHARS // 2):
+                result['content'] = encoded
+                return result
+        if scope == 'clf' and message.get('name') == 'get_designer_entity' and 'field_catalog' in data:
+            catalog = data['field_catalog']
+            columns = catalog.get('columns', [])
+            if 'name' in columns:
+                position = columns.index('name')
+                projected = {
+                    'object_summary': _brief({key: value for key, value in data.items()
+                                              if key not in {'fields', 'field_catalog'}}),
+                    'field_names': [row[position] for row in catalog.get('rows', [])],
+                    'field_names_complete': catalog.get('complete', False),
+                    'total_fields': catalog.get('total_fields'),
+                    'field_properties_omitted': True,
+                    'evidence_id': message.get('tool_call_id') or f'message-{index}',
+                    'notice': 'CLF 分析仅附字段名称索引，未展开各字段属性；需要某字段类型或其他属性时定向读取。原始完整字段回执仍可按 evidence_id 回读。',
+                }
+                encoded = json.dumps(projected, ensure_ascii=False, separators=(',', ':'))
+                if len(encoded) <= min(60000, config.CHAT_CONTEXT_CHARS // 2):
+                    result['content'] = encoded
+                    return result
         if message.get('name') == 'query_designer_batch' and isinstance(data.get('results'), list):
             names = {'get': 'get_designer_entity', 'list': 'list_designer_entities',
                      'fields': 'get_designer_fields', 'inheritance': 'get_designer_inheritance'}
             projected = {key: value for key, value in data.items() if key != 'results'}
             projected['results'] = []
             for entry in data['results']:
-                child = compact_tool({**message, 'name': names.get(entry['query']['mode'], 'get_designer_entity_schema'),
-                                      'content': json.dumps(entry['result'], ensure_ascii=False)}, index)
+                query = entry['query']
+                child_name = names.get(query['mode'], 'get_designer_entity_schema')
+                child_data = entry['result']
+                if query['mode'] == 'get' and query.get('kind') == 'clf' and isinstance(child_data.get('functions'), list):
+                    from designer.clf import clf_view
+                    child_name = 'get_designer_clf'
+                    child_data = {**{key: value for key, value in child_data.items()
+                                    if key in {'source_file', 'source_sha256', 'read_only', 'workspace_resolution'}},
+                                  'format': 'designer_clf_v1', **clf_view(child_data),
+                                  'properties_partial': True,
+                                  'evidence_id': message.get('tool_call_id') or f'message-{index}'}
+                child = compact_tool({**message, 'name': child_name,
+                                      'content': json.dumps(child_data, ensure_ascii=False)}, index, scope=scope)
                 projected['results'].append({'query': entry['query'], 'result': json.loads(child['content'])})
             encoded = json.dumps(projected, ensure_ascii=False, separators=(',', ':'))
             if len(encoded) <= min(60000, config.CHAT_CONTEXT_CHARS // 2):
@@ -218,7 +255,7 @@ def planned_fields(plans):
     return sorted(normalized, key=lambda field: str(field['name']))
 
 
-def build_messages(messages, *, task=None, preferences=None, extra_system=()):
+def build_messages(messages, *, task=None, preferences=None, extra_system=(), scope=''):
     systems = [{key: value for key, value in message.items() if key in API_KEYS}
                for message in messages if message.get('role') == 'system']
     systems += [{'role': 'system', 'content': text} for text in extra_system if text]
@@ -233,7 +270,7 @@ def build_messages(messages, *, task=None, preferences=None, extra_system=()):
         if message.get('role') == 'user' and group:
             groups.append(group)
             group = []
-        group.append(compact_tool(message, index) if message.get('role') == 'tool'
+        group.append(compact_tool(message, index, scope=scope) if message.get('role') == 'tool'
                      else {key: deepcopy(value) for key, value in message.items() if key in API_KEYS})
     if group:
         groups.append(group)

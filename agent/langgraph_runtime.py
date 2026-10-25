@@ -112,6 +112,42 @@ def _sse(payload: dict[str, Any]) -> str:
     return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
 
+async def _stream_with_title(stream, username, session_id, message, initial_title):
+    """Naming runs alongside inference and never delays or cancels the answer."""
+    from agent.llm_client import generate_title
+
+    async def rename():
+        try:
+            title = await generate_title(message)
+            session = user_memories.get(username, {}).get('sessions', {}).get(session_id, {})
+            if title and session.get('title') == initial_title:
+                update_session_title(username, session_id, title)
+                return _sse({'type': 'title_update', 'title': title, 'session_id': session_id})
+        except Exception:
+            # A title/network/disk error must not fail the business conversation.
+            return None
+
+    naming = asyncio.create_task(rename())
+    delivered = False
+    try:
+        async for event in stream:
+            if not delivered and naming.done():
+                delivered = True
+                update = None if naming.cancelled() else naming.result()
+                if update:
+                    yield update
+            yield event
+        if not delivered and naming.done() and not naming.cancelled():
+            update = naming.result()
+            if update:
+                yield update
+    finally:
+        if not naming.done():
+            naming.cancel()
+        await asyncio.gather(naming, return_exceptions=True)
+        await stream.aclose()
+
+
 def _actual_session_id(username: str, session_id: str | None) -> str:
     sessions = user_memories.get(username, {}).get("sessions", {})
     if session_id and session_id in sessions:
@@ -262,6 +298,8 @@ async def _agent_node(state: AgentState) -> dict[str, Any]:
             preferences=chat_preferences.current(state['username'], state['session_id']),
             extra_system=[USER_FACING_LANGUAGE_RULE, CONVERSATION_INTENT_RULE, CHAT_QUALITY_RULE, experience_context,
                           assistant_modes.context(state['username'], state['session_id'])],
+            scope='clf' if assistant_modes.mode(state['username'], state['session_id']) == 'clf'
+                          and not chat_intent.metadata_lookup(state.get('request_message', '')) else '',
         )
         available_tools = [tool for tool in _openai_tools if not state.get('read_only')
                            or chat_intent.read_only_tool(tool.get('function', {}).get('name', ''))]
@@ -271,6 +309,8 @@ async def _agent_node(state: AgentState) -> dict[str, Any]:
             available_tools = [tool for tool in available_tools
                                if tool.get('function', {}).get('name') in chat_intent.METADATA_LOOKUP_TOOLS]
 
+        context_prepare_ms = round((time.time() - started) * 1000, 2)
+        model_started = time.time()
         response_stream = await _client.chat.completions.create(
             model=LLM_MODEL,
             messages=model_messages,
@@ -319,6 +359,7 @@ async def _agent_node(state: AgentState) -> dict[str, Any]:
         progress_store.finish(inference_id, error=str(exc), status='failed')
         raise
     else:
+        model_request_ms = round((time.time() - model_started) * 1000, 2)
         progress_store.finish(inference_id, {'status': 'inference_complete'})
     finally:
         inference_pulse.cancel()
@@ -335,6 +376,8 @@ async def _agent_node(state: AgentState) -> dict[str, Any]:
             "streamed": True,
             "engine": "langgraph",
             "first_delta_ms": first_delta_ms,
+            "context_prepare_ms": context_prepare_ms,
+            "model_request_ms": model_request_ms,
             "context_chars": len(json.dumps(model_messages, ensure_ascii=False)),
             "tool_schema_chars": len(json.dumps(available_tools, ensure_ascii=False)),
             "tool_count": len(available_tools),
@@ -980,18 +1023,6 @@ async def _chat_stream(username, message, session_id=None, attachments=None):
             initial_title = first_message_title(message)
             update_session_title(username, actual_session_id, initial_title)
             yield _sse({'type': 'title_update', 'title': initial_title, 'session_id': actual_session_id})
-            # Imported lazily to avoid a module cycle with llm_client.
-            from agent.llm_client import generate_title
-
-            title = await generate_title(message)
-            update_session_title(username, actual_session_id, title)
-            yield _sse(
-                {
-                    "type": "title_update",
-                    "title": title,
-                    "session_id": actual_session_id,
-                }
-            )
 
         task = dict(snapshot.values.get('task_context') or chat_context.update_task({}, '', chat_messages[:-1]))
         task.pop('prior_plan', None)
@@ -1024,7 +1055,10 @@ async def _chat_stream(username, message, session_id=None, attachments=None):
                 for item in initial_state['excel_sources']
             ]
         try:
-            async for event in _stream_graph(initial_state, graph_config):
+            stream = _stream_graph(initial_state, graph_config)
+            if is_first_message and actual_session_id != 'unknown':
+                stream = _stream_with_title(stream, username, actual_session_id, message, initial_title)
+            async for event in stream:
                 yield event
         except asyncio.CancelledError:
             raise
