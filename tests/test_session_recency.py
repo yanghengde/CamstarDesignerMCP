@@ -22,11 +22,18 @@ def session_store(tmp_path, monkeypatch):
     return tmp_path, clock
 
 
+def conversation():
+    sid = memory.create_session('user')
+    memory.get_user_messages('user', sid).append({'role': 'user', 'content': '查询对象'})
+    memory.save_user_session('user', sid)
+    return sid
+
+
 def test_resuming_old_conversation_moves_it_first_and_survives_restart(session_store):
     _, clock = session_store
-    old = memory.create_session('user')
+    old = conversation()
     clock.value = 200.0
-    new = memory.create_session('user')
+    new = conversation()
     assert [item['id'] for item in memory.get_sessions('user')] == [new, old]
     clock.value = 300.0
     memory.get_user_messages('user', old).append({'role': 'user', 'content': '继续旧对话'})
@@ -42,9 +49,9 @@ def test_resuming_old_conversation_moves_it_first_and_survives_restart(session_s
 
 def test_reading_renaming_and_bulk_save_do_not_change_activity_time(session_store):
     _, clock = session_store
-    old = memory.create_session('user')
+    old = conversation()
     clock.value = 200.0
-    new = memory.create_session('user')
+    new = conversation()
     clock.value = 300.0
     memory.set_active_session('user', old)
     memory.get_user_messages('user', old)
@@ -60,7 +67,8 @@ def test_legacy_file_times_migrate_once_before_startup_rewrites(session_store):
     folder = root/'sessions'/'user'; folder.mkdir(parents=True)
     for sid, modified in [('older', 100.0), ('recent', 200.0)]:
         file = folder/f'{sid}.json'
-        file.write_text(json.dumps({'id': sid, 'title': sid, 'messages': []}), encoding='utf-8')
+        file.write_text(json.dumps({'id': sid, 'title': sid, 'messages': [
+            {'role': 'user', 'content': '查询对象'}]}), encoding='utf-8')
         os.utime(file, (modified, modified))
     for _ in range(2):
         memory.init_memory()
@@ -75,7 +83,7 @@ def test_all_history_remains_accessible_and_api_returns_newest_first(session_sto
     ids = []
     for number in range(35):
         clock.value = float(number + 100)
-        ids.append(memory.create_session('user'))
+        ids.append(conversation())
     app = FastAPI(); app.include_router(routes.router)
     client = TestClient(app)
     result = client.get('/sessions/user').json()['sessions']

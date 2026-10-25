@@ -211,9 +211,9 @@ def config_endpoint():
 
 @router.get("/sessions/{username}")
 def sessions_endpoint(username: str, mode: Literal['designer', 'clf'] | None = None):
-    """获取用户所有会话"""
+    """获取已有聊天记录的会话，空白草稿仅用于当前页面。"""
     require_progress_owner(username)
-    sessions = get_sessions(username)
+    sessions = get_sessions(username, include_empty=False)
     return {"sessions": [item for item in sessions if mode is None or item['mode'] == mode]}
 
 

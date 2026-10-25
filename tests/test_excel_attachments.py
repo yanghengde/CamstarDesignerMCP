@@ -160,6 +160,7 @@ def test_new_attachment_does_not_resume_a_pending_approval(isolated_store, monke
 def test_memory_initialization_keeps_runtime_session_reference(isolated_store, monkeypatch):
     session = memory.create_session('user')
     reference = runtime.user_memories
+    memory.get_user_messages('user', session).append({'role': 'user', 'content': '查询对象'})
     memory.save_user_session('user', session)
     monkeypatch.setattr(memory, 'MEMORY_FILE', str(isolated_store / 'absent.json'))
     memory.init_memory()

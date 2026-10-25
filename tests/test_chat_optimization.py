@@ -106,6 +106,7 @@ def test_pending_intent(text, intent):
 
 def test_preferences_survive_restart_without_promoting_technical_claims(isolated_store):
     sid = memory.create_session('user')
+    memory.get_user_messages('user', sid).append({'role': 'user', 'content': '以后复盘简短，先说事实和下一步'})
     assert chat_preferences.apply('user', sid, '以后复盘简短，先说事实和下一步')
     assert chat_preferences.apply('user', sid, '这次回答详细一点')
     assert chat_preferences.current('user', sid)['length'] == 'detailed'

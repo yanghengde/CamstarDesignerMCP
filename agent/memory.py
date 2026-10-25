@@ -69,6 +69,16 @@ def _write_json(file, value):
             pass
 
 
+def has_chat_history(session: dict) -> bool:
+    """Count sent messages (including queued inputs), not prompts or settings."""
+    return any(message.get('role') in {'user', 'assistant'} and any(
+        value.strip() if isinstance(value, str) else value
+        for value in (message.get(key) for key in (
+            'content', 'display_content', 'attachments', 'tool_calls', 'excel_preview')))
+        for message in session.get('messages', [])) or any(
+            item.get('content', '').strip() for item in session.get('chat_requirements', []))
+
+
 def _save_metadata(username: str):
     """保存用户的元数据（如活跃 session 配置）"""
     d = get_user_dir(username)
@@ -76,8 +86,10 @@ def _save_metadata(username: str):
     metadata_path = Path(d) / 'metadata.json'
     if metadata_path.resolve().parent != Path(d):
         raise ValueError('会话配置文件不能指向用户目录之外')
+    user = user_memories[username]
+    active = user.get('active_session')
     data_to_save = {
-        "active_session": user_memories[username].get("active_session"),
+        "active_session": active if has_chat_history(user.get('sessions', {}).get(active, {})) else None,
         "chat_preferences": user_memories[username].get("chat_preferences", {}),
     }
     _write_json(metadata_path, data_to_save)
@@ -86,10 +98,13 @@ def _save_metadata(username: str):
 def save_session(username: str, session_id: str):
     """将指定用户的单个会话数据持久化"""
     if username in user_memories and session_id in user_memories[username].get("sessions", {}):
+        file = _session_file(username, session_id)
+        session_data = user_memories[username]["sessions"][session_id]
+        if not has_chat_history(session_data):
+            return
         d = get_user_dir(username)
         os.makedirs(d, exist_ok=True)
-        session_data = user_memories[username]["sessions"][session_id]
-        _write_json(_session_file(username, session_id), session_data)
+        _write_json(file, session_data)
 
 
 def save_memory():
@@ -168,6 +183,13 @@ def load_memory() -> dict:
                 except Exception:
                     pass
 
+    # Ignore empty conversations left by earlier versions, including the old
+    # monolithic store. Leave their source files untouched during migration.
+    for user in mem.values():
+        user['sessions'] = {sid: session for sid, session in user.get('sessions', {}).items()
+                            if has_chat_history(session)}
+        if user.get('active_session') not in user['sessions']:
+            user['active_session'] = None
     return mem
 
 
@@ -190,14 +212,16 @@ def _migrate_if_needed(username: str):
         save_session(username, "default")
 
 
-def get_sessions(username: str) -> list:
-    """获取所有会话，按最后一次内容更新倒序排列。"""
+def get_sessions(username: str, *, include_empty: bool = True) -> list:
+    """按内容更新时间列出会话；内部权限与进度检查可包含草稿。"""
     if username not in user_memories:
         return []
     _migrate_if_needed(username)
     sessions = user_memories[username].get("sessions", {})
     result = []
     for sid, session in sessions.items():
+        if not include_empty and not has_chat_history(session):
+            continue
         _ensure_session_times(session)
         result.append({'id': sid, 'title': session.get('title', '会话'),
                        'mode': session.get('mode', 'designer'),
@@ -207,7 +231,7 @@ def get_sessions(username: str) -> list:
 
 
 def create_session(username: str, mode: str = 'designer') -> str:
-    """创建一个新会话"""
+    """创建内存中的会话草稿，收到聊天消息后才持久化。"""
     if mode not in {'designer', 'clf'}:
         raise ValueError('未知助手类型')
     get_user_dir(username)

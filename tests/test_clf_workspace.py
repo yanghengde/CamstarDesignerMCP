@@ -28,6 +28,9 @@ def api(isolated_store):
 def test_dedicated_sessions_are_persisted_filtered_and_scoped(api, isolated_store):
     normal = api.post('/sessions/user/new').json()['session_id']
     sid = api.post('/sessions/user/new?mode=clf').json()['session_id']
+    for session_id in (normal, sid):
+        memory.get_user_messages('user', session_id).append({'role': 'user', 'content': '查询对象'})
+        memory.save_user_session('user', session_id)
     assert [s['id'] for s in api.get('/sessions/user?mode=clf').json()['sessions']] == [sid]
     assert [s['id'] for s in api.get('/sessions/user?mode=designer').json()['sessions']] == [normal]
     assert 'CLF 专业助手' in memory.get_user_messages('user', sid)[0]['content']

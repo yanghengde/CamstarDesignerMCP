@@ -989,9 +989,16 @@
                 showNotice(`无法加载设计记录：${error.message}`);
             }
             const requestedSession = new URLSearchParams(location.search).get('session_id');
-            if (requestedSession && sessions.some(session => session.id === requestedSession)) {
-                currentSessionId = requestedSession;
-                renderSessions();
+            if (requestedSession) {
+                try {
+                    // A draft opened by URL (including an Excel CLF handoff)
+                    // is valid even though it is absent from recent history.
+                    if (!sessions.some(session => session.id === requestedSession)) {
+                        await fetchJson(`/history/${encodeURIComponent(currentUsername)}?session_id=${encodeURIComponent(requestedSession)}`);
+                    }
+                    currentSessionId = requestedSession;
+                    renderSessions();
+                } catch (error) { showNotice(`无法打开对话：${error.message}`); }
             }
             if (sessionsLoaded && !currentSessionId) {
                 try {

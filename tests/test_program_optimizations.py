@@ -213,6 +213,8 @@ def test_session_and_chat_api_only_accept_configured_owner(isolated):
 @pytest.mark.parametrize('session_id', ['../outside', '..', 'metadata', 'NUL', 'invalid:name'])
 def test_session_filenames_cannot_escape_or_replace_metadata(isolated, session_id):
     sid = memory.create_session('user')
+    memory.get_user_messages('user', sid).append({'role': 'user', 'content': '查询对象'})
+    memory.save_user_session('user', sid)
     memory.user_memories['user']['sessions'][session_id] = {'id': session_id, 'messages': []}
     with pytest.raises(ValueError):
         memory.save_session('user', session_id)
@@ -229,6 +231,8 @@ def test_atomic_session_save_retries_transient_windows_file_lock(isolated, monke
         return replace(file, target)
     monkeypatch.setattr(Path, 'replace', locked)
     sid = memory.create_session('user')
+    memory.get_user_messages('user', sid).append({'role': 'user', 'content': '查询对象'})
+    memory.save_user_session('user', sid)
     data = json.loads((Path(memory.get_user_dir('user')) / (sid + '.json')).read_text(encoding='utf-8'))
     assert data['id'] == sid
     assert not list(Path(memory.get_user_dir('user')).glob('*.tmp'))
