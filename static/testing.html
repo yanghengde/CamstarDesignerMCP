@@ -1,7 +1,22 @@
 <!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#f7f8fa"><title>Opcenter Designer · 功能测试</title><link rel="icon" href="/svg/opcenter.svg" type="image/svg+xml"><link rel="stylesheet" href="/testing.css?v=20261021-3"><script src="/testing.js?v=20261021-3" defer></script></head>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#f7f8fa"><title>Opcenter Designer · 功能测试</title><link rel="icon" href="/svg/opcenter.svg" type="image/svg+xml"><link rel="stylesheet" href="/testing.css?v=20261025-1"><script src="/testing.js?v=20261025-1" defer></script><script src="/workspace-navigation.js?v=20261025-1" defer></script></head>
 <body><div class="app-shell">
-  <aside class="sidebar"><div class="brand"><img src="/svg/opcenter.svg" alt="" width="32" height="32"><div>Opcenter Designer<small>设计工作台</small></div></div><nav class="nav" aria-label="工作台导航"><a class="nav-item" href="/">设计助手</a><a class="nav-item" href="/clf">CLF 逻辑助手</a><a class="nav-item" href="/records">设计记录</a><a class="nav-item" href="/progress">设计进度</a><a class="nav-item" href="/wcf-test" id="wcfNav">WCF 接口测试</a><a class="nav-item" href="/clf-test" id="clfNav">CLF 逻辑测试</a><a class="nav-item" href="/logs">运行日志</a></nav><div class="sidebar-footer"><strong id="usernameLabel">本机工作台</strong><small>测试结果保存在本机</small></div></aside>
+  <aside class="sidebar" aria-label="工作台导航">
+    <a class="brand" href="/" aria-label="Opcenter Designer 首页"><span class="brand-mark"><svg class="icon" aria-hidden="true"><use href="/svg/navigation.svg#design"/></svg></span><div><div class="brand-name">Opcenter</div><div class="brand-subtitle">DESIGNER WORKSPACE</div></div></a>
+    <button class="new-chat" id="newChatTopBtn" type="button"><svg class="icon" aria-hidden="true"><use href="/svg/navigation.svg#plus"/></svg>新建设计对话</button>
+    <nav class="nav" aria-label="主要功能">
+      <a class="nav-item" href="/"><svg class="icon" aria-hidden="true"><use href="/svg/navigation.svg#chat"/></svg>设计助手</a>
+      <a class="nav-item" href="/clf"><svg class="icon" aria-hidden="true"><use href="/svg/navigation.svg#clf"/></svg>CLF 逻辑助手</a>
+      <a class="nav-item" href="/records"><svg class="icon" aria-hidden="true"><use href="/svg/navigation.svg#history"/></svg>设计记录</a>
+      <a class="nav-item" href="/progress"><svg class="icon" aria-hidden="true"><use href="/svg/navigation.svg#progress"/></svg>设计进度</a>
+      <a class="nav-item" href="/wcf-test" id="wcfNav"><svg class="icon" aria-hidden="true"><use href="/svg/navigation.svg#wcf"/></svg>WCF 接口测试</a>
+      <a class="nav-item" href="/clf-test" id="clfNav"><svg class="icon" aria-hidden="true"><use href="/svg/navigation.svg#clf-test"/></svg>CLF 逻辑测试</a>
+      <a class="nav-item" href="/logs"><svg class="icon" aria-hidden="true"><use href="/svg/navigation.svg#log"/></svg>运行日志</a>
+    </nav>
+    <div class="recent-heading"><span>最近对话</span><span id="sessionCount">—</span></div>
+    <div class="session-list" id="sessionListUI"><p class="sidebar-empty">正在加载对话…</p></div>
+    <div class="sidebar-footer"><div class="user-profile"><span class="avatar" id="userAvatar">D</span><div><div class="user-name" id="usernameLabel">designer</div><div class="user-caption">设计工作台</div></div><span class="siemens">SIEMENS</span></div></div>
+  </aside>
   <main class="workspace"><header class="topbar"><span>测试与验收 / <span id="breadcrumb">WCF 接口测试</span></span><button class="button" id="historyToggle" aria-expanded="false">测试记录</button></header>
   <div class="page"><div class="page-heading"><div><div class="eyebrow">配置一次，反复验证</div><h1 id="pageTitle">WCF 接口测试</h1><p id="pageDescription">从真实客户端契约生成表单，执行服务调用并核对返回内容。</p></div><button class="button" id="refreshButton">刷新来源</button></div>
   <div id="notice" role="status" aria-live="polite" hidden></div>

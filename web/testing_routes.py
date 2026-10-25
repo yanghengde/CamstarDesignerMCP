@@ -49,6 +49,11 @@ def testing_script():
     return FileResponse('static/testing.js', media_type='text/javascript', headers={'Cache-Control': 'no-cache'})
 
 
+@router.get('/workspace-navigation.js')
+def navigation_script():
+    return FileResponse('static/workspace-navigation.js', media_type='text/javascript', headers={'Cache-Control': 'no-cache'})
+
+
 @router.get('/testing.css')
 def testing_style():
     return FileResponse('static/testing.css', media_type='text/css', headers={'Cache-Control': 'no-cache'})

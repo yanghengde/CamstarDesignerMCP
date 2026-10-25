@@ -11,7 +11,7 @@
     Workflow:'工作流', Spec:'规范', UOM:'计量单位', Name:'名称', Revision:'版本', Description:'描述',
     ExtName:'扩展名称', LastEditTime:'最后修改时间', LastEditedBy:'最后修改人', Status:'状态'};
   const storage = 'designer-wcf-simple-request';
-  let user = '', boot = null, schema = null, loadRecord = null, busy = false, epoch = 0;
+  let user = '', boot = null, schema = null, loadRecord = null, busy = false, initializing = false, epoch = 0;
   const inputs = new Map();
   const title = service => names[service.replace(/Maint$/, '')] || service.replace(/Maint$/, '');
   const queryParams = () => new URLSearchParams({username:user});
@@ -32,10 +32,11 @@
     return data;
   }
   function refresh() {
-    $('queryButton').disabled = busy || !schema?.can_query;
+    $('refreshButton').disabled = busy || initializing;
+    $('queryButton').disabled = busy || initializing || !schema?.can_query;
     $('queryButton').textContent = busy ? '正在处理…' : '查询前 5 条';
-    $('objectSelect').disabled = busy; $('objectSearch').disabled = busy;
-    $('saveButton').disabled = busy || !loadRecord || !boot?.write_target_confirmed ||
+    $('objectSelect').disabled = busy || initializing; $('objectSearch').disabled = busy || initializing;
+    $('saveButton').disabled = busy || initializing || !loadRecord || !boot?.write_target_confirmed ||
       !Array.from(inputs.values()).some(row => row.dirty);
     $('closeEditor').disabled = busy; $('cancelEdit').disabled = busy;
     for (const button of document.querySelectorAll('[data-edit-row]')) {
@@ -244,24 +245,39 @@
     $('historyToggle').setAttribute('aria-expanded', String(!$('historyPanel').hidden));
   };
   $('wcfNav').classList.add('active'); $('wcfNav').setAttribute('aria-current', 'page');
-  handle(async () => {
-    user = (await api('/config')).username; $('usernameLabel').textContent = user;
-    boot = await api('/api/testing/simple/bootstrap?' + queryParams()); $('connection').textContent = '默认配置已载入';
-    renderObjects(); renderHistory();
-    $('objectSelect').value = boot.services.includes('ProductMaint') ? 'ProductMaint' : boot.services[0] || '';
-    await selectObject();
-    const pending = JSON.parse(sessionStorage.getItem(storage) || 'null');
-    if (pending && boot.history.some(row => row.request_id === pending.id)) sessionStorage.removeItem(storage);
-    const running = boot.history.find(row => row.status === 'running');
-    if (running) {
-      busy = true; refresh(); let record = running;
-      try {
-        while (record.status === 'running') {
-          showResult(record); await new Promise(resolve => setTimeout(resolve, 800));
-          record = await api('/api/testing/runs/' + record.id + '?' + queryParams());
-        }
-        showResult(record);
-      } finally { busy = false; refresh(); }
-    }
-  })();
+  async function initialize() {
+    if (initializing) return;
+    initializing = true; refresh();
+    $('connection').textContent = '正在读取配置…';
+    try {
+      user = (await api('/config')).username; $('usernameLabel').textContent = user;
+      boot = await api('/api/testing/simple/bootstrap?' + queryParams()); $('connection').textContent = '默认配置已载入';
+      renderObjects(); renderHistory();
+      $('objectSelect').value = boot.services.includes('ProductMaint') ? 'ProductMaint' : boot.services[0] || '';
+      await selectObject();
+      const pending = JSON.parse(sessionStorage.getItem(storage) || 'null');
+      if (pending && boot.history.some(row => row.request_id === pending.id)) sessionStorage.removeItem(storage);
+      const running = boot.history.find(row => row.status === 'running');
+      if (running) {
+        busy = true; refresh(); let record = running;
+        try {
+          while (record.status === 'running') {
+            showResult(record); await new Promise(resolve => setTimeout(resolve, 800));
+            record = await api('/api/testing/runs/' + record.id + '?' + queryParams());
+          }
+          showResult(record);
+        } finally { busy = false; refresh(); }
+      }
+    } catch (error) {
+      $('connection').textContent = '配置加载失败';
+      throw error;
+    } finally { initializing = false; refresh(); }
+  }
+  $('refreshButton').onclick = handle(async () => {
+    if (busy) return;
+    schema = null; boot = null; loadRecord = null; ++epoch;
+    notice(''); refresh();
+    await initialize();
+  });
+  handle(initialize)();
 })();

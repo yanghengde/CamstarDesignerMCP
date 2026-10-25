@@ -295,13 +295,13 @@
             </a>
             <button class="new-chat" id="newChatTopBtn"><svg class="icon"><use href="#i-plus"/></svg>新建设计对话</button>
             <nav class="nav" aria-label="主要功能">
-                <a class="nav-item active" id="designNav" href="/" aria-current="page"><svg class="icon"><use href="#i-chat"/></svg>设计助手</a>
-                <a class="nav-item" id="clfNav" href="/clf"><svg class="icon"><use href="#i-progress"/></svg>CLF 逻辑助手</a>
-                <a class="nav-item" id="recordsNav" href="/records"><svg class="icon"><use href="#i-history"/></svg>设计记录</a>
-                <a class="nav-item" href="/progress"><svg class="icon"><use href="#i-progress"/></svg>设计进度</a>
-                <a class="nav-item" href="/wcf-test"><svg class="icon"><use href="#i-progress"/></svg>WCF 接口测试</a>
-                <a class="nav-item" href="/clf-test"><svg class="icon"><use href="#i-progress"/></svg>CLF 逻辑测试</a>
-                <a class="nav-item" href="/logs"><svg class="icon"><use href="#i-log"/></svg>运行日志</a>
+                <a class="nav-item active" id="designNav" href="/" aria-current="page"><svg class="icon" aria-hidden="true"><use href="/svg/navigation.svg#chat"/></svg>设计助手</a>
+                <a class="nav-item" id="clfNav" href="/clf"><svg class="icon" aria-hidden="true"><use href="/svg/navigation.svg#clf"/></svg>CLF 逻辑助手</a>
+                <a class="nav-item" id="recordsNav" href="/records"><svg class="icon" aria-hidden="true"><use href="/svg/navigation.svg#history"/></svg>设计记录</a>
+                <a class="nav-item" href="/progress"><svg class="icon" aria-hidden="true"><use href="/svg/navigation.svg#progress"/></svg>设计进度</a>
+                <a class="nav-item" href="/wcf-test"><svg class="icon" aria-hidden="true"><use href="/svg/navigation.svg#wcf"/></svg>WCF 接口测试</a>
+                <a class="nav-item" href="/clf-test"><svg class="icon" aria-hidden="true"><use href="/svg/navigation.svg#clf-test"/></svg>CLF 逻辑测试</a>
+                <a class="nav-item" href="/logs"><svg class="icon" aria-hidden="true"><use href="/svg/navigation.svg#log"/></svg>运行日志</a>
             </nav>
             <div class="recent-heading"><span>最近对话</span><span id="sessionCount">—</span></div>
             <div class="session-list" id="sessionListUI"><p class="sidebar-empty">正在加载对话…</p></div>
@@ -340,7 +340,7 @@
             <button type="button" class="capability-link" data-capabilities>查看支持的能力<svg class="icon" aria-hidden="true"><use href="#i-arrow"/></svg></button>
         </section>
     </template>
-    <script src="/clf-workspace.js?v=20261021-3"></script>
+    <script src="/clf-workspace.js?v=20261025-1"></script>
     <script>
         const clfMode = location.pathname === '/clf' || location.pathname === '/clf/records';
         const assistantPath = clfMode ? '/clf' : '/';

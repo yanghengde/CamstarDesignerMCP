@@ -75,7 +75,7 @@ def run(client, spec, identity='1' * 32):
 
 def test_pages_assets_and_navigation_are_real_routes(setup):
     client, *_ = setup
-    for path in ('/wcf-test', '/wcf-test/settings', '/wcf-simple.js', '/wcf-simple.css', '/clf-test', '/testing.js', '/testing.css'):
+    for path in ('/wcf-test', '/wcf-test/settings', '/wcf-simple.js', '/wcf-simple.css', '/clf-test', '/testing.js', '/testing.css', '/workspace-navigation.js'):
         assert client.get(path).status_code == 200
     assert 'testing.js' in client.get('/clf-test').text
     assert client.get('/api/testing/bootstrap?username=other').status_code == 404
