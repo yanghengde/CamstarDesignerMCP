@@ -427,15 +427,15 @@ def export(folder: Path, baseline: Path, modified: Path) -> dict:
             "comparison_engine": "Camstar.Metadata.Comparison.CompareAndExport", "html_renderer": "project"}
 
 
-def design(mdb_file: str, expected_sha256: str, workspace: str, operations: list[dict]) -> dict:
+def design(mdb_file: str, expected_sha256: str, workspace: str, operations: list[dict], *, sync_designer=True) -> dict:
     from designer import working
     source = working.resolve(mdb_file)
     project_id, _ = working.context(source)
     with working.project_lock(project_id):
-        return _design(mdb_file, expected_sha256, workspace, operations)
+        return _design(mdb_file, expected_sha256, workspace, operations, sync_designer=sync_designer)
 
 
-def _design(mdb_file: str, expected_sha256: str, workspace: str, operations: list[dict]) -> dict:
+def _design(mdb_file: str, expected_sha256: str, workspace: str, operations: list[dict], *, sync_designer=True) -> dict:
     validate_operations(operations)
     from designer import working
     source = working.resolve(mdb_file)
@@ -501,11 +501,14 @@ def _design(mdb_file: str, expected_sha256: str, workspace: str, operations: lis
     result['files']['modified.mdb'] = working_mdb
     # Once handed to Designer, subsequent batches refresh the same server path.
     if work_state.get('server_mdb'):
-        from designer import review
-        try:
-            result['review'] = review.prepare(str(manifest_file), False)
-        except ValueError as exc:
-            result['designer_sync_error'] = str(exc)
+        if sync_designer:
+            from designer import review
+            try:
+                result['review'] = review.prepare(str(manifest_file), False)
+            except ValueError as exc:
+                result['designer_sync_error'] = str(exc)
+        else:
+            result['designer_sync_deferred'] = True
     return result
 
 

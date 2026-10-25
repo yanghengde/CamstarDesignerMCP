@@ -32,6 +32,8 @@ async def lifespan(app: FastAPI):
     init_memory()
     from designer import testing_store
     testing_store.recover()
+    from designer import clf_delivery
+    clf_delivery.recover()
 
     # 注册 MCP 工具
     await register_tools()
@@ -55,6 +57,7 @@ async def lifespan(app: FastAPI):
         await progress_store.drain()
         from designer import testing
         await testing.drain()
+        await clf_delivery.drain()
         if progress._tasks:
             import asyncio
             await asyncio.gather(*list(progress._tasks), return_exceptions=True)

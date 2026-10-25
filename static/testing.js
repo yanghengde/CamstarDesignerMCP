@@ -1,10 +1,11 @@
 /* Both test pages use the same typed client, environment store and durable receipts. */
 (() => {
     'use strict';
-    const $ = id => document.getElementById(id);
+    const root=document.getElementById('clfTestingPanel')||document,embedded=root!==document,host=embedded?root:document.body;
+    const $ = id => root.querySelector('#'+id);
     const node = (tag, text, className) => { const el=document.createElement(tag); if(text!==undefined)el.textContent=text; if(className)el.className=className; return el; };
-    const query = new URLSearchParams(location.search);
-    const kind = location.pathname === '/clf-test' ? 'clf' : 'wcf';
+    const query = new URLSearchParams(embedded?root.dataset.query:location.search);
+    const kind = embedded||location.pathname === '/clf-test' ? 'clf' : 'wcf';
     const state = {username:'',boot:null,context:null,catalog:null,schema:null,fields:new Map(),rows:[],clf:null,clfSearch:null,clfEpoch:0,epoch:0,schemaEpoch:0,pins:null,selectedRun:null,pending:new Set(),submitting:false,timer:null};
     const labels = {running:'正在执行',passed:'交易断言通过',failed:'与预期不符',error:'未完成测试',interrupted:'执行中断，业务结果未知'};
     const stringify = value => JSON.stringify(value,null,2);
@@ -30,7 +31,7 @@
     }
     function toggle(id,button) {$(id).hidden=!$(id).hidden;$(button).setAttribute('aria-expanded',String(!$(id).hidden));}
     function resetResult(){state.selectedRun=null;$('exportResult').hidden=true;$('result').replaceChildren(node('div','选择输入后执行测试，结果将显示在这里。','empty-state'));}
-    function busy(){const running=state.pending.size>0||state.submitting;document.body.dataset.busy=String(running);$('runButton').disabled=running||(kind==='clf'&&(!state.clf||!state.schema||!$('methodSelect').value));$('runBatch').disabled=running;const writes=state.schema?.methods.find(method=>method.name===$('methodSelect').value)?.writes;$('runButton').textContent=running?'测试在后台执行':kind==='clf'?(writes?'验证规则（会写入业务数据）':'验证规则'):writes?'执行写入测试':'执行读取测试';}
+    function busy(){const running=state.pending.size>0||state.submitting;host.dataset.busy=String(running);$('runButton').disabled=running||(kind==='clf'&&(!state.clf||!state.schema||!$('methodSelect').value));$('runBatch').disabled=running;const writes=state.schema?.methods.find(method=>method.name===$('methodSelect').value)?.writes;$('runButton').textContent=running?'测试在后台执行':kind==='clf'?(writes?'验证规则（会写入业务数据）':'验证规则'):writes?'执行写入测试':'执行读取测试';}
     async function requestIdentity(type,body){const key='designer-testing-'+kind+'-'+type;const bytes=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(JSON.stringify(body)));const fingerprint=Array.from(new Uint8Array(bytes),byte=>byte.toString(16).padStart(2,'0')).join('');let pending;try{pending=JSON.parse(sessionStorage.getItem(key)||'null');}catch{}if(pending&&pending.fingerprint!==fingerprint)throw new Error('上一提交的回执未确认，请先在测试记录中核对；重试相同输入将沿用原请求标识。');const identity=pending?.id||uuid();sessionStorage.setItem(key,JSON.stringify({id:identity,fingerprint}));return {key,identity};}
     function environmentEditor(create=false) {
         const env=create?null:selectedEnvironment();
@@ -60,10 +61,10 @@
         const data=await api('/api/testing/bootstrap?'+params(query.get('session_id')?{session_id:query.get('session_id')}:{ }));state.boot=data;
         const linked=location.pathname==='/wcf-test/settings'?data.environments.find(e=>e.id===(old.environment||data.environments[0]?.id)):null;
         const pickProject=old.project||linked?.project_id||query.get('project_id')||data.context.project_id||(kind==='clf'?data.defaults.project_id:'')||(data.projects.length===1?data.projects[0].id:'');
-        const pickArtifact=old.artifact||linked?.artifact_id||query.get('artifact_id')||data.context.artifact_id||(kind==='clf'?data.defaults.artifact_id:'')||data.artifacts[0]?.id||'';
+        const pickArtifact=old.artifact||linked?.artifact_id||query.get('artifact_id')||data.context.artifact_id||(kind==='clf'?data.defaults.artifact_id:'')||(embedded?(data.artifacts.length===1?data.artifacts[0].id:''):data.artifacts[0]?.id)||'';
         fillSelect($('projectSelect'),data.projects.map(p=>[p.id,p.id.slice(0,8)+' · '+(p.server_mdb||p.mdb_file).split(/[\\/]/).pop()]),'请选择工作项目',pickProject);
         fillSelect($('artifactSelect'),data.artifacts.map(a=>[a.id,new Date(a.created*1000).toLocaleString()+' · '+(a.partial_package?'部分':'全量')+' · '+a.id.slice(0,8)]),'请选择 WCF 产物',pickArtifact);
-        fillSelect($('environmentSelect'),data.environments.map(env=>[env.id,env.name]),'请选择测试环境',old.environment||query.get('environment_id')||(kind==='clf'?data.defaults.environment_id:data.environments[0]?.id)||'');
+        fillSelect($('environmentSelect'),data.environments.map(env=>[env.id,env.name]),'请选择测试环境',old.environment||query.get('environment_id')||(kind==='clf'?data.defaults.environment_id:data.environments[0]?.id)||(embedded&&data.environments.length===1&&(!data.environments[0].project_id||data.environments[0].project_id===pickProject)?data.environments[0].id:''));
         if(kind==='clf')$('clfDefaultConnection').textContent=$('environmentSelect').value?'使用系统已有环境与业务账号，无需重复填写。':'尚未匹配系统默认业务连接，请展开连接与来源核对。';
         $('writeTargetState').textContent=data.write_target_confirmed?'已配置允许操作的测试目标。':'写入测试尚未启用：需要配置 DESIGNER_TEST_TARGET_CONFIRMED=true。';
         environmentEditor();if(!data.environments.length){$('environmentEditor').hidden=false;$('configureEnvironment').setAttribute('aria-expanded','true');}
@@ -111,7 +112,7 @@
             else if(state.fields.has('ObjectToChange'))addField('ObjectToChange');
             const changed=new Set((state.context?.changes||[]).map(change=>change.field||change.name));
             for(const [path,field] of state.fields)if(path.startsWith('ObjectChanges.')&&changed.has(path.split('.').pop())&&['primitive','scalar','enum'].includes(field.kind))addField(path);
-            if(!state.rows.length){const field=Array.from(state.fields.keys()).find(path=>!path.includes('.'));if(field)addField(field);}
+            if(!state.rows.length&&kind!=='clf'){const field=Array.from(state.fields.keys()).find(path=>!path.includes('.'));if(field)addField(field);}if(kind==='clf'&&!state.rows.length){const extra=root.querySelector('.clf-extra-fields');if(extra)extra.open=true;}
             $('rawMode').checked=false;$('fieldForm').hidden=false;$('rawDataLabel').hidden=true;$('allowWrite').checked=false;$('enableReadback').checked=false;$('readbackDataLabel').hidden=true;renderRows();updateMethod();updatePreview();
         }finally{busy();}
     }
@@ -121,6 +122,20 @@
     function rowValue(row){if(row.mode==='omitted')return undefined;if(row.mode==='null')return null;if(row.mode==='empty')return '';const type=shortType(row.schema);if(row.schema.kind==='object'||row.schema.kind==='array')return parseInput(row.input);if(type==='Boolean')return row.input==='true';if(/^(Int16|Int32|Int64|Double|Decimal|Single)$/.test(type)){if(!row.input.trim()||!Number.isFinite(Number(row.input)))throw new Error(row.path+' 需要有效数值');const value=Number(row.input);if(Number.isInteger(value)&&!Number.isSafeInteger(value))throw new Error(row.path+' 超出此页面可精确表示的整数范围');return value;}return row.input;}
     function formData(){const data={};for(const row of state.rows){const value=rowValue(row);if(value===undefined)continue;const parts=row.path.split('.');let current=data;for(const part of parts.slice(0,-1)){if(!Object.hasOwn(current,part))current[part]={};current=current[part];}current[parts.at(-1)]=value;}return data;}
     function getData(){const data=$('rawMode').checked?parseInput($('rawData').value):formData();if(data===null||Array.isArray(data)||typeof data!=='object')throw new Error('服务数据必须为 JSON 对象');return data;}
+    function restoreInput(data){
+        // Preserve all values. A form is used only when its round-trip equals the saved input.
+        const rows=[];
+        let represented=data!==null&&typeof data==='object'&&!Array.isArray(data);
+        if(represented)for(const [path,value] of Object.entries(data)){
+            if(!state.fields.has(path)){represented=false;break;}
+            const row={path,schema:state.fields.get(path),mode:value===null?'null':'value',input:typeof value==='object'?stringify(value):String(value)};
+            try{if(stringify(rowValue(row))!==stringify(value)){represented=false;break;}}catch{represented=false;break;}
+            rows.push(row);
+        }
+        $('rawData').value=stringify(data);$('rawMode').checked=!represented;$('fieldForm').hidden=!represented;$('rawDataLabel').hidden=represented;
+        if(represented){state.rows=rows;renderRows();}
+        else if(kind==='clf')$('rawDataLabel').closest('details').open=true;
+    }
     function renderRows(){
         $('fieldRows').replaceChildren();for(const row of state.rows){const area=node('div',undefined,'field-row');const heading=node('div',undefined,'field-row-heading');const label=node('label',row.path);label.append(node('small',shortType(row.schema)));const remove=node('button','移除','button subtle');remove.type='button';remove.setAttribute('aria-label','移除 '+row.path);remove.onclick=()=>{state.rows=state.rows.filter(item=>item!==row);renderRows();updatePreview();};heading.append(label,remove);area.append(heading);
             const mode=node('select');mode.setAttribute('aria-label',row.path+' 输入状态');fillSelect(mode,[['value','填写值'],['null','null（按 SDK 序列化）'],['omitted','不提交此字段'],...(shortType(row.schema)==='String'?[['empty','空字符串']]:[])],null,row.mode);
@@ -134,7 +149,7 @@
         const assertions=parseInput($('assertions').value);if(!Array.isArray(assertions))throw new Error('断言必须为 JSON 数组');
         const pins=state.pins||{};return {kind,project_id:$('projectSelect').value,source_sha256:pins.source_sha256||state.context.source_sha256,artifact_id:artifact.id,client_sha256:pins.client_sha256||state.catalog.client_sha256,environment_id:env.id,environment_version:pins.environment_version||env.version,service:state.schema.service,method:$('methodSelect').value,data:getData(),return_fields:$('returnFields').value.split(/[,\n]/).map(value=>value.trim()).filter(Boolean),expected_outcome:$('expectedOutcome').value,message_contains:$('expectedMessage').value,assertions,clf_name:kind==='clf'?state.clf.name:'',collect_trace:$('collectTrace').checked,allow_write:$('allowWrite').checked,readback:$('enableReadback').checked,readback_data:$('enableReadback').checked?parseInput($('readbackData').value):{}};
     }
-    function updatePreview(){try{const data=getData();if(!$('rawMode').checked)$('rawData').value=stringify(data);$('requestPreview').textContent=stringify(getSpec());}catch(error){$('requestPreview').textContent=error.message;}}
+    function updatePreview(){if(kind==='clf'&&$('clfDefaultConnection'))$('clfDefaultConnection').textContent=selectedEnvironment()?'当前环境：'+selectedEnvironment().name+' · 业务凭据仅在后端使用':'尚未选择业务连接，请展开连接与来源核对。';try{const data=getData();if(!$('rawMode').checked)$('rawData').value=stringify(data);$('requestPreview').textContent=stringify(getSpec());}catch(error){$('requestPreview').textContent=error.message;}}
     async function startRun(){
         if(state.submitting||state.pending.size)return;
         const spec=getSpec();if(spec.method&&!state.schema.methods.find(m=>m.name===spec.method)?.writes)spec.allow_write=false;
@@ -149,6 +164,7 @@
     function line(area,label,value,pending=false){const row=node('div',undefined,'result-line');row.append(node('span',label),node('strong',value,pending?'pending':''));area.append(row);}
     function renderTrace(area,trace,depth=0){if(!trace||depth>16)return;const block=node('div',undefined,'trace-node');block.append(node('strong',[trace.Name,trace.Value].filter(Boolean).join(' · ')||'服务器轨迹项'));if(trace.ElapsedTime)block.append(node('div',trace.ElapsedTime));if(trace.Parameters?.length){const detail=node('details');detail.append(node('summary','实际调用参数'),node('pre',stringify(trace.Parameters)));block.append(detail);}if(trace.Attributes?.length){const detail=node('details');detail.append(node('summary','轨迹属性'),node('pre',stringify(trace.Attributes)));block.append(detail);}for(const child of trace.Children||[])renderTrace(block,child,depth+1);area.append(block);}
     function renderResult(record){
+        if(embedded)root.dispatchEvent(new CustomEvent('clf:test-result',{bubbles:true,detail:{record}}));
         const area=$('result');area.replaceChildren();const result=record.result;area.append(node('div',labels[record.status]||record.status,'result-status '+record.status));area.append(node('p',record.spec.service+' / '+record.spec.method+' · '+new Date(record.created_utc).toLocaleString(),'result-heading'));area.append(node('p','记录 '+record.id.slice(0,12)+' · 项目 '+record.spec.project_id.slice(0,8),'result-heading'));
         $('exportResult').hidden=false;$('exportResult').href='/api/testing/runs/'+record.id+'/export?'+params();
         if(!result){area.append(node('p','正在执行真实客户端调用，结果将自动更新。','muted'));return;}
@@ -165,9 +181,9 @@
         const trace=result.response?.trace;const details=node('details');details.append(node('summary',trace?'服务器实际执行轨迹':'执行轨迹 · 未取得'));if(trace)renderTrace(details,trace);else details.append(node('p','运行环境未返回轨迹；MDB 中的函数顺序不作为执行轨迹。','muted'));area.append(details);
         if(result.notice)area.append(node('p',result.notice,'muted'));
     }
-    function renderHistory(){const list=$('historyList');list.replaceChildren();const runs=(state.boot?.history||[]).filter(run=>run.spec.kind===kind).sort((a,b)=>b.created_utc.localeCompare(a.created_utc));if(!runs.length)list.append(node('p','尚无测试记录。','muted'));for(const run of runs){const row=node('div',undefined,'history-row');const label=node('div',run.spec.service+' · '+run.spec.method);label.append(node('small',new Date(run.created_utc).toLocaleString()+' · '+(labels[run.status]||run.status)));const button=node('button','查看结果','button subtle');button.onclick=()=>{state.selectedRun=run.id;renderResult(run);};row.append(label,button);list.append(row);}}
-    function renderCases(){const area=$('caseList');area.replaceChildren();const cases=(state.boot?.cases||[]).filter(test=>test.spec.kind===kind&&(!$('projectSelect').value||test.spec.project_id===$('projectSelect').value));if(!cases.length)area.append(node('p','配置输入和预期结果后，保存第一条回归用例。','muted'));for(const test of cases){const row=node('div',undefined,'case-row');const label=node('label');const checkbox=node('input');checkbox.type='checkbox';checkbox.dataset.caseId=test.id;const name=node('span',test.name+(test.group?' · '+({normal:'正常',exception:'异常',boundary:'边界',custom:'自定义'}[test.group]||test.group):'')+' · 修订 '+(test.revision||1));const env=state.boot.environments.find(env=>env.id===test.spec.environment_id);name.append(node('small',test.spec.service+' / '+test.spec.method+' · '+(env?.name||'环境已删除')+' · '+test.spec.source_sha256.slice(0,8)));label.append(checkbox,name);const actions=node('div',undefined,'case-row-actions');const load=node('button','载入','button subtle');load.onclick=()=>loadCase(test).catch(error=>notice(error.message,true));const remove=node('button','删除','button subtle');remove.onclick=async()=>{try{await api('/api/testing/cases/'+test.id+'?'+params(),{method:'DELETE'});state.boot.cases=state.boot.cases.filter(item=>item.id!==test.id);renderCases();}catch(error){notice(error.message,true);}};actions.append(load,remove);row.append(label,actions);area.append(row);}}
-    async function loadCase(test){const spec=test.spec;if(!state.boot.projects.some(p=>p.id===spec.project_id))throw new Error('用例的工作项目已不存在');if(!state.boot.environments.some(env=>env.id===spec.environment_id))throw new Error('用例的测试环境已不存在');if(!state.boot.artifacts.some(a=>a.id===spec.artifact_id))throw new Error('用例的客户端产物不在当前目录中，请核对或刷新来源');$('projectSelect').value=spec.project_id;$('artifactSelect').value=spec.artifact_id;$('environmentSelect').value=spec.environment_id;await loadSources();$('serviceSelect').value=spec.service;await loadService(spec.service);$('methodSelect').value=spec.method;$('rawMode').checked=true;$('fieldForm').hidden=true;$('rawDataLabel').hidden=false;$('rawData').value=stringify(spec.data);$('returnFields').value=spec.return_fields.join('\n');$('expectedOutcome').value=spec.expected_outcome;$('expectedMessage').value=spec.message_contains;$('assertions').value=stringify(spec.assertions);$('collectTrace').checked=spec.collect_trace;$('allowWrite').checked=false;updateMethod();$('enableReadback').checked=spec.readback;$('readbackDataLabel').hidden=!spec.readback;$('readbackData').value=stringify(spec.readback_data);if(kind==='clf')await selectClf(spec.clf_name,false);state.pins={source_sha256:spec.source_sha256,client_sha256:spec.client_sha256,environment_version:spec.environment_version};$('caseVersion').hidden=false;$('caseName').value=test.name;state.loadedCase=test;if($('caseGroup'))$('caseGroup').value=test.group||'custom';updatePreview();notice('已载入用例。旧版本保持固定；来源或环境变更时，先核对再采用当前版本。');}
+    function renderHistory(){const list=$('historyList');list.replaceChildren();const runs=(state.boot?.history||[]).filter(run=>run.spec.kind===kind&&(!embedded||(run.spec.project_id===$('projectSelect').value&&run.spec.clf_name===(state.clf?.name||query.get('clf_name'))))).sort((a,b)=>b.created_utc.localeCompare(a.created_utc));if(!runs.length)list.append(node('p','尚无测试记录。','muted'));for(const run of runs){const row=node('div',undefined,'history-row');const label=node('div',run.spec.service+' · '+run.spec.method);label.append(node('small',new Date(run.created_utc).toLocaleString()+' · '+(labels[run.status]||run.status)));const button=node('button','查看结果','button subtle');button.onclick=()=>{state.selectedRun=run.id;renderResult(run);};row.append(label,button);list.append(row);}}
+    function renderCases(){const area=$('caseList');area.replaceChildren();const cases=(state.boot?.cases||[]).filter(test=>test.spec.kind===kind&&(!$('projectSelect').value||test.spec.project_id===$('projectSelect').value)&&(!embedded||test.spec.clf_name===(state.clf?.name||query.get('clf_name'))));if(!cases.length)area.append(node('p','配置输入和预期结果后，保存第一条回归用例。','muted'));for(const test of cases){const row=node('div',undefined,'case-row');const label=node('label');const checkbox=node('input');checkbox.type='checkbox';checkbox.dataset.caseId=test.id;const name=node('span',test.name+(test.group?' · '+({normal:'正常',exception:'异常',boundary:'边界',custom:'自定义'}[test.group]||test.group):'')+' · 修订 '+(test.revision||1));const env=state.boot.environments.find(env=>env.id===test.spec.environment_id);name.append(node('small',test.spec.service+' / '+test.spec.method+' · '+(env?.name||'环境已删除')+' · '+test.spec.source_sha256.slice(0,8)));label.append(checkbox,name);const actions=node('div',undefined,'case-row-actions');const load=node('button','载入','button subtle');load.onclick=()=>loadCase(test).catch(error=>notice(error.message,true));const remove=node('button','删除','button subtle');remove.onclick=async()=>{try{await api('/api/testing/cases/'+test.id+'?'+params(),{method:'DELETE'});state.boot.cases=state.boot.cases.filter(item=>item.id!==test.id);renderCases();}catch(error){notice(error.message,true);}};actions.append(load,remove);row.append(label,actions);area.append(row);}}
+    async function loadCase(test){const spec=test.spec;if(!state.boot.projects.some(p=>p.id===spec.project_id))throw new Error('用例的工作项目已不存在');if(!state.boot.environments.some(env=>env.id===spec.environment_id))throw new Error('用例的测试环境已不存在');if(!state.boot.artifacts.some(a=>a.id===spec.artifact_id))throw new Error('用例的客户端产物不在当前目录中，请核对或刷新来源');$('projectSelect').value=spec.project_id;$('artifactSelect').value=spec.artifact_id;$('environmentSelect').value=spec.environment_id;await loadSources();$('serviceSelect').value=spec.service;await loadService(spec.service);$('methodSelect').value=spec.method;restoreInput(spec.data);$('returnFields').value=spec.return_fields.join('\n');$('expectedOutcome').value=spec.expected_outcome;$('expectedMessage').value=spec.message_contains;$('assertions').value=stringify(spec.assertions);$('collectTrace').checked=spec.collect_trace;$('allowWrite').checked=false;updateMethod();$('enableReadback').checked=spec.readback;$('readbackDataLabel').hidden=!spec.readback;$('readbackData').value=stringify(spec.readback_data);if(kind==='clf')await selectClf(spec.clf_name,false);state.pins={source_sha256:spec.source_sha256,client_sha256:spec.client_sha256,environment_version:spec.environment_version};$('caseVersion').hidden=false;$('caseName').value=test.name;state.loadedCase=test;if($('caseGroup'))$('caseGroup').value=test.group||'custom';updatePreview();notice('已载入用例。旧版本保持固定；来源或环境变更时，先核对再采用当前版本。');}
     async function saveCase(){const name=$('caseName').value.trim();if(!name)throw new Error('请填写用例名称');const saved=await send('/api/testing/cases',{name,spec:getSpec(),group:$('caseGroup')?.value||'custom',parent_run_id:state.loadedCase?.parent_run_id||'',parent_case_id:state.loadedCase?.id||''});state.boot.cases.unshift(saved);renderCases();notice('回归用例已保存；写入授权不会随用例保存。');}
     async function runBatch(){
         if(state.submitting||state.pending.size)return;
@@ -206,23 +222,36 @@
         updateMethod();
     }
 
+    function draftKey(){return 'clf-test-draft:'+state.username+':'+$('projectSelect').value+':'+(state.clf?.name||query.get('clf_name')||'');}
+    function rememberDraft(){
+        if(!embedded||!state.schema||state.restoringDraft)return;
+        try{const spec=getSpec();spec.allow_write=false;const draft={spec,name:$('caseName').value,group:$('caseGroup')?.value||'custom',parent_run_id:state.loadedCase?.parent_run_id||'',id:state.loadedCase?.id||''};
+            if(/password|passwd|token|secret|credential|authorization/i.test(JSON.stringify(draft))){sessionStorage.removeItem(draftKey());return;}
+            sessionStorage.setItem(draftKey(),JSON.stringify(draft));
+        }catch{/* Incomplete fields stay in the current form; they are never submitted as a valid draft. */}
+    }
+    async function restoreDraft(){
+        if(!embedded||state.restoringDraft||query.get('case_id'))return;let draft;try{draft=JSON.parse(sessionStorage.getItem(draftKey())||'null');}catch{return;}if(!draft)return;
+        state.restoringDraft=true;try{await loadCase(draft);notice('已恢复未提交输入与原版本，写入授权未恢复。请核对后再验证。');}finally{state.restoringDraft=false;}
+    }
+
     function configureClfTest(){
         if(kind!=='clf')return;
-        document.body.classList.add('clf-test-mode');
+        host.classList.add('clf-test-mode');
         const caseLabel=node('label','用例分组'),group=node('select');group.id='caseGroup';fillSelect(group,[['normal','正常'],['exception','异常'],['boundary','边界'],['custom','自定义']],null,'custom');caseLabel.append(group);$('caseName').closest('label').after(caseLabel);
-        document.querySelector('.eyebrow').textContent='沿用当前规则，核对业务效果';
-        const page=document.querySelector('.page'),context=node('p','正在读取系统默认连接…','muted');context.id='clfDefaultConnection';
+        root.querySelector('.eyebrow').textContent='沿用当前规则，核对业务效果';
+        const page=root.querySelector('.page'),context=node('p','正在读取系统默认连接…','muted');context.id='clfDefaultConnection';
         const connection=node('details',undefined,'clf-test-advanced');connection.append(node('summary','连接与来源 · 使用系统默认配置'));
-        const bar=document.querySelector('.environment-bar');bar.before(context,connection);
-        connection.append(bar,$('environmentEditor'),document.querySelector('.context-grid'),document.querySelector('.source-details'));
-        const catalog=document.querySelector('.catalog'),entry=node('details',undefined,'panel catalog clf-entry-options');entry.id='clfEntryOptions';
+        const bar=root.querySelector('.environment-bar');bar.before(context,connection);
+        connection.append(bar,$('environmentEditor'),root.querySelector('.context-grid'),root.querySelector('.source-details'));
+        const catalog=root.querySelector('.catalog'),entry=node('details',undefined,'panel catalog clf-entry-options');entry.id='clfEntryOptions';
         entry.append(node('summary','选择或更换规则、业务入口'));catalog.replaceWith(entry);catalog.classList.remove('panel','catalog');entry.append(catalog);entry.open=!(query.get('clf_name')||query.get('session_id'));
         const panel=$('definitionPanel'),definition=node('details',undefined,'panel definition-panel');definition.id='definitionPanel';definition.hidden=true;definition.append(node('summary','技术详情 · 原始 CLF 定义与引用'),$('clfDefinition'));panel.replaceWith(definition);
         const advanced=node('details',undefined,'clf-test-advanced');advanced.append(node('summary','高级输入与技术证据'));
         const actions=$('runButton').closest('.actions');actions.before(advanced);
-        for(const part of [$('rawMode').closest('label'),$('rawDataLabel'),$('returnFields').closest('label'),$('assertions').closest('details'),$('readbackDataLabel'),$('collectTrace').closest('label'),$('requestPreview').closest('details'),document.querySelector('.input-note')])advanced.append(part);
-        const add=node('details',undefined,'clf-extra-fields');add.append(node('summary','补充业务输入字段'));const fields=document.querySelector('.add-field');fields.replaceWith(add);add.append(fields);
-        document.querySelector('.request-panel h2').textContent='输入与预期';
+        for(const part of [$('rawMode').closest('label'),$('rawDataLabel'),$('returnFields').closest('label'),$('assertions').closest('details'),$('readbackDataLabel'),$('collectTrace').closest('label'),$('requestPreview').closest('details'),root.querySelector('.input-note')])advanced.append(part);
+        const add=node('details',undefined,'clf-extra-fields');add.append(node('summary','补充业务输入字段'));const fields=root.querySelector('.add-field');fields.replaceWith(add);add.append(fields);
+        root.querySelector('.request-panel h2').textContent='输入与预期';
         $('methodSelect').parentElement.firstChild.textContent='触发操作';
     }
     action('configureEnvironment',()=>{environmentEditor();toggle('environmentEditor','configureEnvironment');});action('newEnvironment',()=>environmentEditor(true));action('saveEnvironment',saveEnvironment);action('checkEnvironment',checkEnvironment);action('historyToggle',()=>toggle('historyPanel','historyToggle'));action('refreshButton',()=>{query.delete('source_sha256');return bootstrap();});action('addField',()=>{addField($('fieldPath').value.trim());$('fieldPath').value='';});action('runButton',startRun);action('saveCaseButton',saveCase);action('runBatch',runBatch);action('clfMore',()=>searchClfs(true));
@@ -234,14 +263,39 @@
     $('enableReadback').onchange=()=>{$('readbackDataLabel').hidden=!$('enableReadback').checked;if($('enableReadback').checked){try{const data=getData();$('readbackData').value=stringify(data.ObjectToChange?{ObjectToChange:data.ObjectToChange}:{});}catch(error){notice(error.message,true);}}updatePreview();};
     for(const id of ['returnFields','rawData','expectedOutcome','expectedMessage','assertions','allowWrite','collectTrace','readbackData'])$(id).addEventListener('input',updatePreview);
     $('clfSearchForm').onsubmit=event=>{event.preventDefault();searchClfs(false).catch(error=>notice(error.message,true));};
-    const title=kind==='clf'?'CLF 逻辑测试':'WCF 接口测试';document.title='Opcenter Designer · '+title;$('pageTitle').textContent=title;$('breadcrumb').textContent=title;$('pageDescription').textContent=kind==='clf'?'通过实际业务服务触发规则，对比预期结果，保留运行轨迹与来源证据。':'从真实客户端契约生成表单，执行服务调用并核对返回内容。';$(kind==='clf'?'clfNav':'wcfNav').classList.add('active');$(kind==='clf'?'clfNav':'wcfNav').setAttribute('aria-current','page');$('clfCatalog').hidden=kind!=='clf';$('clfSelection').hidden=kind!=='clf';$('collectTrace').checked=kind==='clf';
-    if(location.pathname==='/wcf-test/settings'){document.body.classList.add('settings-only');$('pageTitle').textContent='测试环境设置';$('pageDescription').textContent='为环境关联工作项目和默认客户端，保存后返回 WCF 测试。';$('environmentEditor').hidden=false;const back=node('a','返回 WCF 测试','button');back.href='/wcf-test';document.querySelector('.page-heading').append(back);}
+    const title=kind==='clf'?'CLF 逻辑测试':'WCF 接口测试';if(!embedded)document.title='Opcenter Designer · '+title;$('pageTitle').textContent=title;$('breadcrumb').textContent=title;$('pageDescription').textContent=kind==='clf'?'通过实际业务服务触发规则，对比预期结果，保留运行轨迹与来源证据。':'从真实客户端契约生成表单，执行服务调用并核对返回内容。';$(kind==='clf'?'clfNav':'wcfNav').classList.add('active');$(kind==='clf'?'clfNav':'wcfNav').setAttribute('aria-current','page');$('clfCatalog').hidden=kind!=='clf';$('clfSelection').hidden=kind!=='clf';$('collectTrace').checked=kind==='clf';
+    if(location.pathname==='/wcf-test/settings'){host.classList.add('settings-only');$('pageTitle').textContent='测试环境设置';$('pageDescription').textContent='为环境关联工作项目和默认客户端，保存后返回 WCF 测试。';$('environmentEditor').hidden=false;const back=node('a','返回 WCF 测试','button');back.href='/wcf-test';root.querySelector('.page-heading').append(back);}
     configureClfTest();
-    api('/config').then(async config=>{state.username=config.username;$('usernameLabel').textContent=config.username;await bootstrap();
+    if(embedded){$('projectSelect').disabled=true;$('clfCatalog').hidden=true;root.querySelector('.actions').append($('refreshButton'));root.querySelector('.page-heading').hidden=true;}
+    const ready=api('/config').then(async config=>{state.username=config.username;if(!embedded)$('usernameLabel').textContent=config.username;await bootstrap();
         if(kind==='clf'){
-            const back=node('a','返回 CLF 工作区','button');back.href='/clf?'+new URLSearchParams({project_id:$('projectSelect').value,clf_name:state.clf?.name||query.get('clf_name')||'',view:'runs'});document.querySelector('.page-heading').append(back);
+            const back=node('a','返回 CLF 工作区','button');back.href='/clf?'+new URLSearchParams({project_id:$('projectSelect').value,clf_name:state.clf?.name||query.get('clf_name')||'',view:'runs'});if(!embedded)root.querySelector('.page-heading').append(back);
             if(query.get('case_id')){const saved=state.boot.cases.find(c=>c.id===query.get('case_id'));if(!saved)throw new Error('用例不存在或不属于当前用户');await loadCase(saved);}
             else if(query.get('service')){const service=query.get('service'),method=query.get('method');if(!state.catalog?.services.includes(service))throw new Error('指定的服务不在当前客户端契约内');$('serviceSelect').value=service;await loadService(service);if(!state.schema.methods.some(m=>m.name===method))throw new Error('指定的方法不在当前服务契约内');$('methodSelect').value=method;updateMethod();notice('已沿用工作区明确选择的服务与方法。请核对输入和本次写入影响后再执行。');}
         }
-    }).catch(error=>notice('加载测试工作台失败：'+error.message,true));
+    }).catch(error=>{notice('加载测试工作台失败：'+error.message,true);if(embedded)throw error;});
+    if(embedded){
+        let chain=ready.then(restoreDraft);
+        window.clfTesting={
+            ready:chain,
+            async selectContext(values){
+                chain=chain.catch(()=>{}).then(async()=>{
+                    rememberDraft();
+                    for(const key of [...query.keys()])query.delete(key);
+                    for(const [key,value] of Object.entries(values))if(value)query.set(key,value);
+                    $('projectSelect').value=values.project_id||'';if(values.artifact_id)$('artifactSelect').value=values.artifact_id;if(values.environment_id)$('environmentSelect').value=values.environment_id;
+                    await bootstrap();
+                    if(values.case_id){const saved=state.boot.cases.find(c=>c.id===values.case_id);if(!saved)throw new Error('用例不存在或不属于当前用户');await loadCase(saved);}
+                    else if(values.service){if(!state.catalog?.services.includes(values.service))throw new Error('所选服务不在当前客户端契约中');$('serviceSelect').value=values.service;await loadService(values.service);if(!state.schema.methods.some(m=>m.name===values.method))throw new Error('所选方法不在当前服务契约中');$('methodSelect').value=values.method;updateMethod();}
+                    await restoreDraft();
+                });return chain;
+            },
+            async loadCase(identity){chain=chain.catch(()=>{}).then(async()=>{rememberDraft();const data=await api('/api/testing/bootstrap?'+params());state.boot=data;const saved=data.cases.find(c=>c.id===identity);if(!saved)throw new Error('用例不存在或不属于当前用户');await loadCase(saved);rememberDraft();});return chain;},
+            selectRun(identity){state.selectedRun=identity;},
+            saveDraft:rememberDraft,
+        };
+        root.addEventListener('input',()=>{clearTimeout(state.draftTimer);state.draftTimer=setTimeout(rememberDraft,300);});
+        root.addEventListener('change',()=>{clearTimeout(state.draftTimer);state.draftTimer=setTimeout(rememberDraft,300);});
+
+    }
 })();

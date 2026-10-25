@@ -152,7 +152,7 @@ def save_operation(owner, request: Operation, identity=None):
     schema = native.invoke(artifact, 'schema', service=request.service)
     if request.method not in {m['name'] for m in schema.get('methods', [])}:
         raise ValueError('真实客户端契约中没有所选方法')
-    definitions = [clf.get_clf(project['mdb_file'], name, request.source_sha256) for name in request.clf_names]
+    definitions = [clf.get_clf(project['mdb_file'], name, request.source_sha256, True) for name in request.clf_names]
     payload = {**request.model_dump(), 'evidence': {
         'source_sha256': request.source_sha256, 'client_sha256': request.client_sha256,
         'contract_checked': True, 'runtime_verified': False,

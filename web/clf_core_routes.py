@@ -2,7 +2,7 @@
 import asyncio
 import json
 from fastapi import APIRouter, HTTPException, Query
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
 from pydantic import Field
 
 from designer import clf, working, testing, testing_store as store, testing_runtime as native
@@ -43,7 +43,7 @@ async def bootstrap(username: str):
     return {'projects': projects, 'context': context, 'operations': states,
             'environments': [store.public_environment(env) for env in environments], 'artifacts': artifacts,
             'capabilities': {'record_source': 'local_test_receipts', 'runtime_breakpoints': False,
-                             'business_history_connector': False, 'save_clf': False}}
+                             'business_history_connector': False, 'save_clf': True}}
 
 
 @router.put('/context')
@@ -142,6 +142,46 @@ async def plan(req: PlanRequest):
 def uuid():
     from uuid import uuid4
     return uuid4().hex
+
+
+from designer.clf_delivery import DeliveryRequest
+
+
+@router.post('/delivery', status_code=202)
+async def start_delivery(req: DeliveryRequest):
+    require_progress_owner(req.username)
+    from designer import clf_delivery
+    try:
+        return await clf_delivery.start(req.username, req)
+    except ValueError as exc:
+        raise HTTPException(409, native.redact(str(exc))) from None
+
+
+@router.get('/delivery')
+async def deliveries(username: str, plan_id: str):
+    require_progress_owner(username)
+    await call(core.item, username, 'plan', plan_id)
+    return {'receipts': [r for r in await call(core.items, username, 'delivery') if r['plan_id'] == plan_id]}
+
+
+@router.get('/delivery/{identity}')
+async def delivery(identity: str, username: str):
+    require_progress_owner(username)
+    return await call(core.item, username, 'delivery', identity)
+
+
+@router.get('/delivery/{identity}/files/{kind}')
+async def delivery_file(identity: str, kind: str, username: str):
+    require_progress_owner(username)
+    if kind not in {'baseline', 'changes', 'manifest'}:
+        raise HTTPException(404, '不支持的实施文件')
+    receipt = await call(core.item, username, 'delivery', identity)
+    if receipt.get('status') != 'saved' or receipt.get('action') != 'save':
+        raise HTTPException(409, '尚无可验证的保存回执')
+    from designer import publication
+    path, _ = await call(publication.verified_manifest, receipt['result']['files']['manifest.json'])
+    filename = {'baseline': 'baseline.mdb', 'changes': 'changes.xml', 'manifest': 'manifest.json'}[kind]
+    return FileResponse(path.parent / filename, filename='clf-' + identity[:12] + '-' + filename)
 
 
 @router.get('/plans')

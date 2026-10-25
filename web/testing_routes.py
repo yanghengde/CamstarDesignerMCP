@@ -49,6 +49,11 @@ def testing_script():
     return FileResponse('static/testing.js', media_type='text/javascript', headers={'Cache-Control': 'no-cache'})
 
 
+@router.get('/clf-testing-panel')
+def testing_panel():
+    return FileResponse('static/clf-testing-panel.html', media_type='text/html', headers={'Cache-Control': 'no-store'})
+
+
 @router.get('/workspace-navigation.js')
 def navigation_script():
     return FileResponse('static/workspace-navigation.js', media_type='text/javascript', headers={'Cache-Control': 'no-cache'})
