@@ -79,22 +79,12 @@
         .chat-column { flex: 1; min-width: 0; display: flex; flex-direction: column; }
         .messages { flex: 1; min-height: 0; overflow-y: auto; padding: 40px max(32px, calc((100% - 820px) / 2)); scrollbar-width: thin; scrollbar-color: #d5dbe1 transparent; }
         .messages.is-empty { display: flex; flex-direction: column; }
-        .welcome { width: 100%; flex-shrink: 0; margin: auto 0; padding: 24px 0 44px; }
-        .eyebrow { color: var(--teal); font-size: 10px; font-weight: 650; letter-spacing: 2px; display: flex; align-items: center; gap: 9px; margin-bottom: 21px; }
-        .eyebrow::before { content: ""; height: 5px; width: 5px; border-radius: 50%; background: var(--teal); }
-        .welcome h2 { font-size: clamp(26px, 2.7vw, 36px); font-weight: 600; line-height: 1.5; letter-spacing: -1.3px; }
-        .welcome h2 span { color: #8a929a; }
-        .welcome-description { color: var(--secondary); font-size: 13px; line-height: 1.9; margin-top: 15px; }
-        .prompt-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 35px; }
-        .prompt-card { background: white; padding: 19px 18px 16px; border: 1px solid var(--border); border-radius: 10px; text-align: left; transition: border-color .15s, transform .15s, box-shadow .15s; }
-        .prompt-card:hover { border-color: #b3cfc7; transform: translateY(-2px); box-shadow: 0 4px 12px #253b3406; }
-        .card-top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 18px; }
-        .card-symbol { background: #f2f6f5; color: #548579; height: 32px; width: 32px; display: grid; place-items: center; border-radius: 8px; }
-        .card-arrow { color: #a8b1b9; width: 14px; height: 14px; }
-        .prompt-card strong { font-size: 13px; font-weight: 600; display: block; margin-bottom: 7px; }
-        .prompt-card p { font-size: 11px; color: var(--secondary); line-height: 1.8; }
-        .welcome-footnote { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 11px; margin-top: 22px; }
-        .welcome-footnote .icon { width: 13px; height: 13px; }
+        .welcome { width: 100%; flex-shrink: 0; margin: auto 0; padding: 32px 0 48px; text-align: center; }
+        .welcome h2 { font-size: clamp(23px, 2.2vw, 28px); font-weight: 500; line-height: 1.5; letter-spacing: 0; }
+        .welcome-description { color: var(--secondary); font-size: 13px; line-height: 1.9; margin-top: 12px; }
+        .capability-link { display: inline-flex; align-items: center; gap: 8px; margin-top: 18px; padding: 8px 12px; border-radius: 8px; color: var(--secondary); font-size: 13px; }
+        .capability-link:hover:not(:disabled) { background: #edf1f2; color: var(--text); }
+        .capability-link .icon { width: 15px; height: 15px; }
         .msg-wrapper { display: flex; width: 100%; margin-bottom: 25px; gap: 12px; }
         .user-wrapper { justify-content: flex-end; }
         .bubble { font-size: 14px; line-height: 1.85; min-width: 0; overflow-wrap: anywhere; }
@@ -238,8 +228,6 @@
             .topbar { padding: 0 22px; }
             .breadcrumbs > span, .breadcrumbs > .icon { display: none; }
             .guide { position: absolute; top: 66px; right: 0; bottom: 0; width: 270px; z-index: 15; box-shadow: -8px 0 24px #25343c08; }
-            .prompt-grid { gap: 8px; } .prompt-card { padding: 14px 12px; }
-            .prompt-card p { font-size: 10px; }
         }
         @media (max-width: 600px) {
             .app-shell { display: block; }
@@ -254,14 +242,7 @@
             .guide-toggle { font-size: 11px; padding: 6px 8px; }
             .messages { padding: 24px 20px; }
             .welcome { padding: 15px 0 20px; }
-            .welcome h2 { font-size: 28px; } .welcome-description { font-size: 12px; }
-            .prompt-grid { grid-template-columns: 1fr; margin-top: 25px; gap: 8px; }
-            .prompt-card { position: relative; padding: 14px 16px 14px 62px; min-height: 66px; }
-            .card-top { margin: 0; } .card-symbol { position: absolute; left: 16px; top: 16px; }
-            .card-arrow { display: none; } .prompt-card strong { margin-bottom: 3px; font-size: 12px; }
-            .prompt-card p { font-size: 11px; }
-            .welcome-footnote { font-size: 10px; line-height: 1.8; margin-top: 16px; align-items: flex-start; }
-            .welcome-footnote .icon { margin-top: 2px; }
+            .welcome h2 { font-size: 23px; } .welcome-description { font-size: 12px; }
             .composer-area { padding: 8px 14px 14px; }
             .composer-hint span:last-child { display: none; }
             .composer-tools { gap: 10px; }
@@ -349,16 +330,10 @@
     </div>
     <div class="notice" id="notice" role="alert" hidden></div>
     <template id="welcomeTemplate">
-        <section class="welcome">
-            <div class="eyebrow">AI DESIGN WORKSPACE</div>
-            <h2>把设计想法，<br><span>变成清晰的定义。</span></h2>
-            <p class="welcome-description">从一个对象、一个字段开始。<br>描述你的需求，让设计助手帮你查询、构建与核对。</p>
-            <div class="prompt-grid">
-                <button class="prompt-card" data-prompt="请先检查 Designer 环境并列出可用的元数据文件，再查询 Product 对象及其继承字段。"><div class="card-top"><span class="card-symbol"><svg class="icon"><use href="#i-search"/></svg></span><svg class="icon card-arrow"><use href="#i-arrow"/></svg></div><strong>查询对象</strong><p>了解已有定义与继承字段</p></button>
-                <button class="prompt-card" data-prompt="请创建 ExProduct 对象，继承 Product。先检查可用 MDB、客户工作区及名称冲突，再生成设计副本与变更包。"><div class="card-top"><span class="card-symbol"><svg class="icon"><use href="#i-design"/></svg></span><svg class="icon card-arrow"><use href="#i-arrow"/></svg></div><strong>新建对象</strong><p>基于父对象创建业务扩展</p></button>
-                <button class="prompt-card" data-prompt="请为 ExProduct 新增 ExDescription 字段，String 最长 200 字符，需要持久化。先检查目标对象、工作区和现有定义，再生成设计副本与变更包。"><div class="card-top"><span class="card-symbol"><svg class="icon"><use href="#i-field"/></svg></span><svg class="icon card-arrow"><use href="#i-arrow"/></svg></div><strong>新增字段</strong><p>配置类型、长度与持久化</p></button>
-            </div>
-            <p class="welcome-footnote"><svg class="icon"><use href="#i-check"/></svg>先查询，再设计。变更结果可在 Designer 中继续审核。</p>
+        <section class="welcome" aria-labelledby="welcomeTitle">
+            <h2 id="welcomeTitle">Opcenter Designer 设计助手</h2>
+            <p class="welcome-description">查询元数据、设计对象与字段，或通过 Excel 批量创建设计。</p>
+            <button type="button" class="capability-link" data-capabilities>查看支持的能力<svg class="icon" aria-hidden="true"><use href="#i-arrow"/></svg></button>
         </section>
     </template>
     <script>
@@ -466,7 +441,11 @@
             attachBtn.disabled = locked || backgroundRunning || !!pendingExcelPreview || attachmentDrafts.length >= 3;
             fileInput.disabled = locked || backgroundRunning;
             document.querySelectorAll('.session-item, .record-item').forEach(button => { button.disabled = navigationLocked; });
-            document.querySelectorAll('.prompt-card, .attachment-remove, .review-actions button').forEach(button => { button.disabled = locked || button.dataset.archived === 'true'; });
+            document.querySelectorAll('.attachment-remove, .review-actions button').forEach(button => { button.disabled = locked || button.dataset.archived === 'true'; });
+            document.querySelectorAll('[data-capabilities]').forEach(button => {
+                button.disabled = locked || backgroundRunning || requirementSubmitting || hasDraft || !!pendingExcelPreview;
+                button.title = hasDraft ? '请先发送或清空当前输入及附件，再查看能力' : '了解当前环境支持的设计能力';
+            });
             sendBtn.hidden = showStop;
             stopBtn.hidden = !showStop;
             stopBtn.disabled = navigationLocked;
@@ -1192,11 +1171,10 @@
             }
         });
         messagesDiv.addEventListener('click', event => {
-            const card = event.target.closest('.prompt-card');
-            if (!card || busy || historyLoading) return;
-            input.value = card.dataset.prompt;
-            input.dispatchEvent(new Event('input'));
-            input.focus();
+            const button = event.target.closest('[data-capabilities]');
+            if (!button || button.disabled || busy || backgroundRunning || historyLoading || attachmentUploading || reviewPreparing || requirementSubmitting || pendingExcelPreview || input.value.trim() || attachmentDrafts.length) return;
+            input.value = '你支持哪些 Designer 设计能力？请根据当前环境的实际能力，按元数据查询、对象与字段设计、逻辑与映射、Excel 批量设计、设计校验与交接简要介绍，并说明使用条件和暂不支持的内容。';
+            handleSend();
         });
         document.getElementById('composerForm').addEventListener('submit', event => { event.preventDefault(); handleSend(); });
         stopBtn.addEventListener('click', stopCurrentChat);
