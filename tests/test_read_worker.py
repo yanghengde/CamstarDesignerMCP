@@ -55,3 +55,40 @@ def test_installed_worker_matches_fresh_process_and_isolates_mutation(installed_
     result = vendor.query(str(installed_sdk), 'list', 'cdo', search='ExWorkerProbe')
     assert result['total'] == 0
     assert first['name'] == 'Product'
+
+
+def test_resident_mdb_survives_request_cleanup_and_is_removed_with_worker(tmp_path):
+    script = '''
+import sys,json,pathlib
+resident=None
+for line in sys.stdin:
+ c=json.loads(line);req=json.loads(pathlib.Path(c['input']).read_text())
+ if resident is None: resident=pathlib.Path(req['mdb'])
+ # Model the SDK's delayed reopening after the first request's copy is removed.
+ assert resident.read_bytes()==b'original metadata'
+ pathlib.Path(c['output']+'.done').write_text('ok')
+'''
+    args=[sys.executable,'-u','-c',script]
+    first=tmp_path/'first';first.mkdir()
+    original=first/'read.mdb';original.write_bytes(b'original metadata')
+    (first/'request.json').write_text(json.dumps({'mdb':str(original)}))
+    assert not read_worker.execute(args,first,'same-version',5)
+    resident=read_worker._resident
+    assert resident.is_file() and resident!=original
+    original.unlink()
+    second=tmp_path/'second';second.mkdir()
+    current=second/'read.mdb';current.write_bytes(b'original metadata')
+    (second/'request.json').write_text(json.dumps({'mdb':str(current)}))
+    assert read_worker.execute(args,second,'same-version',5)
+    resident.write_bytes(b'changed unexpectedly')
+    with pytest.raises(ValueError,match='只读查询失败'):
+        read_worker.execute(args,second,'same-version',5)
+    assert read_worker._process is None and not resident.exists()
+
+
+def test_worker_cannot_take_ownership_of_original_mdb(tmp_path):
+    original=tmp_path/'original.mdb';original.write_bytes(b'keep')
+    (tmp_path/'request.json').write_text(json.dumps({'mdb':str(original)}))
+    with pytest.raises(ValueError):
+        read_worker.execute([sys.executable,'-c','pass'],tmp_path,'version',5)
+    assert original.read_bytes()==b'keep' and read_worker._process is None

@@ -169,10 +169,13 @@ def parse_excel(data: bytes, filename: str) -> dict:
 
 
 def attachment_summary(document: dict) -> dict:
+    from designer.excel_rules import extract
+    rules = extract(document)
     return {
         'id': document['id'], 'name': document['name'], 'sha256': document['sha256'],
         'size': document['size'], 'row_count': document['row_count'],
         'cell_count': document['cell_count'], 'warnings': document['warnings'],
+        'rule_count': len(rules), 'rule_preview': rules[:5],
         'sheets': [{'name': sheet['name'], 'hidden': sheet['hidden'], 'row_count': len(sheet['rows']), 'preview': sheet['rows'][:6]} for sheet in document['sheets']],
     }
 

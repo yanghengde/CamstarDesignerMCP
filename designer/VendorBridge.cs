@@ -199,6 +199,14 @@ public static class DesignerVendorBridge {
    try { d[p.Name]=Scalar(p.GetValue(o,null)); } catch { /* Report only readable properties. */ }
   } return d;
  }
+ static Dictionary<string,object> ClfRecord(CLFDefinition clf) {
+  var record=Record(clf);
+  record["functions"]=clf.CLFFunctions.OrderBy(x=>x.Sequence).ThenBy(x=>x.CLFFunctionID).Select(x=>{
+   var row=Record(x);row["parameters"]=Values(x.Parameters).Select(Record).ToArray();return row;
+  }).ToArray();
+  record["declared_parameters"]=Values(clf.Parameters).Select(Record).ToArray();
+  return record;
+ }
  static readonly HashSet<string> ReadOnlyKinds=new HashSet<string>(new[]{"workspace","event","feature","data_type","sql_type","db_type","storage_category","cdo_usage","query_type","clf_type","label_category"});
  static readonly HashSet<string> Protected=new HashSet<string>(new[]{
   "Metadata","WorkspaceCode","WorkspaceOverride","LowerWorkspaceOverride","OverrideToDelete","ExistsInLowerWorkspace",
@@ -419,7 +427,15 @@ public static class DesignerVendorBridge {
   // Deliberately do not call SaveAll or export/compile in preflight mode.
   try {FieldContracts(set,Dict("fields",ChangedContractFields(request)));}
   catch(Exception error) {conflicts.Add(Dict("kind","maintenance_contract","message",error.Message));}
-  return Dict("ready",conflicts.Count==0,"objects",profiles,"conflicts",conflicts,"categories",categories,
+  var clfNames=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+  foreach(var item in (object[])request["operations"]) {
+   var op=Map(item);string action=Text(op,"action");
+   if(action=="create_clf" || action=="copy_clf") clfNames.Add(Text(op,"name"));
+   else if(action.Contains("clf")) clfNames.Add(Text(op,"owner"));
+   if(op.ContainsKey("clf")) clfNames.Add(Text(op,"clf"));
+  }
+  var clfPreviews=set.CLFDefinitions.Values.Where(c=>clfNames.Contains(c.Name)).Select(ClfRecord).ToArray();
+  return Dict("ready",conflicts.Count==0,"objects",profiles,"conflicts",conflicts,"categories",categories,"clfs",clfPreviews,
    "associated_operations",AssociatedOperations.ToArray(),
    "maintenance_fields",AssociatedFields.Select(f=>Dict("owner",f.CDODefinition.Name,"name",f.FieldName,"field_type",f.FieldDefinition.FieldDefName)).ToArray(),
    "usage_definition_count",set.CDOUsages.Count,
@@ -830,6 +846,16 @@ public static class DesignerVendorBridge {
       "total",descendants.Count,"records",descendants,"complete",true);
     } else if(mode=="fields") {
      result=FieldCatalog((CDODefinition)Find(set,"cdo",name,""));
+    } else if(mode=="catalog" && kind=="clf" && name=="rule_browser") {
+     var owners=set.CDODefinitions.Values.Where(x=>x.ModifiedStatus!=ModifiedStatusEnum.Deleted).ToDictionary(x=>x.CDODefId);
+     var bindings=set.CLFEventMaps.Values.Where(x=>x.ModifiedStatus!=ModifiedStatusEnum.Deleted && owners.ContainsKey(x.CDODefID))
+      .Select(x=>Dict("clf",x.CLFReference,"object",owners[x.CDODefID].Name,
+       "event",x.EventDefinition==null?"":x.EventDefinition.Name,"field_level",x.CallerID!=x.CDODefID)).ToArray();
+     result=Dict("objects",owners.Values.OrderBy(x=>x.Name).Select(x=>Dict("name",x.Name,"label",x.DisplayNameLabel,
+       "parent",x.ParentCDOName,"maintenance",x.MaintenanceCDOName,"is_service",x.IsService)).ToArray(),
+      "rules",set.CLFDefinitions.Values.Where(x=>x.ModifiedStatus!=ModifiedStatusEnum.Deleted).OrderBy(x=>x.Name)
+       .Select(x=>Dict("name",x.Name,"description",x.Description,"workspace",x.WorkspaceCode,
+        "customer",x.WorkspaceCode==x.ActiveWorkspaceCode)).ToArray(),"bindings",bindings);
     } else if(mode=="catalog") {
      var inventory=new Dictionary<string,object>(); foreach(var k in Collections.Keys) inventory[k]=Objects(set,k,"").Count;
      result=Dict("counts",inventory,"workspaces",set.GetWorkspaces().Select(Record).ToArray());
@@ -875,9 +901,7 @@ public static class DesignerVendorBridge {
        record["events"]=Values(((CDODefinition)obj).Events).Select(Record).ToArray();
       }
       if(obj is CDOField) record["events"]=Values(((CDOField)obj).Events).Select(Record).ToArray();
-      if(obj is CLFDefinition) record["functions"]=Values(((CLFDefinition)obj).CLFFunctions).Select(x=>{
-       var r=Record(x); r["parameters"]=Values(((CLFFunction)x).Parameters).Select(Record).ToArray(); return r;
-      }).ToArray();
+      if(obj is CLFDefinition) record=ClfRecord((CLFDefinition)obj);
       if(obj is CLFFunction) record["parameters"]=Values(((CLFFunction)obj).Parameters).Select(Record).ToArray();
       if(obj is QueryDef) { record["query_texts"]=Values(((QueryDef)obj).QueryTexts).Select(Record).ToArray(); record["parameters"]=Values(((QueryDef)obj).Parameters).Select(Record).ToArray(); }
       result=record;

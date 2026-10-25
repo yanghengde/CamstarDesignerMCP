@@ -57,7 +57,7 @@ from designer.attachments import attachment_context, attachment_summary
 from agent.titles import first_message_title
 from designer import progress_store
 from agent import excel_preview
-from agent import chat_context, chat_intent, chat_preferences, chat_requirements
+from agent import chat_context, chat_intent, chat_preferences, chat_requirements, assistant_modes
 from agent.chat_evidence import evidence_scope
 from designer.design_contract import validate_calls, inspect_calls
 
@@ -226,7 +226,8 @@ async def _agent_node(state: AgentState) -> dict[str, Any]:
     history = state.get('messages', [])
     if history and history[0].get('role') == 'system':
         # Old checkpoints must use current program-owned instructions too.
-        state = {**state, 'messages': [{**history[0], 'content': SYSTEM_PROMPT}] + history[1:]}
+        state = {**state, 'messages': [{**history[0], 'content': assistant_modes.system_prompt(
+            state['username'], state['session_id'])}] + history[1:]}
     loops = int(state.get("loop_count", 0)) + 1
     limit = 4 if state.get('read_only') else MAX_TOOL_LOOPS
     if loops > limit:
@@ -259,11 +260,14 @@ async def _agent_node(state: AgentState) -> dict[str, Any]:
         model_messages = chat_context.build_messages(
             state.get('messages', []), task=state.get('task_context'),
             preferences=chat_preferences.current(state['username'], state['session_id']),
-            extra_system=[USER_FACING_LANGUAGE_RULE, CONVERSATION_INTENT_RULE, CHAT_QUALITY_RULE, experience_context],
+            extra_system=[USER_FACING_LANGUAGE_RULE, CONVERSATION_INTENT_RULE, CHAT_QUALITY_RULE, experience_context,
+                          assistant_modes.context(state['username'], state['session_id'])],
         )
         available_tools = [tool for tool in _openai_tools if not state.get('read_only')
                            or chat_intent.read_only_tool(tool.get('function', {}).get('name', ''))]
-        if chat_intent.metadata_lookup(state.get('request_message', '')):
+        if assistant_modes.mode(state['username'], state['session_id']) == 'clf':
+            available_tools = [tool for tool in available_tools if tool['function']['name'] in assistant_modes.CLF_TOOLS]
+        elif chat_intent.metadata_lookup(state.get('request_message', '')):
             available_tools = [tool for tool in available_tools
                                if tool.get('function', {}).get('name') in chat_intent.METADATA_LOOKUP_TOOLS]
 
@@ -369,6 +373,13 @@ def _policy_node(state: AgentState) -> dict[str, Any]:
     if revised:
         return revised
     pending = state.get("pending_tool_calls", [])
+    try:
+        for call in pending:
+            function = call.get('function') or {}
+            assistant_modes.enforce(state.get('username', ''), state.get('session_id', ''), function.get('name', ''),
+                                    json.loads(function.get('arguments') or '{}'))
+    except (ValueError, TypeError) as exc:
+        return _reject_plan(state, str(exc))
     creation_checks = []
     if state.get('task_context'):
         state = {**state, 'task_context': chat_context.update_task(state['task_context'], '', [])}
@@ -583,6 +594,7 @@ async def _execute_tool_node(state: AgentState) -> dict[str, Any]:
     else:
         started = time.time()
         try:
+            assistant_modes.enforce(state['username'], state['session_id'], func_name, func_args)
             if (state.get('excel_sources') or state.get('task_context', {}).get('live_revision')) and func_name in excel_preview.DESIGN_TOOLS:
                 if excel_preview.fingerprint(tool_call) not in state.get('excel_approved_calls', []):
                     raise ValueError('Excel 设计尚未通过预览确认')
@@ -666,6 +678,9 @@ async def _execute_tool_node(state: AgentState) -> dict[str, Any]:
         tool_message['field_catalog'] = result
         tool_message['content'] = str({**result, 'displayed_as_table': True})
         writer({'type': 'field_catalog', 'id': tool_message['tool_call_id'], 'result': result})
+    if isinstance(result, dict) and result.get('format') in {'designer_clf_v1', 'designer_clf_plan_v1'}:
+        tool_message['clf_result'] = result
+        writer({'type': 'clf_result', 'result': result})
     messages = state.get('messages', []) + [tool_message]
     response = state.get('excel_confirmation_response', '')
     if not pending and response:

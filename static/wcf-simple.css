@@ -1,0 +1,36 @@
+.simple-page{max-width:1200px}
+.simple-page .panel{margin-top:18px}
+.system-context{display:flex;align-items:center;gap:10px;flex-wrap:wrap;color:var(--secondary);font-size:12px}
+.system-context #connection{margin-left:auto}
+.system-dot{width:7px;height:7px;background:var(--teal);border-radius:50%;flex-shrink:0}
+.object-controls{display:grid;grid-template-columns:1fr 1.2fr auto;gap:16px;align-items:end}
+.object-controls .primary{min-height:38px;white-space:nowrap}
+.object-panel>p{margin-top:12px}
+.simple-page table{width:100%;border-collapse:collapse;text-align:left}
+.table-scroll{overflow-x:auto;margin:16px 0 10px}
+.simple-page th{color:var(--secondary);font-size:12px;font-weight:500;background:var(--background)}
+.simple-page td,.simple-page th{padding:12px;border-bottom:1px solid var(--border);overflow-wrap:anywhere}
+.simple-page td:last-child,.simple-page th:last-child{width:84px;white-space:nowrap;text-align:right}
+.simple-page td:first-child{font-weight:500}
+.simple-page td:nth-child(3){min-width:150px}
+.simple-page small{color:var(--secondary)}
+.simple-page .result-panel{min-height:210px}
+.simple-page .section-heading{display:flex;justify-content:space-between;gap:12px;margin-bottom:16px}
+.simple-page .result-status{margin:8px 0}
+.simple-page details{margin-top:20px}
+.history-panel .button{margin:8px 8px 0 0}
+.simple-page pre{max-height:360px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;font-size:11px}
+.simple-page dl{display:grid;grid-template-columns:minmax(110px,1fr) 2fr;gap:8px}
+.simple-page dd{margin:0;overflow-wrap:anywhere}
+#editDialog{width:min(760px,calc(100% - 32px));max-height:88vh;border:1px solid var(--border);border-radius:12px;padding:26px;color:var(--text);box-shadow:0 18px 80px #172b3433}
+#editDialog::backdrop{background:#172b3466}
+.dialog-heading{display:flex;justify-content:space-between;align-items:flex-start;gap:16px}
+#editTitle{font-size:20px}
+#editStatus{margin:18px 0;color:var(--secondary);overflow-wrap:anywhere}
+#editDialog .form-grid{gap:16px;margin-top:16px}
+#editDialog details{margin-top:20px}
+#editDialog details>input{margin-top:12px}
+#editDialog textarea{resize:vertical}
+.dialog-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:24px;padding-top:18px;border-top:1px solid var(--border)}
+@media(max-width:740px){.object-controls{grid-template-columns:1fr 1fr}.object-controls .primary{grid-column:1/-1}.simple-page td,.simple-page th{padding:10px 8px}.system-context #connection{margin-left:0}}
+@media(max-width:480px){.object-controls{grid-template-columns:1fr}.simple-page table{min-width:520px}#editDialog{width:calc(100% - 20px);padding:18px}.system-context{gap:7px}}

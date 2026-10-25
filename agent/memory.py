@@ -200,13 +200,16 @@ def get_sessions(username: str) -> list:
     for sid, session in sessions.items():
         _ensure_session_times(session)
         result.append({'id': sid, 'title': session.get('title', '会话'),
+                       'mode': session.get('mode', 'designer'),
                        'created_at': session['created_at'], 'updated_at': session['updated_at']})
     # Reverse insertion order provides a stable tie-breaker for legacy data.
     return sorted(reversed(result), key=lambda session: (session['updated_at'], session['created_at']), reverse=True)
 
 
-def create_session(username: str) -> str:
+def create_session(username: str, mode: str = 'designer') -> str:
     """创建一个新会话"""
+    if mode not in {'designer', 'clf'}:
+        raise ValueError('未知助手类型')
     get_user_dir(username)
     if username not in user_memories:
         user_memories[username] = {"sessions": {}, "active_session": None}
@@ -217,6 +220,7 @@ def create_session(username: str) -> str:
     created = time.time()
     user_memories[username]["sessions"][session_id] = {
         "id": session_id,
+        "mode": mode,
         "title": f"新对话 {len(user_memories[username]['sessions']) + 1}",
         "created_at": created,
         "updated_at": created,
@@ -264,7 +268,8 @@ def get_user_messages(username: str, session_id: str = None) -> list:
     
     # 强制更新老用户的系统提示词，以应用最新的Agent定位指令
     if messages and messages[0].get("role") == "system":
-        messages[0]["content"] = SYSTEM_PROMPT
+        from agent.assistant_modes import system_prompt
+        messages[0]["content"] = system_prompt(username, session_id)
         
     return messages
 
