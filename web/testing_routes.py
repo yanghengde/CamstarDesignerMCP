@@ -59,6 +59,16 @@ def navigation_script():
     return FileResponse('static/workspace-navigation.js', media_type='text/javascript', headers={'Cache-Control': 'no-cache'})
 
 
+@router.get('/chat-presentation.js')
+def chat_presentation_script():
+    return FileResponse('static/chat-presentation.js', media_type='text/javascript', headers={'Cache-Control': 'no-cache'})
+
+
+@router.get('/chat-presentation.css')
+def chat_presentation_style():
+    return FileResponse('static/chat-presentation.css', media_type='text/css', headers={'Cache-Control': 'no-cache'})
+
+
 @router.get('/testing.css')
 def testing_style():
     return FileResponse('static/testing.css', media_type='text/css', headers={'Cache-Control': 'no-cache'})

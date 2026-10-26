@@ -266,6 +266,7 @@
         .review-actions a { font-size: 13px; color: #147d69; }
         @media (max-width: 600px) { .designer-result { margin-left: 0; padding: 16px; } }
     </style>
+    <link rel="stylesheet" href="/chat-presentation.css?v=20261026-1">
 </head>
 <body>
     <svg xmlns="http://www.w3.org/2000/svg" style="display:none" aria-hidden="true">
@@ -321,7 +322,7 @@
                             <input type="file" id="excelFileInput" accept=".xlsx,.xls" multiple hidden>
                             <div class="attachment-list" id="attachmentList" aria-label="待发送的 Excel 附件"></div>
                             <p class="upload-status" id="uploadStatus" role="status" hidden>正在读取 Excel…</p>
-                            <textarea id="inputBox" rows="2" aria-label="设计需求" placeholder="描述你的对象或字段设计需求…" autocomplete="off"></textarea>
+                            <textarea id="inputBox" rows="1" aria-label="设计需求" placeholder="描述你的对象或字段设计需求…" autocomplete="off"></textarea>
                             <div class="composer-bottom"><div class="composer-tools"><button class="attach-button" id="attachBtn" type="button"><svg class="icon"><use href="#i-attach"/></svg>添加 Excel</button></div><div class="composer-actions"><button class="send-button" id="sendBtn" type="submit" aria-label="发送" title="发送"><svg class="icon" aria-hidden="true"><use href="#i-send"/></svg></button><button class="send-button stop-button" id="stopBtn" type="button" aria-label="停止回答" title="停止回答" hidden><svg class="icon" aria-hidden="true"><use href="#i-stop"/></svg></button></div></div>
                         </form>
                         <div class="composer-hint"><span id="backgroundStatus" role="status">可随时补充或修改要求；提交成功后可离开此页，设计会在后台继续。</span><span class="composer-shortcuts">Enter 发送 · Shift + Enter 换行</span></div>
@@ -340,6 +341,7 @@
             <button type="button" class="capability-link" data-capabilities>查看支持的能力<svg class="icon" aria-hidden="true"><use href="#i-arrow"/></svg></button>
         </section>
     </template>
+    <script src="/chat-presentation.js?v=20261026-1"></script>
     <script src="/clf-workspace.js?v=20261025-1"></script>
     <script>
         const clfMode = location.pathname === '/clf' || location.pathname === '/clf/records';
@@ -464,6 +466,7 @@
         }
 
         function monitorBackground(data) {
+            if(typeof window!=='undefined')window.ChatPresentation?.observe(messagesDiv,data.background_chat);
             if(typeof clfMode!=='undefined'&&clfMode)window.clfWorkspace?.history(data);
             const previous = backgroundRunning;
             backgroundRunning = !!data.background_running;
@@ -557,7 +560,7 @@
         function detachChatView() {
             const controller=abortController;
             abortController=null;
-            if(controller){controller.detached=true;if(controller.jobId)controller.abort();}
+            if(controller){controller.detached=true;controller.work?.dispose();if(controller.jobId)controller.abort();}
             busy=false;backgroundRunning=false;backgroundJobId=null;
             clearTimeout(backgroundTimer);
             typingIndicator.hidden=true;
@@ -582,6 +585,7 @@
         }
 
         function renderMarkdown(bubble, text) {
+            if(window.ChatPresentation){window.ChatPresentation.renderMarkdown(bubble,text);return;}
             if (window.marked && window.DOMPurify) {
                 bubble.innerHTML = DOMPurify.sanitize(marked.parse(text), { USE_PROFILES: { html: true } });
                 bubble.querySelectorAll('table').forEach(table => {
@@ -627,11 +631,7 @@
             return bubble;
         }
 
-        function appendClfHistory(text) {
-            if(text.length<700)return appendMessage('agent',text);
-            const bubble=createBubble('agent'),details=document.createElement('details'),summary=document.createElement('summary'),body=document.createElement('div');
-            details.className='clf-history-detail';summary.textContent='展开完整分析说明';details.append(summary,body);renderMarkdown(body,text);bubble.append(details);return bubble;
-        }
+        function appendClfHistory(text) { return appendMessage('agent',text); }
 
         function showFieldCatalog(id, result) {
             if (!result || result.format !== 'designer_field_catalog_v1') return;
@@ -934,6 +934,7 @@
             pendingExcelPreview = null;renderAttachmentDrafts();
             backgroundJobId=null;
             updateControls();
+            window.ChatPresentation?.reset(messagesDiv);
             messagesDiv.replaceChildren(typingIndicator);
             typingIndicator.hidden = true;
             try {
@@ -943,12 +944,18 @@
                 if(clfMode)window.clfWorkspace?.history(data);
                 let hasVisible = false;
                 const result=data.designer_results?.[data.designer_results.length-1];
-                let resultShown=false,clfReadProcess=null;
+                let resultShown=false,historyWork=null;
                 (data.messages || []).forEach(message => {
-                    if (message.role === 'user') {clfReadProcess=null;const bubble=appendMessage('user', message.content, message.attachments || []);if(message.requirement_id)bubble.dataset.requirementId=message.requirement_id;hasVisible = true; }
-                    else if (message.role === 'assistant') {if(message.content){if(clfMode&&message.tool_calls?.length){if(!clfReadProcess){const bubble=createBubble('agent'),details=document.createElement('details'),summary=document.createElement('summary');summary.textContent='读取与核对过程';details.className='clf-history-detail';clfReadProcess=document.createElement('div');details.append(summary,clfReadProcess);bubble.append(details);}const part=document.createElement('div');renderMarkdown(part,message.content);clfReadProcess.append(part);}else if(clfMode)appendClfHistory(message.content);else appendMessage('agent',message.content);hasVisible=true;}if(message.excel_preview){showExcelPreview(message.excel_preview);hasVisible=true;}}
-                    else if(message.role==='tool'&&message.field_catalog){showFieldCatalog(message.tool_call_id,message.field_catalog);hasVisible=true;}
-                    else if(message.role==='tool'&&result&&!resultShown&&String(message.content).includes(result.id)){showDesignerResult(result);resultShown=true;}
+                    if (message.role === 'user') {const bubble=appendMessage('user', message.content, message.attachments || []);if(message.requirement_id)bubble.dataset.requirementId=message.requirement_id;hasVisible=true;historyWork=window.ChatPresentation?.createWork(messagesDiv,typingIndicator,{historical:true});}
+                    else if (message.role === 'assistant') {
+                        if(message.tool_calls?.length&&historyWork){if(message.content)historyWork.explanation(message.content);for(const call of message.tool_calls)historyWork.step(call.function?.name,call.id);}
+                        else if(message.content){if(clfMode)appendClfHistory(message.content);else appendMessage('agent',message.content);hasVisible=true;}
+                        if(message.excel_preview){showExcelPreview(message.excel_preview);hasVisible=true;}
+                    }else if(message.role==='tool'){
+                        if(message.name)historyWork?.step(message.name,message.tool_call_id,true);
+                        if(message.field_catalog){showFieldCatalog(message.tool_call_id,message.field_catalog);hasVisible=true;}
+                        else if(result&&!resultShown&&String(message.content).includes(result.id)){showDesignerResult(result);resultShown=true;}
+                    }
                 });
                 if(data.pending_excel_preview){showExcelPreview(data.pending_excel_preview);hasVisible=true;}
                 if(data.chat_requirements?.length){data.chat_requirements.forEach(showRequirement);hasVisible=true;}
@@ -1025,12 +1032,15 @@
             input.style.height = '';
             updateControls();
             const userBubble = appendMessage('user', text, sentAttachments);
+            const presentation=typeof window==='undefined'?null:window.ChatPresentation;
+            const work=presentation?.createWork(messagesDiv,typingIndicator);
             typingIndicator.hidden = false;
             const typingText = typingIndicator.querySelector('span');
             typingText.textContent = '正在分析设计需求…';
             scrollToBottom();
             const requestController=new AbortController();
             abortController=requestController;
+            requestController.work=work;
             let streamBubble = null;
             let streamContent = '';
             function handleEvent(line) {
@@ -1038,6 +1048,7 @@
                 if (!line.startsWith('data: ')) return;
                 const data = JSON.parse(line.substring(6));
                 if(data.type==='chat_job'){
+                    work?.observe(data);
                     requestSession=requestSession||data.session_id;
                     if(!currentSessionId)currentSessionId=requestSession;
                     if(data.status==='running'){
@@ -1064,6 +1075,8 @@
                 } else if (data.type === 'field_catalog') {
                     showFieldCatalog(data.id, data.result);
                 } else if (data.type === 'step') {
+                    work?.step(data.func);
+                    if(streamBubble&&work){work.moveExplanation(streamBubble.parentElement);streamBubble=null;}
                     typingIndicator.hidden = false;
                     typingText.textContent = data.func === 'get_designer_fields' ? '正在一次读取完整字段清单…' : '正在查询与核对设计定义…';
                     scrollToBottom();
@@ -1078,6 +1091,7 @@
                     if(data.partial_execution){const card=Array.from(messagesDiv.querySelectorAll('[data-excel-preview]')).find(node=>node.dataset.excelPreview===data.id);if(card)card.dataset.partialExecution='true';}
                     excelPreviewStatus(data.id,data.status,data.confirmation_received_utc);
                 } else if (data.type === 'error') {
+                    requestController.workOutcome='failed';work?.finish('failed');
                     typingIndicator.hidden = true;
                     appendMessage('agent', '处理失败：' + data.message);
                 } else if (data.type === 'stream_start') {
@@ -1121,12 +1135,14 @@
                 if (buffer.trim()) handleEvent(buffer);
             } catch (error) {
                 if(requestController.detached||abortController!==requestController)return;
+                requestController.workOutcome=error.name==='AbortError'?'stopped':'disconnected';
                 appendMessage('agent', error.name === 'AbortError' ? '本次回答已停止。' : '网络或服务错误：' + error.message);
             } finally {
                 if(requestController.detached||abortController!==requestController)return;
+                work?.finish(requestController.workOutcome||'completed');
                 if (!messageSaved && !requestController.jobId && sentAttachments.length) {
                     input.value = text;
-                    userBubble.parentElement.remove();
+                    userBubble.parentElement.remove();work?.details.remove();work?.dispose();
                 }
                 abortController = null;
                 busy = false;
@@ -1266,7 +1282,8 @@
         input.addEventListener('keydown', event => {
             if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); handleSend(); }
         });
-        input.addEventListener('input', () => { input.style.height = '52px'; input.style.height = Math.min(input.scrollHeight, 160) + 'px'; updateControls(); });
+        input.addEventListener('input', () => { window.ChatPresentation?.resizeComposer(input); updateControls(); });
+        window.addEventListener('resize',()=>window.ChatPresentation?.resizeComposer(input));
         if (window.marked) marked.setOptions({ breaks: true, gfm: true });
         syncNavigation();
         setView(viewFromLocation(), { updateUrl: false });

@@ -45,7 +45,7 @@
     function table(headers,rows){const t=node('table',undefined,'core-table');const h=t.createTHead().insertRow();headers.forEach(x=>h.append(node('th',x)));for(const values of rows){const r=t.createTBody();const row=r.insertRow();values.forEach(v=>row.insertCell().textContent=val(v));}return t;}
     const guarded=fn=>event=>{event.preventDefault();Promise.resolve().then(()=>fn(event)).catch(showError);};
     function renderAnswer(text){
-        const area=$('assistantAnswer');area.replaceChildren();let list=null,code=null;
+        const area=$('assistantAnswer');if(window.ChatPresentation&&window.marked&&window.DOMPurify){window.ChatPresentation.renderMarkdown(area,text);return;}area.replaceChildren();let list=null,code=null;
         const inline=(parent,value)=>{for(const part of value.split(/(\*\*[^*]+\*\*|`[^`]+`)/g)){if(part.startsWith('**')&&part.endsWith('**'))parent.append(node('strong',part.slice(2,-2)));else if(part.startsWith('`')&&part.endsWith('`'))parent.append(node('code',part.slice(1,-1)));else parent.append(document.createTextNode(part));}};
         for(const line of text.split('\n')){if(line.startsWith('```')){if(code)code=null;else{code=node('pre');area.append(code);}list=null;continue;}if(code){code.append(document.createTextNode(line+'\n'));continue;}if(!line.trim()){list=null;continue;}const match=line.match(/^\d+\.\s+(.*)/);if(match){if(!list){list=node('ol');area.append(list);}const item=node('li');inline(item,match[1]);list.append(item);}else{list=null;const p=node(/^#{1,4}\s/.test(line)?'h3':'p');inline(p,line.replace(/^#{1,4}\s+/,''));area.append(p);}}
     }
@@ -140,7 +140,7 @@
         const d=await api(base+'/definition/'+project+'?'+params({name,source_sha256:state.project.source_sha256}));if(epoch!==state.detailEpoch||project!==state.context.project_id)return;
         state.definition=d;state.context.clf_name=d.name;state.call=0;state.binding='';state.assistant=null;if(!restoreSelection)state.context.mode='engineer';
         if(restoreSelection&&state.context.source_sha256===d.source_sha256){state.call=Math.max(0,d.calls.findIndex(c=>c.call_id===state.context.call_id));if(d.bindings?.some(b=>b.CLFEventMapID===state.context.binding_id))state.binding=String(state.context.binding_id);}
-        $('coreAssistant').hidden=true;$('fullAssistant').hidden=true;$('assistantAnswer').replaceChildren();renderDefinition();paintModes();persist();if(state.context.view==='runs')ensureTesting().catch(showError);
+        window.ChatPresentation?.reset($('assistantWork'));$('assistantWork').replaceChildren();$('coreAssistant').hidden=true;$('fullAssistant').hidden=true;$('assistantAnswer').replaceChildren();renderDefinition();paintModes();persist();if(state.context.view==='runs')ensureTesting().catch(showError);
         $('ruleList').querySelectorAll('button').forEach(b=>b.setAttribute('aria-pressed',String(b.querySelector('strong')?.textContent===name)));
     }
     function renderDefinition(){
@@ -321,13 +321,14 @@
     async function ask(){
         if(!state.definition||!state.project)throw new Error('请先选择规则');if(state.asking)return;const message=$('coreQuestion').value.trim();if(!message)throw new Error('请填写问题');
         const epoch=state.epoch,name=state.definition.name;state.asking=true;$('sendCoreQuestion').disabled=true;$('assistantAnswer').textContent='正在分析当前规则…';
+        window.ChatPresentation?.reset($('assistantWork'));$('assistantWork').replaceChildren();const work=window.ChatPresentation?.createWork($('assistantWork'));let outcome='completed';
         try{const response=await fetch(base+'/assistant',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:state.username,project_id:state.context.project_id,source_sha256:state.project.source_sha256,clf_name:name,message,session_id:state.assistant,run_id:state.inspection?.record.spec.clf_name===name?state.inspection.record.id:'',binding_id:state.binding?Number(state.binding):null,call_id:state.definition.calls[state.call]?.call_id||null})});if(!response.ok)throw new Error((await response.json()).detail||'助手请求失败');
             if(epoch!==state.epoch||name!==state.definition?.name){await response.body.cancel();return;}
             state.assistant=response.headers.get('X-Chat-Session-ID');$('fullAssistant').href='/clf?session_id='+encodeURIComponent(state.assistant);$('fullAssistant').hidden=false;
             const reader=response.body.getReader(),decoder=new TextDecoder();let buffer='',answer='';
-            while(true){const part=await reader.read();if(part.done)break;buffer+=decoder.decode(part.value,{stream:true});const chunks=buffer.split('\n\n');buffer=chunks.pop();for(const chunk of chunks){const line=chunk.split('\n').find(x=>x.startsWith('data: '));if(!line)continue;let event;try{event=JSON.parse(line.slice(6));}catch{continue;}if(epoch!==state.epoch||name!==state.definition?.name)continue;if(event.type==='done')answer=event.reply||answer;else if(event.type==='error')answer=event.message;else if(event.type==='stream_chunk'||event.type==='chunk'||event.type==='content')answer+=event.content||event.text||'';if(answer)renderAnswer(answer);}}
+            while(true){const part=await reader.read();if(part.done)break;buffer+=decoder.decode(part.value,{stream:true});const chunks=buffer.split('\n\n');buffer=chunks.pop();for(const chunk of chunks){const line=chunk.split('\n').find(x=>x.startsWith('data: '));if(!line)continue;let event;try{event=JSON.parse(line.slice(6));}catch{continue;}if(epoch!==state.epoch||name!==state.definition?.name)continue;if(event.type==='chat_job')work?.observe(event);else if(event.type==='step'){work?.step(event.func);if(answer){work?.explanation(answer);answer='';$('assistantAnswer').replaceChildren();}}else if(event.type==='stream_start')answer='';else if(event.type==='done')answer=event.reply||answer;else if(event.type==='error'){answer=event.message;outcome='failed';}else if(event.type==='stream_chunk'||event.type==='chunk'||event.type==='content')answer+=event.content||event.text||'';if(answer)renderAnswer(answer);}}
             if(epoch===state.epoch&&name===state.definition?.name&&!answer)$('assistantAnswer').textContent='分析已结束，完整结果与工具证据可在对话中查看。';
-        }finally{state.asking=false;$('sendCoreQuestion').disabled=false;}
+        }catch(error){outcome='failed';throw error;}finally{work?.finish(outcome);state.asking=false;$('sendCoreQuestion').disabled=false;}
     }
     $('testCurrent').onclick=guarded(()=>ensureTesting());
     document.addEventListener('clf:test-result',event=>{const r=event.detail?.record;if(r?.spec.project_id===state.context.project_id&&r.spec.clf_name===state.context.clf_name){notice('');inspectRun(r.id).catch(showError);}});
