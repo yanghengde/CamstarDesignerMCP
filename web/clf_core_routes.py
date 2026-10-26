@@ -191,6 +191,15 @@ async def plans(username: str, project_id: str):
     return {'plans': records[:20], 'total': len(records), 'truncated': len(records) > 20}
 
 
+@router.get('/plans/{identity}/report')
+@router.get('/plans/{identity}/report/export')
+async def plan_report(identity: str, username: str):
+    require_progress_owner(username)
+    from designer.clf_report import report
+    packet = await call(report, username, identity)
+    return JSONResponse(native.redact(packet), headers={'Content-Disposition': 'attachment; filename="clf-delivery-' + identity + '.json"'})
+
+
 class AssistantRequest(core.Strict):
     username: str
     project_id: str = Field(pattern=core.ID)

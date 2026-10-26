@@ -151,10 +151,52 @@
         select.onchange=()=>{state.binding=select.value;renderCalls();persist();};label.append(select);h.append(label,node('p','工作区 '+d.workspace+' · '+d.calls.length+' 个真实调用；定义顺序不代表本次执行路径。','core-note'));
         if(!d.binding_parameters_available)h.append(node('p','当前组件未返回入口附着参数。库默认值不能替代入口值。','core-note'));
         const src=details('完整来源与版本',{source_file:d.source_file,source_sha256:d.source_sha256,workspace:d.workspace,active_workspace:d.active_workspace});h.append(src);
-        const refs=$('referencesView');refs.replaceChildren();const dec=details('CLF 声明参数 · '+d.declared_parameters.length,d.declared_parameters);refs.append(dec);
+        const refs=$('referencesView');refs.replaceChildren();renderDeclarations(refs,d);
         const r=d.references;refs.append(node('p',r.available?`官方引用 ${r.total??'未知'} 项${r.truncated?' · 已截断':''}；动态运行范围仍待核对。`:'引用读取失败：'+r.error,'muted'));
         refs.append(table(['对象 / 字段','事件 / 方法'],(r.rows||[]).map(x=>[[x.CDOName,x.FieldName].filter(Boolean).join(' / ')||'详见原文',x.EventName||x.MethodName||x])));
         refs.append(details('引用原文及范围',r));renderCalls();
+    }
+    const declarationKeys=['Name','Direction','DataType','ParamMultiplicity','TypeMultiplicity','FunctionParmUsage','CDOType','Description','Notes','DefaultValue'];
+    const declarationValues=p=>Object.fromEntries(declarationKeys.map(k=>[k,p?.[k]??'']));
+    function renderDeclarations(area,d){
+        const section=node('section',undefined,'core-declarations');section.append(node('h3','CLF 声明参数 · '+d.declared_parameters.length),node('p','在 CLF 生命周期中由函数传入或设置，使用 CLF:: / DBCLF:: 引用；与调用参数表达式分别维护。','core-note'));
+        const editor=d.declaration_editor,impact=editor?.impact;
+        if(impact)section.append(node('p',`${impact.binding_count} 个事件绑定 · ${impact.rule_callers.length} 个直接规则调用者。${impact.notice}`,'core-note'));
+        for(const p of d.declared_parameters){const row=node('div',undefined,'core-declaration-row'),description=node('div');description.append(node('strong',p.Name||p.name),node('small',[p.Direction,p.DataType,p.ParamMultiplicity,p.TypeMultiplicity,p.CDOType].filter(Boolean).join(' · ')));if(p.Description)description.append(node('p',p.Description,'core-note'));row.append(description);if(editor){const actions=node('div',undefined,'actions');actions.append(button('编辑',()=>editDeclaration('update',p)),button('准备删除',()=>editDeclaration('remove',p)));row.append(actions);}section.append(row);}
+        if(editor)section.append(button(impact.customer_owned?'新增声明参数':'准备客户副本及参数',()=>editDeclaration('add')));else section.append(node('p','当前组件未返回声明编辑合同，请刷新或核对组件版本。','core-note'));
+        section.append(details('声明参数完整原文与影响范围',{parameters:d.declared_parameters,editor}));area.append(section);
+    }
+    function editDeclaration(action,parameter){
+        const d=state.definition,editor=d?.declaration_editor;if(!editor)throw new Error('请先读取声明参数合同');
+        state.declarationEdit={action,parameter,project:state.context.project_id,source:state.project.source_sha256,clf:d.name,editor};
+        const v=parameter?declarationValues(parameter):{Name:'',Direction:'In',DataType:'String',ParamMultiplicity:'0..1',TypeMultiplicity:'Scalar',FunctionParmUsage:'',CDOType:'',Description:'',Notes:'',DefaultValue:''};
+        $('declarationTitle').textContent={add:'新增 CLF 声明参数',update:'修改 CLF 声明参数',remove:'准备删除 CLF 声明参数'}[action];
+        $('declarationNotice').textContent=editor.impact.notice;$('declarationCopy').checked=!editor.impact.customer_owned||!editor.impact.structural_edit_allowed&&action!=='update';
+        $('declarationCopy').disabled=!editor.impact.customer_owned;
+        $('declarationTarget').value=(d.name.startsWith('Ex_')?d.name.slice(0,27)+'_V2':'Ex_'+d.name.slice(0,27));
+        $('declarationName').value=v.Name;$('declarationDescription').value=v.Description;$('declarationNotes').value=v.Notes;$('declarationCdo').value=v.CDOType;
+        function choices(id,rows,current){const values=[...rows];if(current!==''&&!values.some(([key])=>key===current))values.push([current,'当前值：'+current]);fill($(id),values,id==='declarationUsage'?'[Default]':'请选择',current);}
+        choices('declarationDirection',editor.directions.map(x=>[x,x+' · '+({In:'传入',Out:'传出','In/Out':'传入并传出',Return:'返回值'}[x]||'')]),v.Direction);choices('declarationDataType',editor.data_types.map(x=>[x.Name,x.Name]),v.DataType);
+        choices('declarationMultiplicity',editor.param_multiplicities.map(x=>[x.Name,x.Name+' · '+({'0..1':'可不填或单值','1..1':'必填单值','0..*':'可不填或多值','1..*':'至少一个值'}[x.Name]||x.Description)]),v.ParamMultiplicity);choices('declarationTypeMultiplicity',editor.type_multiplicities.map(x=>[x.Name,x.Name+' · '+({Scalar:'单个值',List:'列表',ListOrScalar:'单值或列表'}[x.Name]||x.Description)]),v.TypeMultiplicity);
+        choices('declarationUsage',editor.usages.filter(x=>x.FunctionParmUsageId!==0).map(x=>[x.Name,x.Description||x.Name]),v.FunctionParmUsage);
+        $('declarationError').hidden=true;paintDeclarationForm();$('declarationDialog').showModal();
+    }
+    function paintDeclarationForm(){
+        const edit=state.declarationEdit;if(!edit)return;const copy=$('declarationCopy').checked,remove=edit.action==='remove',structural=copy||edit.editor.impact.structural_edit_allowed;
+        $('declarationTargetLabel').hidden=!copy;$('declarationTarget').required=copy;$('declarationTarget').disabled=!copy;
+        for(const id of ['declarationName','declarationDirection','declarationDataType','declarationMultiplicity','declarationTypeMultiplicity','declarationUsage','declarationCdo'])$(id).disabled=remove||!structural;
+        $('declarationDescription').disabled=remove;$('declarationNotes').disabled=remove;$('declarationCdoLabel').hidden=$('declarationDataType').value!=='Object';
+        $('declarationNotice').textContent=edit.editor.impact.notice+(!structural?' 当前原规则只允许修改说明和备注；结构变更请先选择客户副本。':'')+(remove?' 将准备删除该声明，仍被表达式引用时官方预检会阻止。':'');
+    }
+    function prepareDeclaration(){
+        const edit=state.declarationEdit;if(!edit||edit.project!==state.context.project_id||edit.source!==state.project?.source_sha256||edit.clf!==state.definition?.name)throw new Error('规则上下文已变化，请关闭后重新准备');
+        if(state.planSource&&state.planSource!==edit.source)throw new Error('现有方案来源已变化，请先核对方案');
+        const ops=JSON.parse($('planOperations').value);if(!Array.isArray(ops))throw new Error('方案操作需要为数组');
+        const copy=$('declarationCopy').checked,owner=copy?$('declarationTarget').value.trim():edit.clf;
+        if(copy){if(!/^[A-Za-z_][A-Za-z0-9_]{0,29}$/.test(owner)||owner===edit.clf)throw new Error('请输入不同的有效客户副本名称');const existing=ops.find(o=>['copy_clf','create_clf'].includes(o.action)&&o.name===owner);if(existing&&(existing.action!=='copy_clf'||existing.template!==edit.clf))throw new Error('方案已存在另一个同名目标，请核对');if(!existing)ops.push({action:'copy_clf',name:owner,template:edit.clf});}
+        const expected=declarationValues(edit.parameter),definition={...expected,Name:$('declarationName').value.trim(),Direction:$('declarationDirection').value,DataType:$('declarationDataType').value,ParamMultiplicity:$('declarationMultiplicity').value,TypeMultiplicity:$('declarationTypeMultiplicity').value,FunctionParmUsage:$('declarationUsage').value,CDOType:$('declarationDataType').value==='Object'?$('declarationCdo').value.trim():'',Description:$('declarationDescription').value,Notes:$('declarationNotes').value};
+        const action=edit.action+'_clf_declaration',operation={action,owner};if(edit.action!=='add')Object.assign(operation,{parameter:edit.parameter.Name,expected});if(edit.action!=='remove')operation.definition=definition;
+        ops.push(operation);$('planOperations').value=JSON.stringify(ops,null,2);savePlanDraft();$('declarationDialog').close();setView('plan');notice('声明参数变更已加入方案。请检查完整差异与影响范围，尚未保存工作 MDB。');
     }
     function renderCalls(){
         const d=state.definition;if(!d)return;
@@ -217,7 +259,15 @@
         try{const result=await send('/plans',{project_id:project,source_sha256:source,operations,requirements:[$('planRequirement').value].filter(Boolean)});if(epoch!==state.epoch)return;showPlan($('planResult'),result.result,result.id);await loadPlans();}finally{$('checkPlan').disabled=false;}
     }
     function planValue(operation,keys,fallback){for(const key of keys)if(Object.hasOwn(operation,key))return operation[key];return fallback;}
-    function showPlan(area,r,planId){area.replaceChildren(node('h3',r.metadata_preflight_passed?'官方方案预检通过':'方案存在冲突'),node('p','预检时：'+r.notice,'core-note'),table(['修改位置','原值','拟定值'],r.operations.map(o=>[[o.owner,o.call_id,o.parameter,o.event].filter(Boolean).join(' / ')||o.name,planValue(o,['expected_value','expected_function','expected_clf'],'详见完整操作'),planValue(o,['value','function','clf'],o.action)])),details('冲突与完整预演回执',r));if(planId){const delivery=node('section',undefined,'core-delivery');area.append(delivery);renderDelivery(delivery,planId,r).catch(showError);}}
+    function planRows(o){
+        if(o.action==='copy_clf')return [[o.name+' / 客户规则','来源：'+o.template,'准备独立客户副本']];
+        if(!o.action.endsWith('_clf_declaration'))return [[[o.owner,o.call_id,o.parameter,o.event].filter(Boolean).join(' / ')||o.name,planValue(o,['expected_value','expected_function','expected_clf'],'详见完整操作'),planValue(o,['value','function','clf'],o.action)]];
+        const labels={Name:'参数名',Direction:'方向',DataType:'数据类型',ParamMultiplicity:'参数数量',TypeMultiplicity:'值类型',FunctionParmUsage:'特殊处理',CDOType:'具体对象类型',Description:'说明',Notes:'备注',DefaultValue:'默认值'};
+        const before=o.expected,after=o.definition,rows=[];
+        for(const key of declarationKeys){if(before&&after&&before[key]===after[key])continue;if(!before&&!after?.[key]||!after&&!before?.[key])continue;rows.push([o.owner+' / '+(before?.Name||after?.Name)+' / '+labels[key],before?before[key]:'（未声明）',after?after[key]:'（删除）']);}
+        return rows.length?rows:[[o.owner+' / '+o.parameter,'原声明','无参数属性变化']];
+    }
+    function showPlan(area,r,planId){area.replaceChildren(node('h3',r.metadata_preflight_passed?'官方方案预检通过':'方案存在冲突'),node('p','预检时：'+r.notice,'core-note'),table(['修改位置','原值','拟定值'],r.operations.flatMap(planRows)),details('冲突与完整预演回执',r));if(planId){const delivery=node('section',undefined,'core-delivery');area.append(delivery);renderDelivery(delivery,planId,r).catch(showError);}}
     async function loadPlans(){if(!state.project)return;const project=state.context.project_id,epoch=state.epoch;const data=await api(base+'/plans?'+params({project_id:project}));if(epoch!==state.epoch)return;$('planHistory').replaceChildren(...data.plans.map(p=>{const d=node('details');d.append(node('summary',formatTime(p.updated_utc)+' · '+(p.result.metadata_preflight_passed?'预检通过':'存在冲突')+(p.result.source_sha256!==state.project.source_sha256?' · 旧工作源':'')));const body=node('div');showPlan(body,p.result,p.id);d.append(body);return d;}));}
     async function renderDelivery(area,planId,plan){
         const epoch=state.epoch,data=await api(base+'/delivery?'+params({plan_id:planId}));if(!area.isConnected||epoch!==state.epoch)return;
@@ -240,6 +290,7 @@
             },action==='save'?'primary':'button');b.disabled=!enabled||busy;controls.append(b);
         }
         area.append(controls);
+        const reporting=node('section');area.append(button('查看验收与交付清单',async()=>{const result=await api(base+'/plans/'+planId+'/report?'+params());reporting.replaceChildren(node('h3','验收与交付清单 · '+(result.overall==='needs_review'?'需要核对':'待完成验收')),node('p',result.notice,'core-note'));const statuses={passed:'预检通过',conflict:'存在冲突',verified:'对应版本证据已核验',restored:'已恢复，保留历史',needs_review:'需要核对',historical:'历史回执，需重新核验',missing:'尚无对应证据',observed:'已有回执，范围待验收',not_recorded:'尚无该方案回执',applicability_unknown:'适用范围与交付待核对',unknown:'待核对'};reporting.append(table(['阶段','当前证据'],result.stages.map(s=>[s.name,statuses[s.status]||s.status])));const list=node('ul');for(const message of result.blockers)list.append(node('li',message));reporting.append(node('h3','未完成项与限制'),list,details('源版本、环境和测试范围',result));const download=node('a','导出本次交付清单','button');download.href=base+'/plans/'+planId+'/report/export?'+params();reporting.append(download);}),reporting);
         if(saved?.status==='saved')area.append(node('p',restored?'已恢复本次保存前快照。历史保存回执保留；后续变更需重新预检。':'已保存并回读工作 MDB。当前规则和旧测试用例需核对新来源；尚未发布数据库。','core-note'),button('读取已保存工作源',async()=>{await chooseProject(state.context.project_id,{initial:true});restorePlanDraft();await loadPlans();}));
         if(saved?.status==='saved'){const files=node('div',undefined,'actions');for(const [kind,label] of [['baseline','下载保存前快照'],['changes','下载官方差异'],['manifest','下载保存清单']]){const a=node('a',label,'button');a.href=base+'/delivery/'+saved.id+'/files/'+kind+'?'+params();files.append(a);}area.append(files);}
         const status={queued:'等待执行',saving:'官方保存与回读中',saved:'工作 MDB 已保存并回读',compiling:'官方编译中',checking_publish:'项目发布检查中',restoring:'恢复工作 MDB 快照中',completed:'本阶段已完成',needs_review:'来源可能已变化，需要核对',failed:'操作未完成',interrupted:'服务中断，结果待核对'};
@@ -292,6 +343,8 @@
     $('configureOperation').onclick=guarded(operationEditor);$('closeOperation').onclick=()=>$('operationDialog').close();$('operationArtifact').onchange=guarded(()=>loadOperationCatalog());$('operationService').onchange=guarded(()=>loadOperationSchema());$('operationForm').onsubmit=e=>{e.preventDefault();saveOperation().catch(error=>$('operationError').textContent=error.message);};
     $('parameterPlan').onsubmit=guarded(()=>{const c=state.definition?.calls[state.call],name=$('planParameter').value,p=c?.parameters.find(p=>p.name===name);if(!p)throw new Error('请先选择函数与参数');let ops=JSON.parse($('planOperations').value);if(!Array.isArray(ops))throw new Error('方案操作需要为数组');ops.push({action:'set_clf_parameter',owner:state.definition.name,call_id:c.call_id,parameter:name,expected_value:p.value,value:$('planValue').value});$('planOperations').value=JSON.stringify(ops,null,2);savePlanDraft();notice('调用参数变更已加入方案，未保存 MDB。');});
     $('planForm').onsubmit=guarded(checkPlan);$('planOperations').oninput=savePlanDraft;$('planRequirement').oninput=savePlanDraft;
+    $('closeDeclaration').onclick=()=>$('declarationDialog').close();$('declarationCopy').onchange=paintDeclarationForm;$('declarationDataType').onchange=paintDeclarationForm;
+    $('declarationForm').onsubmit=event=>{event.preventDefault();try{prepareDeclaration();}catch(error){$('declarationError').textContent=error.message;$('declarationError').hidden=false;}};
     $('askCore').onclick=()=>{$('coreAssistant').hidden=false;paintModes();$('coreQuestion').focus();};$('closeCoreAssistant').onclick=()=>$('coreAssistant').hidden=true;$('coreAskForm').onsubmit=guarded(ask);
     (async()=>{state.username=(await api('/config')).username;state.boot=await api(base+'/bootstrap?'+params());state.context=state.boot.context;state.operation=state.context.operation_id||'';
         const project=query.get('project_id')||state.context.project_id||(state.boot.projects.length===1?state.boot.projects[0].id:'');

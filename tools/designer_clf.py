@@ -4,6 +4,7 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 from designer import clf
+from designer.clf_parameters import AddDeclaration, UpdateDeclaration, RemoveDeclaration
 from tools import mcp
 
 
@@ -90,7 +91,8 @@ class UnbindEvent(ClfArguments):
 
 
 ClfOperation = Annotated[CreateClf | CopyClf | AddCall | ReplaceCall | RemoveCall | ReorderCalls |
-                         SetParameter | BindEvent | ReplaceEvent | UnbindEvent, Field(discriminator='action')]
+                         SetParameter | BindEvent | ReplaceEvent | UnbindEvent |
+                         AddDeclaration | UpdateDeclaration | RemoveDeclaration, Field(discriminator='action')]
 _operation = TypeAdapter(ClfOperation)
 
 
@@ -125,7 +127,8 @@ async def inspect_designer_clf_plan(mdb_file: str, expected_sha256: str, operati
     """只读预检 CLF 完整方案，返回修改前/官方内存预演后的调用与参数、冲突及待执行测试用例。
 
     参数契约沿用 generate_designer_design_package 的 CLF 专用 actions。先读取真实 call_id、函数、参数和原值。
-    只允许 create_clf/copy_clf、调用增删替换/排序、set_clf_parameter 与事件绑定/替换/解绑。
+    支持 create_clf/copy_clf、调用增删替换/排序、set_clf_parameter、事件绑定及声明参数专用增改删。
+    声明参数使用 add/update/remove_clf_declaration，definition/expected 属性沿用官方名称；已有入口或调用者时结构变更需单独迁移。
     不 SaveAll、不编译、不更新数据库、不运行测试，metadata_preflight_passed 不能当作业务验证通过。
     """
     operations = [_operation.validate_python(item).model_dump(exclude_unset=True) for item in operations]

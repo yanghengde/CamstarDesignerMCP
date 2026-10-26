@@ -254,7 +254,12 @@ def validate_operations(operations: list[dict]) -> None:
                 raise ValueError(f"{action} 包含未知参数：{', '.join(sorted(unknown))}；请检查拼写")
             if 'description' in op and not isinstance(op['description'], str):
                 raise ValueError('description 必须是字符串')
-        if action in CREATE_ACTIONS - {"create_map", "add_clf_function", "add_query_text", "add_field_map", "bind_event"}:
+        if action.endswith('_clf_declaration'):
+            from designer.clf_parameters import ADAPTERS
+            ADAPTERS[action].validate_python(op)
+        if action in {'patch', 'delete'} and op.get('kind') == 'clf_parameter':
+            raise ValueError('CLF 声明参数必须使用专用增改删操作，不能绕过调用者与原值检查')
+        if action in CREATE_ACTIONS - {"create_map", "add_clf_function", "add_query_text", "add_field_map", "bind_event", "add_clf_declaration"}:
             identifier(op.get("name", ""))
             if len(op["name"]) > 30:
                 raise ValueError("新定义名超过手册规定的 30 字符")
@@ -339,12 +344,19 @@ def validate_operations(operations: list[dict]) -> None:
                 raise ValueError('call_id 必须为实际读取的正整数')
 
 
+def normalized_operations(operations):
+    from designer.clf_parameters import ADAPTERS
+    return [ADAPTERS[op['action']].validate_python(op).model_dump() if op['action'] in ADAPTERS else dict(op)
+            for op in operations]
+
+
 def preflight(mdb_file: str, expected_sha256: str, operations: list[dict], workspace: str = '') -> dict:
     """Run vendor factories on an isolated graph; never save or commit a design."""
     if operations:
         validate_operations(operations)
     elif operations != []:
         raise ValueError('operations 必须为设计操作列表')
+    operations = normalized_operations(operations)
     from designer import working, read_cache
     source = working.resolve(mdb_file)
     before = digest(source)
@@ -437,6 +449,7 @@ def design(mdb_file: str, expected_sha256: str, workspace: str, operations: list
 
 def _design(mdb_file: str, expected_sha256: str, workspace: str, operations: list[dict], *, sync_designer=True) -> dict:
     validate_operations(operations)
+    operations = normalized_operations(operations)
     from designer import working
     source = working.resolve(mdb_file)
     project_id, work_state = working.context(source)

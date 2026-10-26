@@ -8,7 +8,8 @@ from designer import vendor, working
 
 PLAN_ACTIONS = frozenset({'create_clf', 'copy_clf', 'add_clf_function', 'replace_clf_function',
                          'remove_clf_function', 'reorder_clf_functions', 'set_clf_parameter',
-                         'bind_event', 'replace_event_binding', 'unbind_event'})
+                         'bind_event', 'replace_event_binding', 'unbind_event',
+                         'add_clf_declaration', 'update_clf_declaration', 'remove_clf_declaration'})
 
 
 def source(mdb_file, expected_sha256=''):
@@ -117,6 +118,7 @@ def get_clf(mdb_file, name, expected_sha256='', include_bindings=False):
             'binding_parameters_available': 'bindings' in detail,
             'bindings_omitted': not include_bindings,
             'parameter_definitions': detail.get('parameter_definitions', []),
+            'declaration_editor': detail.get('declaration_editor'),
             'references': {'available': references.get('status') != 'failed',
                            'rows': references.get('where_used', []), 'total': references.get('total'),
                            'truncated': references.get('truncated', False), 'error': references.get('error', ''),
@@ -154,6 +156,7 @@ def inspect_plan(mdb_file, expected_sha256, operations, workspace='', requiremen
     if any(not isinstance(op, dict) or op.get('action') not in PLAN_ACTIONS for op in operations):
         raise ValueError('CLF 预检仅允许 CLF 调用、参数及事件绑定操作')
     vendor.validate_operations(operations)
+    operations = vendor.normalized_operations(operations)
     path, checksum = source(mdb_file, expected_sha256)
     created = {op['name'].casefold() for op in operations if op['action'] in {'create_clf', 'copy_clf'}}
     names = []
@@ -164,7 +167,8 @@ def inspect_plan(mdb_file, expected_sha256, operations, workspace='', requiremen
         for name in candidates:
             if name and name.casefold() not in created and name not in names:
                 names.append(name)
-    before = [get_clf(str(path), name, checksum) for name in names]
+    declarations = any(op['action'].endswith('_clf_declaration') for op in operations)
+    before = [get_clf(str(path), name, checksum, True) if declarations else get_clf(str(path), name, checksum) for name in names]
     preflight = vendor.preflight(str(path), checksum, operations, workspace)
     _unchanged(path, checksum)
     requirements = list(requirements or [])

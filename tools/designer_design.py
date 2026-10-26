@@ -250,6 +250,8 @@ async def generate_designer_design_package(mdb_file: str, expected_sha256: str, 
     change_field_type: owner对象,name字段,field_type,expected_field_type原类型。
     reorder_clf_functions: owner,function_ids,expected_function_ids，必须完整且不重复。
     set_clf_parameter: owner,call_id,parameter,value,expected_value，设置函数调用参数表达式。
+    add_clf_declaration: owner,definition；update_clf_declaration: owner,parameter,expected,definition；remove_clf_declaration: owner,parameter,expected。
+    声明 definition/expected 使用官方 Name/Direction/DataType/ParamMultiplicity/TypeMultiplicity/FunctionParmUsage/CDOType/Description/Notes/DefaultValue；结构变更不自动重绑，已有入口或调用者需显式迁移。
     bind_event: owner客户CDO,event,clf,feature；可选field为客户字段；拒绝覆盖已有事件绑定。
     change_parent: name,parent,expected_parent；仅客户拥有且无下层覆盖的 CDO，同一 CDO 用途类别，拒绝继承环和字段冲突。
     change_storage_category: name,category,expected_category；使用已有存储分类改变元数据归属，不搬移文件或迁移工作区。

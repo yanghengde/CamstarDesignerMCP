@@ -179,6 +179,7 @@ public static class DesignerVendorBridge {
   if(obj is FieldDefinition) return new[]{"FieldDefName","PrecisionValue","Scale","CPPDataTypeID"};
   if(obj is CLFFunction) return new[]{"FunctionID","Sequence","CLFID"};
   if(obj is CLFFunParm) return new[]{"ValueExpression"};
+  if(obj is FunctionParameter) return DeclarationFields.Concat(new[]{"FunctionID","ParmNumber","DataTypeId","CDODefId","ParamMultiplicityId","TypeMultiplicityId","FunctionParmUsageID"}).ToArray();
   if(obj is CDOFieldMapDefinition) return new[]{"SourceCDOFieldID","TargetCDOFieldID"};
   if(obj is CLFEventMap) return new[]{"CLFID","CLFEventID","CallerID","CDODefID"};
   return new[]{"Name"};
@@ -204,8 +205,104 @@ public static class DesignerVendorBridge {
   record["functions"]=clf.CLFFunctions.OrderBy(x=>x.Sequence).ThenBy(x=>x.CLFFunctionID).Select(x=>{
    var row=Record(x);row["parameters"]=Values(x.Parameters).Select(Record).ToArray();return row;
   }).ToArray();
-  record["declared_parameters"]=Values(clf.Parameters).Select(Record).ToArray();
+  record["declared_parameters"]=Values(clf.Parameters).Cast<FunctionParameter>().Where(p=>p.ModifiedStatus!=ModifiedStatusEnum.Deleted).OrderBy(p=>p.ParmNumber).Select(DeclarationRecord).ToArray();
   return record;
+ }
+ static readonly string[] DeclarationFields={"Name","Direction","DataType","ParamMultiplicity","TypeMultiplicity","FunctionParmUsage","CDOType","Description","Notes","DefaultValue"};
+ static List<object> ParameterChoices(MDBMetadataSet set,string property) {
+  return Values(typeof(MetadataSetBase).GetProperty(property,BindingFlags.Public|BindingFlags.NonPublic|BindingFlags.Instance).GetValue(set,null));
+ }
+ static object ParameterChoice(MDBMetadataSet set,string property,string name) {
+  var choices=ParameterChoices(set,property).Where(x=>Name(x)==name).ToList();
+  if(choices.Count!=1) throw new ArgumentException("Unknown official parameter choice: "+property+":"+name);
+  return choices[0];
+ }
+ static int ChoiceId(object choice,string property) {return Convert.ToInt32(choice.GetType().GetProperty(property).GetValue(choice,null));}
+ static string DeclarationValue(MDBMetadataSet set,FunctionParameter parameter,string key,bool strict) {
+  if(key=="CDOType" && parameter.CDODefId!=0) {
+   CDODefinition cdo;if(set.CDODefinitions.TryGetValue(parameter.CDODefId,out cdo)) return cdo.Name;
+   if(strict) throw new ArgumentException("具体对象类型 ID 无法由官方目录解析");
+  }
+  string collection=null,idProperty=null;int identity=0;
+  if(key=="DataType") {collection="CPPDataTypes";idProperty="DataTypeId";identity=parameter.DataTypeId;}
+  if(key=="ParamMultiplicity") {collection="ParamMultiplicities";idProperty="MultiplicityId";identity=parameter.ParamMultiplicityId;}
+  if(key=="TypeMultiplicity") {collection="TypeMultiplicities";idProperty="MultiplicityId";identity=parameter.TypeMultiplicityId;}
+  if(key=="FunctionParmUsage") {collection="FunParmUsages";idProperty="FunctionParmUsageId";identity=parameter.FunctionParmUsageID;}
+  if(collection!=null) {
+   var values=ParameterChoices(set,collection).Where(x=>ChoiceId(x,idProperty)==identity).ToList();
+   if(values.Count==1) return key=="FunctionParmUsage" && identity==0?"":Name(values[0]);
+   if(strict) throw new ArgumentException("声明参数的官方目录身份无法解析："+key);
+  }
+  return Convert.ToString(parameter.GetType().GetProperty(key).GetValue(parameter,null));
+ }
+ static Dictionary<string,object> DeclarationRecord(FunctionParameter parameter) {
+  var record=Record(parameter);var set=(MDBMetadataSet)parameter.Metadata;
+  record["raw_reference_values"]=Dict("CDOType",parameter.CDOType,"FunctionParmUsage",parameter.FunctionParmUsage);
+  foreach(var key in DeclarationFields) record[key]=DeclarationValue(set,parameter,key,false);
+  record["reference_resolution"]="official_metadata_ids_when_available";return record;
+ }
+ static Dictionary<string,object> DeclarationImpact(MDBMetadataSet set,CLFDefinition clf) {
+  var bindings=set.CLFEventMaps.Values.Where(x=>x.CLFID==clf.CLFID && x.ModifiedStatus!=ModifiedStatusEnum.Deleted).ToList();
+  var callers=set.CLFDefinitions.Values.SelectMany(c=>c.CLFFunctions.Where(f=>f.FunctionID==clf.FunctionID && f.ModifiedStatus!=ModifiedStatusEnum.Deleted).Select(f=>Dict("clf",c.Name,"call_id",f.CLFFunctionID))).ToArray();
+  bool owned=clf.WorkspaceCode==(String.IsNullOrEmpty(set.WorkSpace)?clf.ActiveWorkspaceCode:set.WorkSpace) && !clf.ExistsInLowerWorkspace;
+  bool used=clf.DefaultFunctionDefinition!=null && clf.DefaultFunctionDefinition.IsInUse();
+  return Dict("customer_owned",owned,"structural_edit_allowed",owned && bindings.Count==0 && callers.Length==0 && !used,
+   "binding_count",bindings.Count,"bindings",bindings.Select(x=>Dict("binding_id",x.CLFEventMapID,"cdo_id",x.CDODefID,"caller_id",x.CallerID)).ToArray(),
+   "rule_callers",callers,"vendor_function_in_use",used,"dynamic_usage_verified",false,
+   "notice","声明参数属于 CLF 生命周期。已有入口或调用者时需要显式迁移；不会自动重绑或覆盖附着值。动态调用范围未核实。");
+ }
+ static Dictionary<string,object> DeclarationEditor(MDBMetadataSet set,CLFDefinition clf) {
+  return Dict("impact",DeclarationImpact(set,clf),"directions",new[]{"In","Out","In/Out","Return"},
+   "data_types",ParameterChoices(set,"CPPDataTypes").Where(x=>Convert.ToBoolean(Record(x)["IsParamType"])).Select(Record).ToArray(),
+   "param_multiplicities",ParameterChoices(set,"ParamMultiplicities").Select(Record).ToArray(),
+   "type_multiplicities",ParameterChoices(set,"TypeMultiplicities").Select(Record).ToArray(),
+   "usages",ParameterChoices(set,"FunParmUsages").Select(Record).ToArray());
+ }
+ static void SetDeclaration(MDBMetadataSet set,FunctionParameter parameter,Dictionary<string,object> definition) {
+  string name=Text(definition,"Name");
+  if(!System.Text.RegularExpressions.Regex.IsMatch(name,@"^[A-Za-z_][A-Za-z0-9_]{0,29}$")) throw new ArgumentException("Invalid declaration name");
+  if(!new[]{"In","Out","In/Out","Return"}.Contains(Text(definition,"Direction"))) throw new ArgumentException("Unknown declaration direction");
+  var data=ParameterChoice(set,"CPPDataTypes",Text(definition,"DataType"));
+  if(!Convert.ToBoolean(Record(data)["IsParamType"])) throw new ArgumentException("Data type is not allowed for parameters");
+  var multiplicity=ParameterChoice(set,"ParamMultiplicities",Text(definition,"ParamMultiplicity"));
+  var type=ParameterChoice(set,"TypeMultiplicities",Text(definition,"TypeMultiplicity"));
+  string usage=Text(definition,"FunctionParmUsage");
+  var special=ParameterChoice(set,"FunParmUsages",usage==""?"Default":usage);
+  string cdoName=Text(definition,"CDOType");
+  if(cdoName!="" && Text(definition,"DataType")!="Object") throw new ArgumentException("Specific CDO type requires Object data type");
+  var cdo=cdoName==""?null:(CDODefinition)Find(set,"cdo",cdoName,"");
+  parameter.Name=name;parameter.Direction=Text(definition,"Direction");
+  parameter.DataType=Name(data);parameter.DataTypeId=ChoiceId(data,"DataTypeId");
+  parameter.ParamMultiplicity=Name(multiplicity);parameter.ParamMultiplicityId=ChoiceId(multiplicity,"MultiplicityId");
+  parameter.TypeMultiplicity=Name(type);parameter.TypeMultiplicityId=ChoiceId(type,"MultiplicityId");
+  parameter.FunctionParmUsage=ChoiceId(special,"FunctionParmUsageId")==0?"":Name(special);parameter.FunctionParmUsageID=ChoiceId(special,"FunctionParmUsageId");
+  parameter.CDOType=cdo==null?"":cdo.Name;parameter.CDODefId=cdo==null?0:cdo.CDODefId;
+  parameter.Description=Text(definition,"Description");parameter.Notes=Text(definition,"Notes");parameter.DefaultValue=Text(definition,"DefaultValue");
+ }
+ static BaseMetadataObject ChangeDeclaration(MDBMetadataSet set,Dictionary<string,object> op) {
+  var clf=(CLFDefinition)Find(set,"clf",Text(op,"owner"),"");
+  if(clf.WorkspaceCode!=set.WorkSpace || clf.ExistsInLowerWorkspace) throw new ArgumentException("声明参数仅允许在独立客户 CLF 上修改，请先复制客户规则");
+  string action=Text(op,"action");var parameters=clf.Parameters.Values.Where(p=>p.ModifiedStatus!=ModifiedStatusEnum.Deleted).ToList();
+  var parameter=action=="add_clf_declaration"?null:parameters.SingleOrDefault(p=>p.Name==Text(op,"parameter"));
+  if(action!="add_clf_declaration") {
+   if(parameter==null || parameter.WorkspaceCode!=set.WorkSpace || parameter.ExistsInLowerWorkspace) throw new ArgumentException("声明参数不存在或不属于当前客户工作区");
+   var expected=Map(op["expected"]);
+   foreach(var key in DeclarationFields) if(!expected.ContainsKey(key) || DeclarationValue(set,parameter,key,true)!=Text(expected,key)) throw new ArgumentException("声明参数原值已变化："+key);
+  }
+  var definition=action=="remove_clf_declaration"?null:Map(op["definition"]);
+  bool structural=action!="update_clf_declaration" || DeclarationFields.Except(new[]{"Description","Notes"}).Any(key=>DeclarationValue(set,parameter,key,true)!=Text(definition,key));
+  if(structural && !(bool)DeclarationImpact(set,clf)["structural_edit_allowed"]) throw new ArgumentException("该 CLF 已有事件绑定或调用者，声明结构变更需要明确的迁移方案；请先复制为未附着客户规则，不会自动重绑");
+  if(parameter!=null && (action=="remove_clf_declaration" || parameter.Name!=Text(definition,"Name"))) {
+   string expression=@"\b(?:DBCLF|CLF)::"+System.Text.RegularExpressions.Regex.Escape(parameter.Name)+@"\b";
+   if(clf.CLFFunctions.Where(f=>f.ModifiedStatus!=ModifiedStatusEnum.Deleted).SelectMany(f=>f.Parameters.Values).Any(p=>System.Text.RegularExpressions.Regex.IsMatch(p.ValueExpression??"",expression,System.Text.RegularExpressions.RegexOptions.IgnoreCase))) throw new ArgumentException("规则表达式仍引用此声明参数，先明确修改引用后再改名或删除");
+  }
+  if(action=="remove_clf_declaration") {RememberRemoval(parameter);parameter.SetModifiedStatus(ModifiedStatusEnum.Deleted);Changed(clf.DefaultFunctionDefinition);Changed(clf);return parameter;}
+  if(parameters.Any(p=>p!=parameter && p.Name.Equals(Text(definition,"Name"),StringComparison.OrdinalIgnoreCase))) throw new ArgumentException("同一 CLF 已有同名声明参数");
+  bool fresh=parameter==null;
+  if(fresh) {parameter=clf.DefaultFunctionDefinition.NewParameter(set);parameter.FunctionID=clf.FunctionID;parameter.ParentFunctionDefinition=clf.DefaultFunctionDefinition;parameter.WorkspaceCode=set.WorkSpace;parameter.ParmNumber=parameters.Select(p=>p.ParmNumber).DefaultIfEmpty(0).Max()+1;}
+  SetDeclaration(set,parameter,definition);
+  if(fresh){parameter.SetModifiedStatus(ModifiedStatusEnum.New);if(!clf.Parameters.ContainsKey(parameter.FunctionParamID))clf.AddParameter(parameter);}else Changed(parameter);
+  Changed(clf.DefaultFunctionDefinition);Changed(clf);return parameter;
  }
  static readonly HashSet<string> ReadOnlyKinds=new HashSet<string>(new[]{"workspace","event","feature","data_type","sql_type","db_type","storage_category","cdo_usage","query_type","clf_type","label_category"});
  static readonly HashSet<string> Protected=new HashSet<string>(new[]{
@@ -490,6 +587,7 @@ public static class DesignerVendorBridge {
  }
  static object Apply(MDBMetadataSet set,Dictionary<string,object> op) {
   string action=Text(op,"action"), kind=Text(op,"kind"), name=Text(op,"name"), owner=Text(op,"owner");
+  if((action=="patch" || action=="delete") && (kind=="clf_parameter" || kind=="function_parameter" && set.CLFDefinitions.Values.Any(c=>c.FunctionID==((FunctionParameter)Find(set,kind,name,owner)).FunctionID))) throw new ArgumentException("CLF 声明参数必须使用专用操作，不能通过函数参数别名绕过生命周期检查");
   if(action=="patch") {
    if(ReadOnlyKinds.Contains(kind)) throw new ArgumentException("This definition category is read-only");
    var obj=Find(set,kind,name,owner); var changes=Map(op["changes"]); var expected=Map(op["expected"]);
@@ -744,6 +842,7 @@ public static class DesignerVendorBridge {
    parameter.ValueExpression=Text(op,"value"); parameter.SetModifiedStatus(fresh?ModifiedStatusEnum.New:ModifiedStatusEnum.Modified);
    return (parameter);
   }
+  if(action=="add_clf_declaration" || action=="update_clf_declaration" || action=="remove_clf_declaration") return ChangeDeclaration(set,op);
   if(action=="bind_event" || action=="replace_event_binding" || action=="unbind_event") {
    var cdo=(CDODefinition)Find(set,"cdo",owner,"");
    if(cdo.WorkspaceCode!=set.WorkSpace) throw new ArgumentException("Event binding requires customer-owned CDO");
@@ -904,6 +1003,7 @@ public static class DesignerVendorBridge {
       if(obj is CLFDefinition) record=ClfRecord((CLFDefinition)obj);
       if(obj is CLFDefinition && owner=="attached_parameters") {
        var clf=(CLFDefinition)obj;
+       record["declaration_editor"]=DeclarationEditor(set,clf);
        record["parameter_definitions"]=clf.CLFFunctions.Where(x=>x.FunctionDefinition!=null).Select(x=>x.FunctionDefinition)
         .GroupBy(x=>x.FunctionID).Select(group=>Dict("name",group.First().Name,
          "parameters",Values(group.First().Parameters).Select(Record).ToArray())).ToArray();
