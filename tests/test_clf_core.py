@@ -77,6 +77,7 @@ def test_core_page_and_reading_dont_create_chat(setup):
     assert client.get('/clf-core.js').status_code == 200
     assert client.get('/clf-core.css').status_code == 200
     boot = client.get('/api/clf/workspace/bootstrap?username=user').json()
+    assert boot['capabilities']['binding_migration'] == 'customer_entries_preserve_attached_values'
     assert boot['context']['revision'] == 0
     assert 'not-for-browser' not in json.dumps(boot)
     assert memory.user_memories == before
@@ -183,6 +184,14 @@ def test_plan_contract_rejects_unsupported_and_claimed_states_before_sdk(setup, 
     saved = client.post('/api/clf/workspace/plans', json=payload).json()
     assert saved['result']['saved'] is False
     assert len(client.get('/api/clf/workspace/plans?username=user&project_id='+op['project_id']).json()['plans']) == 1
+    from tests.test_clf_binding_migration import OPERATION
+    migration = {**payload, 'operations': [OPERATION]}
+    response = client.post('/api/clf/workspace/plans', json=migration)
+    assert response.status_code == 200, response.text
+    assert seen[-1][2][0]['expected_parameters'] == OPERATION['expected_parameters']
+    count = len(seen)
+    assert client.post('/api/clf/workspace/plans', json={**migration, 'operations': [{**OPERATION, 'force': True}]}).status_code == 422
+    assert len(seen) == count
 
 
 def test_executor_phase_is_persistent_and_cannot_modify_finished_receipt(setup):

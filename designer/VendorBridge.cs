@@ -40,6 +40,7 @@ public static class DesignerVendorBridge {
  static MDBMetadataSet BatchSet;
  static readonly List<CDOField> AssociatedFields=new List<CDOField>();
  static readonly List<object> AssociatedOperations=new List<object>();
+ static readonly List<Dictionary<string,object>> BindingMigrations=new List<Dictionary<string,object>>();
  static CDODefinition MaintenanceChanges(MDBMetadataSet set,CDODefinition cdo) {
   if(!(cdo.IsNamed || cdo.IsRevisioned) || cdo.MaintenanceCDOID==0) return null;
   var maint=set.CDODefinitions[cdo.MaintenanceCDOID];
@@ -243,7 +244,7 @@ public static class DesignerVendorBridge {
  }
  static Dictionary<string,object> DeclarationImpact(MDBMetadataSet set,CLFDefinition clf) {
   var bindings=set.CLFEventMaps.Values.Where(x=>x.CLFID==clf.CLFID && x.ModifiedStatus!=ModifiedStatusEnum.Deleted).ToList();
-  var callers=set.CLFDefinitions.Values.SelectMany(c=>c.CLFFunctions.Where(f=>f.FunctionID==clf.FunctionID && f.ModifiedStatus!=ModifiedStatusEnum.Deleted).Select(f=>Dict("clf",c.Name,"call_id",f.CLFFunctionID))).ToArray();
+  var callers=set.CLFDefinitions.Values.Where(c=>c.ModifiedStatus!=ModifiedStatusEnum.Deleted).SelectMany(c=>c.CLFFunctions.Where(f=>f.FunctionID==clf.FunctionID && f.ModifiedStatus!=ModifiedStatusEnum.Deleted).Select(f=>Dict("clf",c.Name,"call_id",f.CLFFunctionID,"sequence",f.Sequence,"workspace",f.WorkspaceCode,"migration_supported",false))).ToArray();
   bool owned=clf.WorkspaceCode==(String.IsNullOrEmpty(set.WorkSpace)?clf.ActiveWorkspaceCode:set.WorkSpace) && !clf.ExistsInLowerWorkspace;
   bool used=clf.DefaultFunctionDefinition!=null && clf.DefaultFunctionDefinition.IsInUse();
   return Dict("customer_owned",owned,"structural_edit_allowed",owned && bindings.Count==0 && callers.Length==0 && !used,
@@ -303,6 +304,92 @@ public static class DesignerVendorBridge {
   SetDeclaration(set,parameter,definition);
   if(fresh){parameter.SetModifiedStatus(ModifiedStatusEnum.New);if(!clf.Parameters.ContainsKey(parameter.FunctionParamID))clf.AddParameter(parameter);}else Changed(parameter);
   Changed(clf.DefaultFunctionDefinition);Changed(clf);return parameter;
+ }
+ static Dictionary<string,object> AttachedValue(CLFFunParm parameter) {
+  return Dict("value_id",parameter.CLFFunctionParmValueID,"call_id",parameter.CLFFunctionID,"parameter_id",parameter.FunctionParmID,
+   "parameter",parameter.Name,"value",parameter.ValueExpression??"","dynamic",parameter.DynamicParm);
+ }
+ static CLFFunParm[] LiveAttached(CLFEventMap map) {
+  return map.AllFunctionParameters.Values.Where(p=>p.ModifiedStatus!=ModifiedStatusEnum.Deleted).OrderBy(p=>p.CLFFunctionParmValueID).ToArray();
+ }
+ static object[] MigrationCallGraph(CLFDefinition clf) {
+  return clf.CLFFunctions.Where(c=>c.ModifiedStatus!=ModifiedStatusEnum.Deleted).OrderBy(c=>c.Sequence).Select(c=>(object)Dict("sequence",c.Sequence,"function_id",c.FunctionID,"active",c.IsActive,
+   "parameters",c.Parameters.Values.Where(p=>p.ModifiedStatus!=ModifiedStatusEnum.Deleted).OrderBy(p=>p.FunctionParmID).Select(p=>Dict("id",p.FunctionParmID,"name",p.Name,"value",p.ValueExpression??"","dynamic",p.DynamicParm)).ToArray())).ToArray();
+ }
+ static string MigrationBlocker(MDBMetadataSet set,CLFEventMap map) {
+  string workspace=String.IsNullOrEmpty(set.WorkSpace)?map.ActiveWorkspaceCode:set.WorkSpace;
+  CDODefinition cdo;if(!set.CDODefinitions.TryGetValue(map.CDODefID,out cdo)) return "入口对象未取得";
+  if(map.WorkspaceCode!=workspace || cdo.WorkspaceCode!=workspace) return "入口或对象不属于当前客户工作区；请先在 Designer 准备客户入口";
+  if(map.CallerID!=cdo.CDODefId && !cdo.AllFields.Values.Any(f=>f.FieldID==map.CallerID && f.WorkspaceCode==workspace)) return "字段入口不属于当前客户工作区";
+  if(LiveAttached(map).Any(p=>p.WorkspaceCode!=workspace)) return "包含非当前客户工作区的附着参数，需要单独核对覆盖关系";
+  if(LiveAttached(map).Any(p=>p.CLFFunctionParmValueID<=0 || p.CLFFunctionID<=0 || p.FunctionParmID<=0)) return "入口参数缺少稳定身份";
+  if(LiveAttached(map).Length>5000) return "入口参数超过本批迁移上限";
+  return "";
+ }
+ static Dictionary<string,object> MigrationContract(MDBMetadataSet set,CLFEventMap map) {
+  CDODefinition cdo;set.CDODefinitions.TryGetValue(map.CDODefID,out cdo);string blocker=MigrationBlocker(set,map);
+  return Dict("supported",blocker=="","reason",blocker,
+   "operation",Dict("action","migrate_clf_binding","owner",cdo==null?"":cdo.Name,"field",cdo==null || map.CallerID==cdo.CDODefId?"":cdo.AllFields.Values.Where(f=>f.FieldID==map.CallerID).Select(f=>f.FieldName).FirstOrDefault()??"",
+    "event",map.EventDefinition.Name,"binding_id",map.CLFEventMapID,"expected_clf",map.CLFDefinition.Name,"expected_feature_id",map.FeatureId,
+    "expected_parameters",LiveAttached(map).Select(AttachedValue).ToArray()));
+ }
+ static BaseMetadataObject MigrateBinding(MDBMetadataSet set,Dictionary<string,object> op) {
+  CLFEventMap map;if(!set.CLFEventMaps.TryGetValue(Number(op,"binding_id"),out map) || map.ModifiedStatus==ModifiedStatusEnum.Deleted) throw new ArgumentException("迁移入口身份不存在");
+  var contract=MigrationContract(set,map);var original=Map(contract["operation"]);
+  foreach(var key in new[]{"owner","field","event","expected_clf"}) if(Text(original,key)!=Text(op,key)) throw new ArgumentException("迁移入口来源已变化："+key);
+  if(map.FeatureId!=Number(op,"expected_feature_id")) throw new ArgumentException("迁移入口功能配置已变化");
+  string blocker=MigrationBlocker(set,map);if(blocker!="") throw new ArgumentException(blocker);
+  // An event's CLFDefinition can expose its attached expressions; compare library graphs separately.
+  var source=set.CLFDefinitions[map.CLFID];var target=(CLFDefinition)Find(set,"clf",Text(op,"clf"),"");
+  if(source.CLFID==target.CLFID || target.WorkspaceCode!=set.WorkSpace || target.ExistsInLowerWorkspace) throw new ArgumentException("迁移目标必须为不同的独立客户 CLF");
+  var attached=LiveAttached(map);var expected=((object[])op["expected_parameters"]).Select(Map).ToArray();
+  if(expected.Length!=attached.Length || expected.Select(p=>Number(p,"value_id")).Distinct().Count()!=expected.Length) throw new ArgumentException("附着参数清单不完整或身份重复");
+  foreach(var parameter in attached) {
+   var old=expected.SingleOrDefault(p=>Number(p,"value_id")==parameter.CLFFunctionParmValueID);
+   if(old==null || Number(old,"call_id")!=parameter.CLFFunctionID || Number(old,"parameter_id")!=parameter.FunctionParmID || Text(old,"parameter")!=parameter.Name || Text(old,"value")!=(parameter.ValueExpression??"") || Flag(old,"dynamic")!=parameter.DynamicParm) throw new ArgumentException("附着参数原值已变化，请重新准备迁移");
+  }
+  var oldCalls=source.CLFFunctions.Where(f=>f.ModifiedStatus!=ModifiedStatusEnum.Deleted).ToArray();
+  var newCalls=target.CLFFunctions.Where(f=>f.ModifiedStatus!=ModifiedStatusEnum.Deleted).ToArray();
+  if(oldCalls.Length!=newCalls.Length || oldCalls.Select(f=>f.Sequence).Distinct().Count()!=oldCalls.Length || newCalls.Select(f=>f.Sequence).Distinct().Count()!=newCalls.Length) throw new ArgumentException("迁移要求副本保留完整、唯一的调用顺序");
+  var callMap=new Dictionary<int,int>();
+  foreach(var call in oldCalls) {
+   var replacement=newCalls.SingleOrDefault(f=>f.Sequence==call.Sequence && f.FunctionID==call.FunctionID);
+   if(replacement==null || call.IsActive!=replacement.IsActive) throw new ArgumentException("迁移副本的调用结构已变化，不能自动匹配附着参数");
+   Func<CLFFunParm,string> signature=p=>Json.Serialize(Dict("id",p.FunctionParmID,"name",p.Name,"value",p.ValueExpression??"","dynamic",p.DynamicParm));
+   var oldParameters=call.Parameters.Values.Where(p=>p.ModifiedStatus!=ModifiedStatusEnum.Deleted).OrderBy(p=>p.FunctionParmID).Select(signature);
+   var newParameters=replacement.Parameters.Values.Where(p=>p.ModifiedStatus!=ModifiedStatusEnum.Deleted).OrderBy(p=>p.FunctionParmID).Select(signature);
+   if(!oldParameters.SequenceEqual(newParameters)) throw new ArgumentException("迁移副本的调用参数身份或库表达式已变化；请将调用逻辑修改分为后续方案");
+   callMap.Add(call.CLFFunctionID,replacement.CLFFunctionID);
+  }
+  // Match all old values before invoking any mutation; never guess by function name.
+  var values=attached.Select(p=>{
+   if(!callMap.ContainsKey(p.CLFFunctionID)) throw new ArgumentException("附着参数无法关联原调用身份");
+   return Dict("call_id",callMap[p.CLFFunctionID],"parameter_id",p.FunctionParmID,"parameter",p.Name,"value",p.ValueExpression??"","dynamic",p.DynamicParm);
+  }).ToArray();
+  foreach(var parameter in attached) RememberRemoval(parameter);
+  foreach(var call in oldCalls) map.RemoveCLFFunParmAttachedToCLFFunction(set,call);
+  map.CLFDefinition=target;map.CLFID=target.CLFID;map.CopyAllParametersFromCLF(set);
+  var next=LiveAttached(map);
+  if(next.Length!=values.Length) throw new ArgumentException("重新附着后的参数数量不同，拒绝迁移");
+  foreach(var value in values) {
+   var parameter=next.Single(p=>p.CLFFunctionID==Number(value,"call_id") && p.FunctionParmID==Number(value,"parameter_id") && p.Name==Text(value,"parameter"));
+   // CopyAllParametersFromCLF allocates new IDs but copies status; these rows require inserts.
+   parameter.ValueExpression=Text(value,"value");parameter.DynamicParm=Flag(value,"dynamic");parameter.SetModifiedStatus(ModifiedStatusEnum.New);
+  }
+  map.ParamsModified=true;Changed(map);var cdo=set.CDODefinitions[map.CDODefID];
+  if(map.CallerID==cdo.CDODefId){cdo.EventsModified=true;Changed(cdo);}else{var field=cdo.AllFields.Values.Single(f=>f.FieldID==map.CallerID);field.EventsModified=true;Changed(field);}
+  BindingMigrations.Add(Dict("binding_id",map.CLFEventMapID,"owner",cdo.Name,"previous_clf",source.Name,"clf",target.Name,"clf_id",target.CLFID,
+   "cdo_id",map.CDODefID,"caller_id",map.CallerID,"event_id",map.CLFEventID,"feature_id",map.FeatureId,"parameters",LiveAttached(map).Select(AttachedValue).ToArray(),"preserved_parameter_count",next.Length,"library_call_graph",MigrationCallGraph(target)));
+  return map;
+ }
+ static object[] VerifyBindingMigrations(MDBMetadataSet set,bool reloaded) {
+  return BindingMigrations.Select(expected=>{
+   var map=set.CLFEventMaps[Number(expected,"binding_id")];
+   if(map.CLFID!=Number(expected,"clf_id") || map.CDODefID!=Number(expected,"cdo_id") || map.CallerID!=Number(expected,"caller_id") || map.CLFEventID!=Number(expected,"event_id") || map.FeatureId!=Number(expected,"feature_id")) throw new InvalidOperationException("迁移入口保存后身份或配置不符");
+   if(Json.Serialize(LiveAttached(map).Select(AttachedValue).ToArray())!=Json.Serialize(expected["parameters"])) throw new InvalidOperationException("迁移入口保存后附着参数不符");
+   if(Json.Serialize(MigrationCallGraph(set.CLFDefinitions[map.CLFID]))!=Json.Serialize(expected["library_call_graph"])) throw new InvalidOperationException("迁移后副本的调用逻辑发生变化，请分为后续方案");
+   return (object)new Dictionary<string,object>(expected){{"reload_verified",reloaded},{"metadata_verified",true}};
+  }).ToArray();
  }
  static readonly HashSet<string> ReadOnlyKinds=new HashSet<string>(new[]{"workspace","event","feature","data_type","sql_type","db_type","storage_category","cdo_usage","query_type","clf_type","label_category"});
  static readonly HashSet<string> Protected=new HashSet<string>(new[]{
@@ -438,6 +525,7 @@ public static class DesignerVendorBridge {
   return field;
  }
  static object Preflight(MDBMetadataSet set,Dictionary<string,object> request) {
+  BindingMigrations.Clear();
   var profiles=new List<object>(); var conflicts=new List<object>();
   var categories=new List<object>();
   foreach(var parentName in new[]{"NamedDataObject","RevisionedObject","Subentity","Service","Inquiry","HistoryMainline","HistoryDetails"}) {
@@ -524,6 +612,9 @@ public static class DesignerVendorBridge {
   // Deliberately do not call SaveAll or export/compile in preflight mode.
   try {FieldContracts(set,Dict("fields",ChangedContractFields(request)));}
   catch(Exception error) {conflicts.Add(Dict("kind","maintenance_contract","message",error.Message));}
+  object[] migrations=new object[0];
+  try {migrations=VerifyBindingMigrations(set,false);}
+  catch(Exception error) {conflicts.Add(Dict("kind","binding_migration","message",error.Message));}
   var clfNames=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
   foreach(var item in (object[])request["operations"]) {
    var op=Map(item);string action=Text(op,"action");
@@ -533,6 +624,7 @@ public static class DesignerVendorBridge {
   }
   var clfPreviews=set.CLFDefinitions.Values.Where(c=>clfNames.Contains(c.Name)).Select(ClfRecord).ToArray();
   return Dict("ready",conflicts.Count==0,"objects",profiles,"conflicts",conflicts,"categories",categories,"clfs",clfPreviews,
+   "binding_migrations",migrations,
    "associated_operations",AssociatedOperations.ToArray(),
    "maintenance_fields",AssociatedFields.Select(f=>Dict("owner",f.CDODefinition.Name,"name",f.FieldName,"field_type",f.FieldDefinition.FieldDefName)).ToArray(),
    "usage_definition_count",set.CDOUsages.Count,
@@ -843,6 +935,7 @@ public static class DesignerVendorBridge {
    return (parameter);
   }
   if(action=="add_clf_declaration" || action=="update_clf_declaration" || action=="remove_clf_declaration") return ChangeDeclaration(set,op);
+  if(action=="migrate_clf_binding") return MigrateBinding(set,op);
   if(action=="bind_event" || action=="replace_event_binding" || action=="unbind_event") {
    var cdo=(CDODefinition)Find(set,"cdo",owner,"");
    if(cdo.WorkspaceCode!=set.WorkSpace) throw new ArgumentException("Event binding requires customer-owned CDO");
@@ -1014,6 +1107,7 @@ public static class DesignerVendorBridge {
         binding["field_name"]=cdo==null || map.CallerID==map.CDODefID?"":Values(cdo.AllFields).Where(x=>((CDOField)x).FieldID==map.CallerID).Select(Name).FirstOrDefault();
         binding["attached_parameters"]=map.AllFunctionParameters.Values.Select(Record).ToArray();
         binding["parameter_scope"]="selected_vendor_event_map";
+        binding["migration"]=MigrationContract(set,map);
         return binding;
        }).ToArray();
       }
@@ -1022,7 +1116,7 @@ public static class DesignerVendorBridge {
       result=record;
      }
     } else if(mode=="apply") {
-     Aliases.Clear(); RemovedIdentities.Clear(); AssociatedFields.Clear(); AssociatedOperations.Clear();
+     Aliases.Clear(); RemovedIdentities.Clear(); AssociatedFields.Clear(); AssociatedOperations.Clear(); BindingMigrations.Clear();
      var targets=new List<BaseMetadataObject>(); var properties=new Dictionary<string,HashSet<string>>();
      foreach(var item in (object[])req["operations"]) {
       var op=Map(item); var target=(BaseMetadataObject)Apply(set,op); targets.Add(target);
@@ -1077,7 +1171,9 @@ public static class DesignerVendorBridge {
        }
       }
      }
-     result=Dict("status","saved_to_test_copy","operations",records,"associated_operations",AssociatedOperations.ToArray(),"reloaded_definitions",verified,"reloaded_cdo_count",verify.CDODefinitions.Count,"reload_verified",true,"affected_cdos",affected.ToArray());
+     foreach(var migration in BindingMigrations) affected.Add(Text(migration,"owner"));
+     var migrated=VerifyBindingMigrations(verify,true);
+     result=Dict("status","saved_to_test_copy","operations",records,"associated_operations",AssociatedOperations.ToArray(),"reloaded_definitions",verified,"reloaded_cdo_count",verify.CDODefinitions.Count,"reload_verified",true,"affected_cdos",affected.ToArray(),"binding_migrations",migrated);
     } else throw new ArgumentException("Unknown bridge mode");
    }
    File.WriteAllText(resultFile,Json.Serialize(Dict("ok",true,"result",result)),new System.Text.UTF8Encoding(false));

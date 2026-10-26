@@ -257,6 +257,7 @@ async def generate_designer_design_package(mdb_file: str, expected_sha256: str, 
     change_storage_category: name,category,expected_category；使用已有存储分类改变元数据归属，不搬移文件或迁移工作区。
     remove_field_override: owner,name,expected_field_type；撤销客户字段覆盖并恢复继承，不能当作删除父级字段。
     replace_event_binding: owner,event,clf,feature,expected_clf,field?；unbind_event: owner,event,expected_clf,field?。替换后参数取新 CLF 的默认值。
+    migrate_clf_binding: owner,field?,event,binding_id,expected_clf,clf,expected_feature_id,expected_parameters。仅当前客户入口；需从工作区读取完整参数原值合同，保留入口表达式和动态标记，目标调用逻辑须与原库一致。
     replace_clf_function: owner,call_id,function,expected_function；remove_clf_function: owner,call_id,expected_function。读取真实调用 ID；替换使用新函数默认参数。
     update_field_map: owner,name,source_cdo,source_field,target_cdo,target_field,expected_source_field,expected_target_field；remove_field_map: owner,name,expected_source_field,expected_target_field。owner 为映射名，name 可用 id:真实CDOFieldMapID 消除同名歧义。
     sync_query_parameters: owner；query_text 的 Text 属性 patch 也自动同步查询参数。

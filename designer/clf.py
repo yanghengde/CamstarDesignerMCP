@@ -9,7 +9,7 @@ from designer import vendor, working
 PLAN_ACTIONS = frozenset({'create_clf', 'copy_clf', 'add_clf_function', 'replace_clf_function',
                          'remove_clf_function', 'reorder_clf_functions', 'set_clf_parameter',
                          'bind_event', 'replace_event_binding', 'unbind_event',
-                         'add_clf_declaration', 'update_clf_declaration', 'remove_clf_declaration'})
+                         'add_clf_declaration', 'update_clf_declaration', 'remove_clf_declaration', 'migrate_clf_binding'})
 
 
 def source(mdb_file, expected_sha256=''):
@@ -162,12 +162,12 @@ def inspect_plan(mdb_file, expected_sha256, operations, workspace='', requiremen
     names = []
     for op in operations:
         candidates = [op.get('template'), op.get('clf'), op.get('expected_clf')]
-        if op['action'] not in {'create_clf', 'copy_clf', 'bind_event', 'replace_event_binding', 'unbind_event'}:
+        if op['action'] not in {'create_clf', 'copy_clf', 'bind_event', 'replace_event_binding', 'unbind_event', 'migrate_clf_binding'}:
             candidates.append(op.get('owner'))
         for name in candidates:
             if name and name.casefold() not in created and name not in names:
                 names.append(name)
-    declarations = any(op['action'].endswith('_clf_declaration') for op in operations)
+    declarations = any(op['action'].endswith('_clf_declaration') or op['action'] == 'migrate_clf_binding' for op in operations)
     before = [get_clf(str(path), name, checksum, True) if declarations else get_clf(str(path), name, checksum) for name in names]
     preflight = vendor.preflight(str(path), checksum, operations, workspace)
     _unchanged(path, checksum)
@@ -181,6 +181,7 @@ def inspect_plan(mdb_file, expected_sha256, operations, workspace='', requiremen
                'operations': operations, 'requirements': requirements, 'test_cases': tests,
                'before': before, 'after': [clf_view(record) for record in preflight.get('clfs', [])],
                'metadata_preflight_passed': preflight['ready'], 'conflicts': preflight['conflicts'],
+               'binding_migrations': preflight.get('binding_migrations', []),
                'runtime_verified': False, 'saved': False, 'published': False,
                'notice': '仅完成官方内存模型预检，未保存 MDB；表达式语义及业务用例尚未运行验证。'}
     payload['id'] = sha256(json.dumps(payload, sort_keys=True, ensure_ascii=False).encode()).hexdigest()

@@ -48,8 +48,39 @@ class RemoveDeclaration(Strict):
     expected: Declaration
 
 
+class AttachedValue(Strict):
+    value_id: int = Field(ge=1)
+    call_id: int = Field(ge=1)
+    parameter_id: int = Field(ge=1)
+    parameter: str = Field(min_length=1, max_length=100)
+    value: str = Field(max_length=100000)
+    dynamic: bool
+
+
+class MigrateBinding(Strict):
+    action: Literal['migrate_clf_binding']
+    owner: str = Field(min_length=1, max_length=100)
+    field: str = Field(default='', max_length=100)
+    event: str = Field(min_length=1, max_length=100)
+    binding_id: int = Field(ge=1)
+    expected_clf: str = Field(min_length=1, max_length=100)
+    clf: str = Field(min_length=1, max_length=100)
+    expected_feature_id: int = Field(ge=0)
+    expected_parameters: list[AttachedValue] = Field(max_length=5000)
+
+    @model_validator(mode='after')
+    def unique_identity(self):
+        if self.clf.casefold() == self.expected_clf.casefold():
+            raise ValueError('入口迁移必须指定不同的客户规则')
+        if len({p.value_id for p in self.expected_parameters}) != len(self.expected_parameters):
+            raise ValueError('入口参数身份重复')
+        if len({(p.call_id, p.parameter_id) for p in self.expected_parameters}) != len(self.expected_parameters):
+            raise ValueError('入口调用参数重复')
+        return self
+
+
 ADAPTERS = {model.model_fields['action'].annotation.__args__[0]: TypeAdapter(model)
-            for model in (AddDeclaration, UpdateDeclaration, RemoveDeclaration)}
+            for model in (AddDeclaration, UpdateDeclaration, RemoveDeclaration, MigrateBinding)}
 
 
 def values(record):

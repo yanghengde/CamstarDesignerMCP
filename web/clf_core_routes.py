@@ -43,7 +43,8 @@ async def bootstrap(username: str):
     return {'projects': projects, 'context': context, 'operations': states,
             'environments': [store.public_environment(env) for env in environments], 'artifacts': artifacts,
             'capabilities': {'record_source': 'local_test_receipts', 'runtime_breakpoints': False,
-                             'business_history_connector': False, 'save_clf': True}}
+                             'business_history_connector': False, 'save_clf': True,
+                             'binding_migration': 'customer_entries_preserve_attached_values'}}
 
 
 @router.put('/context')

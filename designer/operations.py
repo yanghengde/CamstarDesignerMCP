@@ -4,14 +4,14 @@ CREATE_ACTIONS = {'create_cdo', 'create_field_type', 'add_field', 'copy_clf', 'c
                   'add_query_text', 'create_index', 'add_field_map', 'bind_event', 'add_clf_declaration'}
 UPDATE_ACTIONS = {'patch', 'change_field_type', 'reorder_clf_functions', 'set_clf_parameter',
                   'change_parent', 'change_storage_category', 'replace_event_binding',
-                  'replace_clf_function', 'update_field_map', 'sync_query_parameters', 'update_clf_declaration'}
+                  'replace_clf_function', 'update_field_map', 'sync_query_parameters', 'update_clf_declaration', 'migrate_clf_binding'}
 DELETE_ACTIONS = {'delete', 'unbind_event', 'remove_clf_function', 'remove_field_map', 'remove_field_override', 'remove_clf_declaration'}
 DESIGN_ACTIONS = CREATE_ACTIONS | UPDATE_ACTIONS | DELETE_ACTIONS
 ACTION_KINDS = {'create_cdo': 'cdo', 'create_field_type': 'field_type', 'add_field': 'field',
                 'copy_clf': 'clf', 'create_clf': 'clf', 'create_query': 'query', 'create_map': 'map',
                 'create_label': 'label', 'add_column': 'column', 'create_index': 'index',
                 'change_field_type': 'field', 'change_parent': 'cdo', 'change_storage_category': 'cdo',
-                'bind_event': 'event_binding', 'replace_event_binding': 'event_binding', 'unbind_event': 'event_binding',
+                'bind_event': 'event_binding', 'replace_event_binding': 'event_binding', 'unbind_event': 'event_binding', 'migrate_clf_binding': 'event_binding',
                 'add_field_map': 'field_map', 'update_field_map': 'field_map', 'remove_field_map': 'field_map',
                 'add_query_text': 'query_text', 'sync_query_parameters': 'query',
                 'add_clf_function': 'clf_function', 'replace_clf_function': 'clf_function', 'remove_clf_function': 'clf_function',
@@ -19,7 +19,7 @@ ACTION_KINDS = {'create_cdo': 'cdo', 'create_field_type': 'field_type', 'add_fie
                 'add_clf_declaration': 'clf_parameter', 'update_clf_declaration': 'clf_parameter', 'remove_clf_declaration': 'clf_parameter'}
 LABELS = {'patch': '修改', 'delete': '删除', 'external_edit': '同步修改', 'restore_mdb': '恢复 MDB',
           'change_field_type': '更换字段类型', 'change_parent': '更换父对象', 'change_storage_category': '更换存储分类',
-          'bind_event': '绑定事件', 'replace_event_binding': '替换事件绑定', 'unbind_event': '解除事件绑定',
+          'bind_event': '绑定事件', 'replace_event_binding': '替换事件绑定', 'unbind_event': '解除事件绑定', 'migrate_clf_binding': '迁移入口并保留附着参数',
           'add_field_map': '新增字段映射', 'update_field_map': '修改字段映射', 'remove_field_map': '删除字段映射',
           'add_clf_function': '新增函数调用', 'replace_clf_function': '替换函数调用', 'remove_clf_function': '删除函数调用',
           'remove_field_override': '恢复继承字段', 'reorder_clf_functions': '调整调用顺序',

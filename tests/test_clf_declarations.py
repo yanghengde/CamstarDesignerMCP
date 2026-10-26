@@ -68,6 +68,7 @@ def sdk(tmp_path):
         folder = tmp_path/uuid4().hex
         folder.mkdir()
         return vendor.run(folder, {'mode': mode, 'mdb': str(source), 'workspace': '200', **payload})
+    call.private_mdb = source
     yield call
     assert vendor.digest(original) == checksum
 
