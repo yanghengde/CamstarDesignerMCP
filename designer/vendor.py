@@ -254,7 +254,7 @@ def validate_operations(operations: list[dict]) -> None:
                 raise ValueError(f"{action} 包含未知参数：{', '.join(sorted(unknown))}；请检查拼写")
             if 'description' in op and not isinstance(op['description'], str):
                 raise ValueError('description 必须是字符串')
-        if action.endswith('_clf_declaration') or action == 'migrate_clf_binding':
+        if action.endswith('_clf_declaration') or action in {'migrate_clf_binding', 'migrate_clf_call'}:
             from designer.clf_parameters import ADAPTERS
             ADAPTERS[action].validate_python(op)
         if action in {'patch', 'delete'} and op.get('kind') == 'clf_parameter':

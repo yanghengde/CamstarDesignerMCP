@@ -79,8 +79,65 @@ class MigrateBinding(Strict):
         return self
 
 
+class CallValue(Strict):
+    parameter: str = Field(min_length=1, max_length=100)
+    value: str = Field(max_length=100000)
+    dynamic: bool
+
+
+class CallerBinding(Strict):
+    binding_id: int = Field(ge=1)
+    cdo_id: int = Field(ge=1)
+    caller_id: int = Field(ge=1)
+    event_id: int = Field(ge=1)
+    feature_id: int = Field(ge=0)
+    owner: str = Field(min_length=1, max_length=100)
+    field: str = Field(max_length=100)
+    event: str = Field(min_length=1, max_length=100)
+    parameters: list[AttachedValue] = Field(max_length=5000)
+
+
+class CallBindingValues(Strict):
+    binding_id: int = Field(ge=1)
+    parameters: list[CallValue] = Field(max_length=50)
+
+
+class MigrateCall(Strict):
+    action: Literal['migrate_clf_call']
+    owner: str = Field(min_length=1, max_length=100)
+    call_id: int = Field(ge=1)
+    expected_clf: str = Field(min_length=1, max_length=100)
+    clf: str = Field(min_length=1, max_length=100)
+    expected_sequence: int = Field(ge=1)
+    expected_active: bool
+    expected_parameters: list[AttachedValue] = Field(max_length=50)
+    expected_bindings: list[CallerBinding] = Field(max_length=20)
+    target_declarations: list[Declaration] = Field(max_length=50)
+    parameters: list[CallValue] = Field(max_length=50)
+    bindings: list[CallBindingValues] = Field(max_length=20)
+
+    @model_validator(mode='after')
+    def complete_scope(self):
+        if self.clf.casefold() in {self.expected_clf.casefold(), self.owner.casefold()} or self.owner.casefold() == self.expected_clf.casefold():
+            raise ValueError('直接调用迁移需要不同的调用者、原规则和目标客户规则')
+        names = [p.Name for p in self.target_declarations]
+        if len({n.casefold() for n in names}) != len(names):
+            raise ValueError('目标声明参数重复')
+        for parameters in [self.expected_parameters, *[b.parameters for b in self.expected_bindings]]:
+            if len({p.value_id for p in parameters}) != len(parameters) or len({(p.call_id,p.parameter_id) for p in parameters}) != len(parameters):
+                raise ValueError('原参数身份重复')
+        before, after = [b.binding_id for b in self.expected_bindings], [b.binding_id for b in self.bindings]
+        if len(set(before)) != len(before) or len(set(after)) != len(after) or set(before) != set(after):
+            raise ValueError('必须核对调用者的全部入口，不得遗漏或增加入口')
+        for parameters in [self.parameters, *[b.parameters for b in self.bindings]]:
+            actual = [p.parameter for p in parameters]
+            if len(set(actual)) != len(actual) or set(actual) != set(names):
+                raise ValueError('每组拟定表达式必须覆盖全部目标声明参数，且不得重复')
+        return self
+
+
 ADAPTERS = {model.model_fields['action'].annotation.__args__[0]: TypeAdapter(model)
-            for model in (AddDeclaration, UpdateDeclaration, RemoveDeclaration, MigrateBinding)}
+            for model in (AddDeclaration, UpdateDeclaration, RemoveDeclaration, MigrateBinding, MigrateCall)}
 
 
 def values(record):

@@ -9,7 +9,7 @@ from designer import vendor, working
 PLAN_ACTIONS = frozenset({'create_clf', 'copy_clf', 'add_clf_function', 'replace_clf_function',
                          'remove_clf_function', 'reorder_clf_functions', 'set_clf_parameter',
                          'bind_event', 'replace_event_binding', 'unbind_event',
-                         'add_clf_declaration', 'update_clf_declaration', 'remove_clf_declaration', 'migrate_clf_binding'})
+                         'add_clf_declaration', 'update_clf_declaration', 'remove_clf_declaration', 'migrate_clf_binding', 'migrate_clf_call'})
 
 
 def source(mdb_file, expected_sha256=''):
@@ -150,6 +150,17 @@ def analysis_context(mdb_file, name, expected_sha256=''):
     return result
 
 
+def caller_migration(mdb_file, name, owner, call_id, expected_sha256):
+    """Read one exact direct caller and its entries, only when explicitly requested."""
+    path, checksum = source(mdb_file, expected_sha256)
+    record = vendor.query(str(path), 'get', 'clf', name=owner, owner='caller_migration:' + str(call_id))
+    _unchanged(path, checksum)
+    contract = record.get('caller_migration')
+    if not contract or contract['operation']['expected_clf'] != name:
+        raise ValueError('所选调用不再引用当前规则，请重新读取')
+    return {**contract, 'source_sha256': checksum, 'read_only': True}
+
+
 def inspect_plan(mdb_file, expected_sha256, operations, workspace='', requirements=None, test_cases=None):
     if not isinstance(operations, list) or not operations:
         raise ValueError('请提供完整的 CLF 方案操作列表')
@@ -167,7 +178,7 @@ def inspect_plan(mdb_file, expected_sha256, operations, workspace='', requiremen
         for name in candidates:
             if name and name.casefold() not in created and name not in names:
                 names.append(name)
-    declarations = any(op['action'].endswith('_clf_declaration') or op['action'] == 'migrate_clf_binding' for op in operations)
+    declarations = any(op['action'].endswith('_clf_declaration') or op['action'] in {'migrate_clf_binding', 'migrate_clf_call'} for op in operations)
     before = [get_clf(str(path), name, checksum, True) if declarations else get_clf(str(path), name, checksum) for name in names]
     preflight = vendor.preflight(str(path), checksum, operations, workspace)
     _unchanged(path, checksum)
@@ -182,6 +193,7 @@ def inspect_plan(mdb_file, expected_sha256, operations, workspace='', requiremen
                'before': before, 'after': [clf_view(record) for record in preflight.get('clfs', [])],
                'metadata_preflight_passed': preflight['ready'], 'conflicts': preflight['conflicts'],
                'binding_migrations': preflight.get('binding_migrations', []),
+               'call_migrations': preflight.get('call_migrations', []),
                'runtime_verified': False, 'saved': False, 'published': False,
                'notice': '仅完成官方内存模型预检，未保存 MDB；表达式语义及业务用例尚未运行验证。'}
     payload['id'] = sha256(json.dumps(payload, sort_keys=True, ensure_ascii=False).encode()).hexdigest()

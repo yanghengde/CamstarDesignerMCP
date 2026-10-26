@@ -44,7 +44,8 @@ async def bootstrap(username: str):
             'environments': [store.public_environment(env) for env in environments], 'artifacts': artifacts,
             'capabilities': {'record_source': 'local_test_receipts', 'runtime_breakpoints': False,
                              'business_history_connector': False, 'save_clf': True,
-                             'binding_migration': 'customer_entries_preserve_attached_values'}}
+                             'binding_migration': 'customer_entries_preserve_attached_values',
+                             'call_migration': 'explicit_direct_call_and_all_entries_v1'}}
 
 
 @router.put('/context')
@@ -78,6 +79,14 @@ async def definition(identity: str, username: str, name: str, source_sha256: str
 async def create_operation(req: OperationRequest):
     require_progress_owner(req.username)
     return await call(core.save_operation, req.username, req.operation)
+
+
+@router.get('/caller-migration/{identity}')
+async def caller_migration(identity: str, username: str, name: str, owner: str,
+                           source_sha256: str, call_id: int = Query(ge=1)):
+    require_progress_owner(username)
+    project = await call(testing.project, identity, source_sha256)
+    return await call(clf.caller_migration, project['mdb_file'], name, owner, call_id, source_sha256)
 
 
 @router.put('/operations/{identity}')

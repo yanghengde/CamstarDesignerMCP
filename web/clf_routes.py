@@ -5,7 +5,7 @@ from hashlib import sha256
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, ConfigDict, Field
 
 from agent import assistant_modes, memory
@@ -20,7 +20,9 @@ router.include_router(core_router)
 
 @router.get('/clf-core.js')
 def core_script():
-    return FileResponse('static/clf-core.js', media_type='text/javascript', headers={'Cache-Control': 'no-cache'})
+    source = '\n'.join(Path('static', name).read_text(encoding='utf-8')
+                       for name in ('clf-call-migration.js', 'clf-core.js'))
+    return Response(source, media_type='text/javascript', headers={'Cache-Control': 'no-cache'})
 
 
 @router.get('/clf-core.css')
